@@ -39,12 +39,12 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable {
-    case keyboards, customKeyboard, romaji, specialKeys, conversion, touchFeedback, appearance, theme, candidates
+    case keyboards, customKeyboard, romaji, specialKeys, conversion, touchFeedback, flickStyle, appearance, theme, candidates
     case personalDictionary, dictionaries, learning, symbols, clipboard, backup, setup, licenses
     var id: String { rawValue }
     var category: SettingsCategory {
         switch self {
-        case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback: return .input
+        case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback, .flickStyle: return .input
         case .appearance, .theme, .candidates: return .appearance
         case .personalDictionary, .dictionaries, .learning: return .dictionaries
         case .symbols, .clipboard, .backup: return .data
@@ -58,6 +58,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .romaji: return "カスタムローマ字"
         case .specialKeys: return "Sumire の特殊キー操作"
         case .conversion: return "入力と変換"
+        case .flickStyle: return "スミレ入力のスタイル"
         case .touchFeedback: return "入力の操作と表示"
         case .appearance: return "キー・文字サイズ"
         case .theme: return "キーボードの配色"
@@ -78,6 +79,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .customKeyboard: return "自分だけの配列を作成・編集"
         case .romaji: return "ローマ字からかなへの変換ルール"
         case .specialKeys: return "タップ・フリック・長押しの動作"
+        case .flickStyle: return "二段・三段・ドーナツとガイドの操作"
         case .conversion: return "ライブ変換、修飾キー省略、削除の区切り"
         case .touchFeedback: return "ポップアップ・二本指・長押し時間"
         case .appearance: return "通常キー・特殊キーとフリックガイド"
@@ -99,6 +101,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .customKeyboard: return "square.grid.3x3"
         case .romaji: return "textformat.abc"
         case .specialKeys: return "hand.draw"
+        case .flickStyle: return "hand.point.up.left"
         case .conversion: return "character.cursor.ibeam"
         case .touchFeedback: return "hand.point.up.left"
         case .appearance: return "textformat.size"
