@@ -39,6 +39,8 @@ public struct FlickPoint: Equatable {
 }
 public struct MultiFlickConfiguration {
     public var threshold = 14.0
+    /// Source controller uses 70 px; UIKit adapters supply the converted distance.
+    public var centerReturnRadius = 70.0
     public var circularThreshold = true
     public var stableDiagonal = false
     public var guideGrid = false
@@ -105,6 +107,7 @@ public struct TwoStepFlickEvaluator {
     public private(set) var longPress = false
     public private(set) var isActive = false
     public private(set) var secondStage = false
+    public private(set) var expandedGuide = false
     public private(set) var holdPending = false
     private var config = MultiFlickConfiguration()
     private var down = FlickPoint(0, 0), intermediate = FlickPoint(0, 0)
@@ -122,7 +125,7 @@ public struct TwoStepFlickEvaluator {
     }
     public mutating func hold() {
         guard isActive, holdPending, !secondStage else { return }
-        holdPending = false
+        holdPending = false; expandedGuide = true
         // Sticky's long press expands the guide only; it has no alternate map.
         if !sticky { longPress = true }
     }
@@ -156,7 +159,7 @@ public struct TwoStepFlickEvaluator {
             secondStage = true; holdPending = false
         } else {
             let centered = config.guideGrid ? (position.x >= 1 / 3 && position.x < 2 / 3 && position.y >= 1 / 3 && position.y < 2 / 3)
-                : hypot(point.x - down.x, point.y - down.y) < 70
+                : hypot(point.x - down.x, point.y - down.y) < config.centerReturnRadius
             if !sticky && centered {
                 guard !longPress else { return }
                 first = .tap; second = .tap; secondStage = false; holdPending = false
@@ -180,6 +183,6 @@ public struct TwoStepFlickEvaluator {
         return output
     }
     public mutating func cancel() {
-        isActive = false; first = .tap; second = .tap; longPress = false; secondStage = false; holdPending = false
+        isActive = false; first = .tap; second = .tap; longPress = false; secondStage = false; holdPending = false; expandedGuide = false
     }
 }

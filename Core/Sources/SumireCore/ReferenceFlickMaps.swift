@@ -47,6 +47,12 @@ public struct ReferenceFlickMaps {
         let cancelOnTap: Bool?
         let parentContinuationDirections: [String]?
     }
+    /// The host app can present this alongside the existing detailed licenses.
+    public static var provenanceNotice: String {
+        guard let url = Bundle.module.url(forResource: "flick-map-provenance", withExtension: "json"),
+              let text = try? String(contentsOf: url, encoding: .utf8) else { return "" }
+        return text
+    }
     public let keys: [Key]
     public let sourceRevision: String
     public let payloadBytes: Int

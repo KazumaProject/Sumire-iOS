@@ -5,6 +5,16 @@ final class MultiStageFlickTests: XCTestCase {
     private let map: TwoStepFlickEvaluator.Map = [
         .tap: [.tap: "か"], .left: [.tap: "き", .left: "き", .upLeft: "ぎ", .downLeft: "きゃ"],
         .up: [.tap: "く", .up: "く", .upRight: "ぐ"]]
+    func testTwoStepHoldExpandsGuideAndCancelClearsIt() {
+        var evaluator = TwoStepFlickEvaluator(map: map, sticky: true)
+        evaluator.begin(at: .init(0, 0), configuration: .init())
+        XCTAssertFalse(evaluator.expandedGuide)
+        evaluator.hold()
+        XCTAssertTrue(evaluator.expandedGuide)
+        XCTAssertFalse(evaluator.longPress)
+        evaluator.cancel()
+        XCTAssertFalse(evaluator.expandedGuide)
+    }
     func testNormalHoldNeverAlsoTapsAndCancellation() {
         var key = TapHoldEvaluator()
         key.begin(at: .init(20, 20), configuration: .init())
