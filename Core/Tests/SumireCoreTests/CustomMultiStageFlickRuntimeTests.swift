@@ -57,6 +57,34 @@ final class CustomMultiStageFlickRuntimeTests: XCTestCase {
         XCTAssertTrue(stickyAlternate.isEmpty)
     }
 
+    func testImportedTwoStepMapsExecuteOnlyTheCompletedGesture() throws {
+        // Android enables the first direction only when its TAP output exists.
+        let key = try placement(#""keyType":"TWO_STEP_FLICK""#,
+            fields: #""twoStepFlicks":[{"firstDirection":"UP","secondDirection":"TAP","output":"上"},{"firstDirection":"UP","secondDirection":"RIGHT","output":"二段"}],"twoStepLongPressFlicks":[{"firstDirection":"UP","secondDirection":"RIGHT","output":"長押し"}]"#)
+        let runtime = try XCTUnwrap(CustomMultiStageFlick.runtimeDefinition(
+            for: key, targets: CustomLayoutTargets(layouts: [])))
+        guard case .twoStep(let map, let longPressMap, let sticky) = runtime.gesture else {
+            return XCTFail("Expected imported two-step maps")
+        }
+
+        var configuration = MultiFlickConfiguration()
+        configuration.threshold = 10
+        configuration.centerReturnRadius = 5
+        var evaluator = TwoStepFlickEvaluator(map: map, longPressMap: longPressMap, sticky: sticky)
+        evaluator.begin(at: .init(50, 50), configuration: configuration)
+        evaluator.move(to: .init(50, 30))
+        XCTAssertNil(evaluator.selectedText, "The first direction must not commit a partial mapping")
+        evaluator.move(to: .init(70, 30))
+        XCTAssertEqual(evaluator.selectedText, "二段")
+        XCTAssertEqual(evaluator.end(at: .init(70, 30)), "二段")
+
+        evaluator.begin(at: .init(50, 50), configuration: configuration)
+        evaluator.hold()
+        evaluator.move(to: .init(50, 30))
+        evaluator.move(to: .init(70, 30))
+        XCTAssertEqual(evaluator.end(at: .init(70, 30)), "長押し")
+    }
+
     func testCircularActionsAndDirectionalLongPressDecode() throws {
         let circular = try placement(#""keyType":"CIRCULAR_FLICK""#,
             fields: #""circularFlicks":[{"stateIndex":0,"circularDirection":"TAP","actionType":"INPUT_TEXT","actionValue":"中心"},{"stateIndex":0,"circularDirection":"SLOT_0","actionType":"INPUT_TEXT","actionValue":"上"},{"stateIndex":0,"circularDirection":"SLOT_1","actionType":"DELETE"}]"#)
