@@ -217,6 +217,8 @@ public final class ClipboardHistoryStore {
         }
     }
 
+    public static func validateImageData(_ data: Data) throws { _ = try imageMetadata(data) }
+
     private struct ImageMetadata { let type: String; let width: Int; let height: Int }
     private static func imageMetadata(_ data: Data) throws -> ImageMetadata {
         guard !data.isEmpty, data.count <= Limits.maximumImageBytes else { throw PersonalDataError("履歴画像は4MiB以下で保存できます") }

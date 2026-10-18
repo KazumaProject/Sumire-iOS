@@ -1,11 +1,17 @@
 import UIKit
 import SumireCore
+import UniformTypeIdentifiers
 
 struct SymbolClipboardItem {
     let id: String
     let text: String?
     let image: UIImage?
     let pinned: Bool
+    let isImage: Bool
+    init(id: String, text: String?, image: UIImage?, pinned: Bool, isImage: Bool = false) {
+        self.id = id; self.text = text; self.image = image; self.pinned = pinned
+        self.isImage = isImage || image != nil
+    }
 }
 
 /// An overlay owned by the keyboard. Closing invokes a callback; it never switches the underlying layout.
@@ -13,6 +19,10 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var onInsert: ((String) -> Void)?
     var onClose: (() -> Void)?
     var onDelete: (() -> Void)?
+    var onClipboardProviders: (([NSItemProvider]) -> Void)?
+    var onClipboardThumbnailRequested: ((String) -> Void)?
+    var clipboardAccessAllowed = true { didSet { pasteControl.isEnabled = clipboardAccessAllowed } }
+    private let pasteControl = UIPasteControl()
     var onClipboardRequested: (() -> Void)?
     var onClipboardPaste: ((String) -> Void)?
     var onClipboardPin: ((String, Bool) -> Void)?
@@ -61,6 +71,9 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: .zero)
         accessibilityIdentifier = "symbol-keyboard"
+        pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.text.identifier, UTType.image.identifier])
+        pasteControl.target = self
+        pasteControl.accessibilityIdentifier = "symbol-clipboard-load"
         collection.register(SymbolCell.self, forCellWithReuseIdentifier: "symbol")
         collection.register(SymbolHeader.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: "header")
         collection.dataSource = self; collection.delegate = self
@@ -129,6 +142,26 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         if mode == .clipboard { reloadItems() }
     }
 
+    override func paste(itemProviders: [NSItemProvider]) {
+        guard clipboardAccessAllowed else { return }
+        onClipboardProviders?(itemProviders)
+    }
+    /// Thumbnails live in the host's bounded cache or visible cells, not in every metadata row.
+    func setClipboardThumbnail(id: String, image: UIImage) {
+        guard mode == .clipboard else { return }
+        for path in collection.indexPathsForVisibleItems {
+            let entries = clipboardSection(path.section)
+            guard entries.indices.contains(path.item), entries[path.item].id == id,
+                  let cell = collection.cellForItem(at: path) as? SymbolCell else { continue }
+            cell.set(text: entries[path.item].text ?? "画像", image: image, size: 16, palette: palette)
+        }
+    }
+    func showNotice(_ text: String) {
+        emptyLabel.text = text; emptyLabel.isHidden = false
+        emptyLabel.backgroundColor = palette.background.withAlphaComponent(0.95)
+        UIAccessibility.post(notification: .announcement, argument: text)
+    }
+
     func selectMode(_ mode: SymbolKeyboardMode) {
         dismissSkinTones()
         self.mode = mode; selectedCategory = 0
@@ -160,8 +193,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         if mode == .clipboard {
             let label = UILabel(); label.text = "履歴を保存"; label.textColor = palette.foreground
             categoryStack.addArrangedSubview(label); categoryStack.addArrangedSubview(clipboardSwitch)
-            let paste = button("コピー内容を表示", image: "arrow.clockwise") { [weak self] in self?.onClipboardRequested?() }
-            categoryStack.addArrangedSubview(paste)
+            categoryStack.addArrangedSubview(pasteControl)
         } else {
             for (index, category) in categories.enumerated() {
                 let tab = button(category.title) { [weak self] in
@@ -198,7 +230,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         symbols = mode == .emoji && !isHistory ? values.map { EmojiSkinToneVariants.applying(defaultSkinTone, to: $0) } : values
         collection.reloadData(); collection.setContentOffset(.zero, animated: false)
         emptyLabel.isHidden = mode == .clipboard ? !clipboardItems.isEmpty : !symbols.isEmpty
-        emptyLabel.text = mode == .clipboard ? "コピーした内容はここに表示します。\n上の更新ボタンで読み込みます。" : "このカテゴリには項目がありません。"
+        emptyLabel.text = mode == .clipboard ? "コピーした内容はここに表示します。\n上のペーストボタンで読み込みます。" : "このカテゴリには項目がありません。"
     }
     func numberOfSections(in collectionView: UICollectionView) -> Int { mode == .clipboard ? 2 : 1 }
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {
@@ -217,6 +249,13 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
             cell.accessibilityIdentifier = "symbol-item-" + String(indexPath.item)
         }
         return cell
+    }
+    func collectionView(_ collectionView: UICollectionView, willDisplay cell: UICollectionViewCell, forItemAt indexPath: IndexPath) {
+        guard mode == .clipboard else { return }
+        let item = clipboardSection(indexPath.section)[indexPath.item]
+        if item.isImage && item.image == nil {
+            DispatchQueue.main.async { [weak self] in self?.onClipboardThumbnailRequested?(item.id) }
+        }
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
         if mode == .clipboard { onClipboardPaste?(clipboardSection(indexPath.section)[indexPath.item].id) }
@@ -295,11 +334,12 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         if mode == .clipboard {
             let item = clipboardSection(indexPath.section)[indexPath.item]
             return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
-                UIMenu(children: [
-                    UIAction(title: "貼り付け") { _ in self?.onClipboardPaste?(item.id) },
-                    UIAction(title: item.pinned ? "ピン留めを解除" : "ピン留め") { _ in self?.onClipboardPin?(item.id, !item.pinned) },
-                    UIAction(title: "削除", attributes: .destructive) { _ in self?.onClipboardDelete?(item.id) }
-                ])
+                var actions = [UIAction(title: "貼り付け") { _ in self?.onClipboardPaste?(item.id) }]
+                if item.id != "current" {
+                    actions.append(UIAction(title: item.pinned ? "ピン留めを解除" : "ピン留め") { _ in self?.onClipboardPin?(item.id, !item.pinned) })
+                }
+                actions.append(UIAction(title: "削除", attributes: .destructive) { _ in self?.onClipboardDelete?(item.id) })
+                return UIMenu(children: actions)
             }
         }
         guard categories.indices.contains(selectedCategory), categories[selectedCategory].id == "history" else { return nil }

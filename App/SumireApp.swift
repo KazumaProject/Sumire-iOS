@@ -25,6 +25,7 @@ struct HomeView: View {
     @AppStorage("theme.saturation", store: KeyboardSettings.appDefaults) private var saturation = 0.5
     @AppStorage("theme.brightness", store: KeyboardSettings.appDefaults) private var brightness = 0.7
     @State private var showTheme = false
+    @State private var showSymbolSettings = false
     @State private var custom = true
     @State private var showDictionaries = false
     @State private var showKeyAppearance = false
@@ -63,6 +64,7 @@ struct HomeView: View {
                         Button("Custom Keyboard") { showCustomKeyboard = true }
                         Button("カスタムローマ字") { showRomaji = true }
                         Button("キーボードの選択・順序") { showKeyboardSelection = true }
+                        Button("記号・クリップボード") { showSymbolSettings = true }
                         Button("キー・文字サイズ") { showKeyAppearance = true }
                         NavigationLink("ライセンス・出典") { LicenseSettingsView() }
                         Button("分類辞書（\(categoryMask.nonzeroBitCount)/30）") { showDictionaries = true }
@@ -87,7 +89,7 @@ struct HomeView: View {
                     }
                 }
                 .frame(maxHeight: 310)
-                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme || showSymbolSettings, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
                     .frame(minHeight: 80, maxHeight: .infinity)
             }
             .padding()
@@ -114,6 +116,7 @@ struct HomeView: View {
             .sheet(isPresented: $showRomaji, onDismiss: { appearanceRevision += 1 }) { RomajiSettings() }
             .sheet(isPresented: $showPersonal) { PersonalDictionarySettings(library: personalLibrary) }
             .sheet(isPresented: $showKeyboardSelection, onDismiss: { appearanceRevision += 1 }) { KeyboardSelectionSettings() }
+            .sheet(isPresented: $showSymbolSettings, onDismiss: { appearanceRevision += 1 }) { SymbolKeyboardSettings() }
             .sheet(isPresented: $showTheme, onDismiss: { appearanceRevision += 1 }) {
                 NavigationStack {
                     ThemeSettingsView()
@@ -168,6 +171,7 @@ struct InputHarness: UIViewRepresentable {
         let surface = coordinator.surface
         coordinator.textView = text
         surface.settingsDefaults = KeyboardSettings.appDefaults
+        surface.configureClipboard(accessAllowed: true, allowShared: true)
         surface.onHeightChange = { [weak text] _ in
             text?.inputView?.invalidateIntrinsicContentSize()
             text?.inputView?.superview?.setNeedsLayout()
