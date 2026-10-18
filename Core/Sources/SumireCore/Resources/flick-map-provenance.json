@@ -6,7 +6,10 @@
     "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/data/TfbiFlickNode.kt",
     "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/HierarchicalKanaDefaultDefinitions.kt",
     "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/SumireFlickRotationMapper.kt",
-    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/SumireFlickInputModeMapper.kt"
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/SumireFlickInputModeMapper.kt",
+    "app/src/main/java/com/kazumaproject/markdownhelperkeyboard/setting_activity/circular_slot/CircularSlotActionApplier.kt",
+    "tenkey/src/main/java/com/kazumaproject/tenkey/extensions/CharExtension.kt",
+    "app/src/main/java/com/kazumaproject/markdownhelperkeyboard/ime_service/IMEService.kt"
   ],
   "method": "KeyboardDefaultLayouts.createFinalLayout$default; dynamicKeyStates empty; default delete settings, DEFAULT rotation, ALL input; 3 arrangements x 3 modes x 6 styles. Map dictionary order retained in hierarchical directionOrders. Duplicate payloads identified by SHA-256.",
   "classpath": [
@@ -41,7 +44,7 @@
       "sha256": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b"
     }
   ],
-  "exporterSha256": "73209a851b335a385ede0728ee944680418ca40e7386575ac3096a28f8b08030",
-  "indexSha256": "4300fbef3274031a97b7607864fb5ceaf0ed683f6199573f1e201a64f2cf6c42",
+  "exporterSha256": "86bae30a75c44524afc14f2a8c73885123c11fb536112e7677cbff1a10f66485",
+  "indexSha256": "58f59e8978a57d54760f0b65a0534e9244556633da15ff793a71c1e09156b358",
   "sourceLicense": "MIT License\n\nCopyright (c) 2024 Kazuma Naka\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
 }
