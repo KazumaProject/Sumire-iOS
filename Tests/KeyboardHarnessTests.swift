@@ -972,20 +972,42 @@ final class KeyboardHarnessTests: XCTestCase {
         let app = XCUIApplication()
         app.launch()
         let picker = app.buttons["keyboardColorMode"]
+        func openTheme() {
+            let button = app.buttons["キーボードの配色"]
+            for _ in 0..<8 {
+                if button.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            XCTAssertTrue(button.isHittable)
+            button.tap()
+            XCTAssertTrue(picker.waitForExistence(timeout: 5))
+            XCTAssertTrue(app.buttons["theme-seed-color"].exists)
+        }
+        openTheme()
         picker.tap(); app.buttons["ダーク"].tap()
+        app.buttons["完了"].tap()
         let editor = app.textViews["入力テスト"]
-        editor.tap(); app.buttons["あ"].tap()
-        XCTAssertEqual(editor.value as? String, "あ")
+        editor.tap(); selectKeyboard("50音", in: app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap()
+        app.buttons["gojuon-left"].tap()
+        XCTAssertEqual(editor.value as? String, "あい")
         let dark = XCTAttachment(screenshot: app.screenshot())
-        dark.name = "Dark keyboard theme"; dark.lifetime = .keepAlways; add(dark)
+        dark.name = "Dark keyboard theme with composing cursor"; dark.lifetime = .keepAlways; add(dark)
+        openTheme()
         picker.tap(); app.buttons["ライト"].tap()
-        XCTAssertEqual(editor.value as? String, "あ")
-        XCTAssertEqual(app.staticTexts["compositionReading"].label, "あ")
+        app.buttons["完了"].tap()
+        XCTAssertTrue(app.buttons["か"].waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "あい")
+        XCTAssertEqual(app.staticTexts["compositionReading"].label, "あい")
+        app.buttons["か"].tap()
+        XCTAssertEqual(editor.value as? String, "あかい")
         let light = XCTAttachment(screenshot: app.screenshot())
-        light.name = "Light keyboard theme"; light.lifetime = .keepAlways; add(light)
+        light.name = "Light keyboard theme preserving composing cursor"; light.lifetime = .keepAlways; add(light)
         app.terminate(); app.launch()
+        openTheme()
         XCTAssertTrue(picker.label.contains("ライト"))
         picker.tap(); app.buttons["システム"].tap()
+        app.buttons["完了"].tap()
     }
 
     func testRegisteredWordAndExactTemplateReachNativeCandidates() throws {
