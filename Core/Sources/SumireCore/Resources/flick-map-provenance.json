@@ -1,0 +1,44 @@
+{
+  "source": "https://github.com/KazumaProject/JapaneseKeyboard",
+  "revision": "9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93",
+  "sourceFiles": [
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/KeyboardDefaultLayouts.kt",
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/data/TfbiFlickNode.kt"
+  ],
+  "method": "KeyboardDefaultLayouts.createFinalLayout$default; dynamicKeyStates empty; default delete settings, DEFAULT rotation, ALL input; 3 arrangements x 3 modes x 6 styles. Map dictionary order retained in hierarchical directionOrders. Duplicate payloads identified by SHA-256.",
+  "classpath": [
+    {
+      "module": "classes.jar",
+      "pathSuffix": "custom_keyboard/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar",
+      "sha256": "153f494a272bb9a08e91726e29823fc051b48999bfd8e3c50a95a97ea1b50a21"
+    },
+    {
+      "module": "classes.jar",
+      "pathSuffix": "core/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar",
+      "sha256": "346f26d40620ebb028e5708301778f080363fcf2be37dd13d0474b14f2bbd6c8"
+    },
+    {
+      "module": "R.jar",
+      "pathSuffix": "core/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar",
+      "sha256": "8c929bf0c7fe26f99e33ff7766eb6ca064cf14f4f5402056a246c24e81675884"
+    },
+    {
+      "module": "R.jar",
+      "pathSuffix": "custom_keyboard/build/intermediates/compile_r_class_jar/debug/generateDebugRFile/R.jar",
+      "sha256": "bf1f871a77a8716b77b05d809957ff38c40a172d9a8435c60ef95897210b672d"
+    },
+    {
+      "module": "kotlin-stdlib-2.3.20.jar",
+      "pathSuffix": "kotlin-stdlib-2.3.20.jar",
+      "sha256": "0ae12504a5040ebaf37703908483420d1a5624dd1d93f357665f8c77c848a01e"
+    },
+    {
+      "module": "android.jar",
+      "pathSuffix": "android.jar",
+      "sha256": "4566663c3876e022b4fa4ced8c8697c4ab1688267f090114fd92d027b32e619b"
+    }
+  ],
+  "exporterSha256": "73209a851b335a385ede0728ee944680418ca40e7386575ac3096a28f8b08030",
+  "indexSha256": "4300fbef3274031a97b7607864fb5ceaf0ed683f6199573f1e201a64f2cf6c42",
+  "sourceLicense": "MIT License\n\nCopyright (c) 2024 Kazuma Naka\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software and associated documentation files (the \"Software\"), to deal\nin the Software without restriction, including without limitation the rights\nto use, copy, modify, merge, publish, distribute, sublicense, and/or sell\ncopies of the Software, and to permit persons to whom the Software is\nfurnished to do so, subject to the following conditions:\n\nThe above copyright notice and this permission notice shall be included in all\ncopies or substantial portions of the Software.\n\nTHE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR\nIMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,\nFITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE\nAUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER\nLIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,\nOUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE\nSOFTWARE.\n"
+}
