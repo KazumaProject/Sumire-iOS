@@ -7,6 +7,8 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     weak var touchRouter: KeyTouchRouter?
     weak var popupHost: UIView?
     var touchPolicy: (() -> (exclusive: Bool, blocksFollowing: Bool))?
+    var exclusiveTouchAction = false
+    var blocksSequentialTouches = false
     var feedbackSettings = TouchFeedbackSettings()
     var popupPalette: KeyboardPalette?
     var styleSettings = FlickStyleSettings()

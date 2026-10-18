@@ -1003,10 +1003,62 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["完了"].tap()
     }
 
+    func testCustomTwoStepFlickTapAndLongPressOutputs() throws {
+        let app = XCUIApplication()
+        let id = "TwoStepFlick-" + String(UUID().uuidString.prefix(8))
+        let source: [String: Any] = [
+            "layout": ["stableId": id, "name": id, "rowCount": 1, "columnCount": 1],
+            "keysWithFlicks": [[
+                "key": ["keyIdentifier": "two-step", "label": "二段", "keyType": "TWO_STEP_FLICK"],
+                "twoStepFlicks": [["firstDirection": "TAP", "secondDirection": "TAP", "output": "な"]],
+                "twoStepLongPressFlicks": [["firstDirection": "TAP", "secondDirection": "TAP", "output": "長"]]
+            ]]
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: source), as: UTF8.self)
+        launchInputPreview(app)
+        settingsButton("Custom Keyboard", in: app).tap()
+        app.buttons["配列JSONを入力"].tap()
+        let jsonEditor = app.textViews["customLayoutJSON"]
+        jsonEditor.tap(); jsonEditor.typeText(json); app.buttons["内容を検証"].tap()
+        XCTAssertTrue(app.staticTexts["有効：1件／不正：0件"].waitForExistence(timeout: 5))
+        app.buttons["有効な配列を追加"].tap(); app.buttons["完了"].tap()
+
+        let editor = app.textViews["入力テスト"]
+        editor.tap(); selectKeyboard(id, in: app)
+        let key = app.buttons["custom-two-step"]
+        XCTAssertTrue(key.waitForExistence(timeout: 5))
+        key.tap()
+        XCTAssertEqual(editor.value as? String, "な")
+        key.press(forDuration: 0.5)
+        XCTAssertEqual(editor.value as? String, "な長")
+
+        selectKeyboard("50音", in: app)
+        settingsButton("Custom Keyboard", in: app).tap()
+        app.buttons[id].tap(); app.buttons["この配列を削除"].tap(); app.buttons["削除する"].tap()
+        app.buttons["完了"].tap()
+    }
+
     func testCustomNormalKeysAndLayoutSwitchPreserveReading() throws {
         let app = XCUIApplication()
         let id = "Runtime-" + String(UUID().uuidString.prefix(8))
-        let json = "{\"schemaVersion\":4,\"layouts\":[{\"layout\":{\"stableId\":\"\(id)\",\"name\":\"\(id)\",\"rowCount\":1,\"columnCount\":2},\"keysWithFlicks\":[{\"key\":{\"keyIdentifier\":\"a\",\"label\":\"あ\",\"column\":0}},{\"key\":{\"keyIdentifier\":\"switch\",\"label\":\"次\",\"column\":1,\"action\":\"MoveToCustomKeyboard:\(id)-B\"}}]},{\"layout\":{\"stableId\":\"\(id)-B\",\"name\":\"\(id)-B\",\"rowCount\":1,\"columnCount\":1},\"keysWithFlicks\":[{\"key\":{\"keyIdentifier\":\"i\",\"label\":\"い\"}}]}]}"
+        let source: [String: Any] = [
+            "schemaVersion": 4,
+            "layouts": [
+                ["layout": ["stableId": id, "name": id, "rowCount": 1, "columnCount": 2],
+                 "keysWithFlicks": [
+                    ["key": ["keyIdentifier": "a", "label": "あ", "column": 0]],
+                    ["key": ["keyIdentifier": "switch", "label": "次", "column": 1,
+                             "action": "MoveToCustomKeyboard:\(id)-B"]]
+                 ]],
+                ["layout": ["stableId": "\(id)-B", "name": "\(id)-B", "rowCount": 1, "columnCount": 2],
+                 "keysWithFlicks": [
+                    ["key": ["keyIdentifier": "i", "label": "い", "column": 0]],
+                    ["key": ["keyIdentifier": "tab", "label": "戻る", "column": 1,
+                             "action": "MoveCustomKeyboardTab"]]
+                 ]]
+            ]
+        ]
+        let json = String(decoding: try JSONSerialization.data(withJSONObject: source), as: UTF8.self)
         launchInputPreview(app); settingsButton("Custom Keyboard", in: app).tap(); app.buttons["配列JSONを入力"].tap()
         let jsonEditor = app.textViews["customLayoutJSON"]
         jsonEditor.tap(); jsonEditor.typeText(json); app.buttons["内容を検証"].tap()
@@ -1024,8 +1076,12 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "あ")
         app.buttons["custom-i"].tap()
         XCTAssertEqual(editor.value as? String, "あい")
+        app.buttons["custom-tab"].tap()
+        XCTAssertTrue(app.buttons["custom-a"].waitForExistence(timeout: 3))
+        app.buttons["custom-a"].tap()
+        XCTAssertEqual(editor.value as? String, "あいあ")
         selectKeyboard("50音", in: app)
-        XCTAssertEqual(editor.value as? String, "あい")
+        XCTAssertEqual(editor.value as? String, "あいあ")
         settingsButton("Custom Keyboard", in: app).tap()
         for name in [id, id + "-B"] {
             app.buttons[name].tap(); app.buttons["この配列を削除"].tap(); app.buttons["削除する"].tap()

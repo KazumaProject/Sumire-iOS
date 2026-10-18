@@ -428,6 +428,7 @@ final class KeyboardSurface: UIInputView {
             }
         }
         if let key = key as? FlickKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        if let key = key as? MultiStageFlickKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
         if let key = key as? RepeatingKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
         if let key = key as? DirectionalActionKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
         return (false, false)
@@ -890,62 +891,80 @@ final class KeyboardSurface: UIInputView {
         let grid = CustomKeyboardGrid(layout: layout) { [weak self] placement in
             guard let self else { return UIView() }
             let definition = placement.source["key"]
-            let appearance = self.keyAppearance(special: definition?["isSpecialKey"] == .bool(true))
+            let special = definition?["isSpecialKey"] == .bool(true)
+            let appearance = self.keyAppearance(special: special)
             let label = definition?["label"]?.string ?? ""
             let type = definition?["keyType"]?.string ?? "NORMAL"
-            let key: UIButton = type == "STANDARD_FLICK" ? FlickKey(type: .custom) : RepeatingKey(type: .custom)
-            (key as? FlickKey)?.restingTitle = label
+            let runtime: CustomMultiStageFlick.RuntimeDefinition?
+            let runtimeError: Error?
+            do {
+                runtime = try CustomMultiStageFlick.runtimeDefinition(for: placement, targets: targets)
+                runtimeError = nil
+            } catch {
+                runtime = nil
+                runtimeError = error
+            }
+            let key: UIButton = type == "NORMAL" ? RepeatingKey(type: .custom) : MultiStageFlickKey(type: .custom)
             key.setTitle(label, for: .normal)
             key.accessibilityIdentifier = "custom-" + placement.id
             key.accessibilityLabel = label
-            key.backgroundColor = definition?["isSpecialKey"] == .bool(true) ? palette.function : palette.key
+            key.backgroundColor = special ? palette.function : palette.key
             key.setTitleColor(palette.foreground, for: .normal)
             key.titleLabel?.font = .systemFont(ofSize: appearance.keyFontSize)
             key.titleLabel?.numberOfLines = 2
+            key.titleLabel?.textAlignment = .center
+            key.titleLabel?.adjustsFontSizeToFitWidth = true
+            key.titleLabel?.minimumScaleFactor = 0.5
             key.layer.cornerRadius = self.geometry.keyCornerRadius
-            var action: CustomKeyAction
-            if type != "NORMAL" && type != "STANDARD_FLICK" {
-                action = .unsupported(raw: type, reason: "このキー入力方式は移植中です")
-            } else if let raw = definition?["action"]?.string {
-                action = .tap(raw, targets: targets)
-            } else if definition?["isSpecialKey"] != .bool(true) {
-                action = .text(label)
-            } else { action = .unsupported(raw: placement.id, reason: "キーの操作が未設定です") }
-            let special = definition?["isSpecialKey"] == .bool(true)
-            if special, definition?["doubleTapAction"]?.string != nil, definition?["doubleTapEnabled"] != .bool(false) {
-                action = .unsupported(raw: placement.id, reason: "ダブルタップ操作は移植中です")
+
+            let tapAction: CustomKeyAction
+            if let raw = definition?["action"]?.string {
+                tapAction = .tap(raw, targets: targets)
+            } else if !special {
+                tapAction = .text(label)
+            } else {
+                tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
-            let hasExtra = ["circularFlicks", "twoStepFlicks", "longPressFlicks", "twoStepLongPressFlicks"].contains { !(placement.source[$0]?.array ?? []).isEmpty }
-            if hasExtra { action = .unsupported(raw: placement.id, reason: "追加ジェスチャーは移植中です") }
-            (key as? RepeatingKey)?.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(action)
-            if let repeating = key as? RepeatingKey {
+            let normalAction = tapAction
+
+            if let error = runtimeError {
+                key.isEnabled = false
+                key.accessibilityHint = error.localizedDescription
+            }
+            if type != "NORMAL", runtimeError == nil, runtime == nil {
+                key.isEnabled = false
+                key.accessibilityHint = "このカスタム入力方式の定義がありません"
+            }
+
+            let actions = runtime.map { Self.customActions(in: $0, targets: targets) } ?? []
+            let needsExclusiveTouch = actions.contains { action in
                 switch action {
-                case .switchLayout, .command(.changeMode): repeating.exclusiveTouchAction = true
+                case .switchLayout, .command(.changeMode), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
+                default: return false
+                }
+            }
+            if let repeating = key as? RepeatingKey {
+                repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(normalAction)
+                switch normalAction {
+                case .switchLayout, .command(.changeMode), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
                 default: break
                 }
-            }
-            if let key = key as? FlickKey, !hasExtra, !(special && definition?["doubleTapAction"]?.string != nil && definition?["doubleTapEnabled"] != .bool(false)) {
-                do {
-                    let mapping = try CustomStandardFlick(placement: placement)
-                    key.directionalValues = mapping.values
-                    key.resolveDirection = { CustomStandardFlick.direction(dx: $0, dy: $1) }
-                    key.configureGuides(visible: appearance.guidesVisible, fontSize: appearance.guideFontSize, color: palette.foreground)
-                    key.onFlick = { [weak self] direction in
-                        let text = mapping.values[direction.rawValue]
-                        if !text.isEmpty { self?.customAction(.text(text), layout: layout) }
-                    }
-                } catch {
-                    let failure = CustomKeyAction.unsupported(raw: placement.id, reason: error.localizedDescription)
-                    key.onFlick = { [weak self] _ in self?.customAction(failure, layout: layout) }
+                repeating.addAction(UIAction { [weak self] _ in self?.customAction(normalAction, layout: layout) }, for: .touchUpInside)
+            } else if let flick = key as? MultiStageFlickKey, let runtime {
+                flick.definition = runtime.gesture
+                flick.styleSettings = FlickStyleSettings.load(defaults: settingsDefaults)
+                flick.exclusiveTouchAction = needsExclusiveTouch
+                flick.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
+                flick.configureGuides(visible: appearance.guidesVisible,
+                                      fontSize: appearance.guideFontSize, color: palette.foreground)
+                flick.onCommit = { [weak self] event in
+                    guard let self else { return }
+                    guard let action = Self.customAction(for: event, runtime: runtime, targets: targets) else { return }
+                    self.customAction(action, layout: layout)
                 }
-            } else {
-                let resolved = action
-                if let key = key as? FlickKey {
-                    key.onFlick = { [weak self] _ in self?.customAction(resolved, layout: layout) }
-                } else {
-                    key.addAction(UIAction { [weak self] _ in self?.customAction(resolved, layout: layout) }, for: .touchUpInside)
-                }
+            } else if let flick = key as? MultiStageFlickKey {
+                flick.isEnabled = false
             }
             return SizedKey(key, scale: appearance.keyScale)
         }
@@ -960,6 +979,53 @@ final class KeyboardSurface: UIInputView {
         minimum.priority = .defaultLow
         minimum.isActive = true
     }
+
+    private static func customAction(for event: MultiStageFlickKey.CommitEvent,
+                                     runtime: CustomMultiStageFlick.RuntimeDefinition,
+                                     targets: CustomLayoutTargets) -> CustomKeyAction? {
+        if event.circularSlot != nil {
+            switch event.output {
+            case .text(let text, _): return .text(text)
+            case .action(let type, let value, _): return .flick(type: type, value: value, targets: targets)
+            case .referenceAction(let action, _):
+                // The same pinned action vocabulary is used by built-in reference maps.
+                let type = action["type"]?.string ?? ""
+                let value = action["text"]?.string
+                return .flick(type: type, value: value, targets: targets)
+            case .mapSwitch: return .command(.moveCustomKeyboardTab)
+            }
+        }
+        if let direction = event.direction {
+            if event.isLongPress, let alternate = runtime.longPressActions[direction] { return alternate }
+            if let action = runtime.actions[direction] { return action }
+        }
+        if case .text(let text, _) = event.output, !text.isEmpty { return .text(text) }
+        return nil
+    }
+
+    private static func customActions(in runtime: CustomMultiStageFlick.RuntimeDefinition,
+                                      targets: CustomLayoutTargets) -> [CustomKeyAction] {
+        switch runtime.gesture {
+        case .single:
+            return Array(runtime.actions.values) + Array(runtime.longPressActions.values)
+        case .twoStep, .hierarchical:
+            return []
+        case .circular(let maps):
+            return maps.flatMap { map in
+                map.values.compactMap { output in
+                    switch output {
+                    case .text(let text, _): return .text(text)
+                    case .action(let type, let value, _): return .flick(type: type, value: value, targets: targets)
+                    case .referenceAction(let action, _):
+                        return .flick(type: action["type"]?.string ?? "",
+                                      value: action["text"]?.string, targets: targets)
+                    case .mapSwitch: return .command(.moveCustomKeyboardTab)
+                    }
+                }
+            }
+        }
+    }
+
     private func customAction(_ action: CustomKeyAction, layout: ImportedCustomLayout) {
         beforeInput?(); tapCycle.reset()
         switch action {
@@ -990,6 +1056,11 @@ final class KeyboardSurface: UIInputView {
             case .nextKeyboard: pressed("🌐")
             case .modifier: pressed("゛")
             case .changeMode: status.text = "このモード切替操作は移植中です"
+            case .moveCustomKeyboardTab:
+                guard !customLayouts.isEmpty else { status.text = "切り替え先のカスタム配列がありません"; return }
+                let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
+                activeCustomID = customLayouts[(currentIndex + 1) % customLayouts.count].id
+                rememberKeyboard(); rebuild()
             case .forceNewLine: commitComposition(); insert?("\n")
             case .halfSpace, .commitAndSpace: commitComposition(); insert?(" ")
             case .fullSpace: commitComposition(); insert?("　")

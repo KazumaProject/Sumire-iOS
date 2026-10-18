@@ -8,6 +8,8 @@ final class CustomKeyActionTests: XCTestCase {
         XCTAssertEqual(CustomKeyAction.tap("InputText:🌸", targets: targets), .inputText("🌸"))
         XCTAssertEqual(CustomKeyAction.tap("Delete", targets: targets), .command(.delete))
         XCTAssertEqual(CustomKeyAction.flick(type: "DELETE", value: "表示名", targets: targets), .command(.delete))
+        XCTAssertEqual(CustomKeyAction.tap("MoveCustomKeyboardTab", targets: targets), .command(.moveCustomKeyboardTab))
+        XCTAssertEqual(CustomKeyAction.flick(type: "MoveCustomKeyboardTab", value: "⇄", targets: targets), .command(.moveCustomKeyboardTab))
         XCTAssertEqual(CustomKeyAction.flick(type: "INPUT_TEXT", value: "Delete", targets: targets), .text("Delete"))
         if case .unsupported(let raw, _) = CustomKeyAction.tap("VoiceInput", targets: targets) { XCTAssertEqual(raw, "VoiceInput") }
         else { XCTFail("Unsupported action must not silently change behavior") }
