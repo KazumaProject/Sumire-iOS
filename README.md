@@ -77,6 +77,21 @@ xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
   -derivedDataPath "$HOME/sumire-build/benchmark" CODE_SIGNING_ALLOWED=NO test
 ```
 
+実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。
+
+```sh
+export SUMIRE_REFERENCE_SOURCE_ZIP=/path/to/android-dictionary.zip
+export SUMIRE_REFERENCE_NATIVE_DICTIONARIES=/path/to/cli-english-v1
+export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
+xcodegen generate
+xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -only-testing:SumireNativeTests/DictionaryGenerationIntegrationTests/testPinnedAndroidArchiveConvertsPublishesAndOpensAllDictionaries \
+  -derivedDataPath "$HOME/sumire-build/dictionary-import" CODE_SIGNING_ALLOWED=NO test
+```
+
+参照manifestの `source_revision` は固定Android revision `df1f38315bf56d860d32919a3eaed6a75499e91e` と照合し、変換された34ファイルのSHA-256を比較します。このSimulatorテストは実機App Groups共有やキーボード拡張のFull Access OFF動作を検証するものではありません。
+
 `project.yml` はチェックアウトの隣の `../sumire-data/cli-english-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups

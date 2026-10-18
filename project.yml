@@ -135,5 +135,7 @@ schemes:
       config: Release
       environmentVariables:
         SUMIRE_BENCHMARK_REVISION: "${SUMIRE_BENCHMARK_REVISION}"
+        SUMIRE_REFERENCE_SOURCE_ZIP: "${SUMIRE_REFERENCE_SOURCE_ZIP}"
+        SUMIRE_REFERENCE_NATIVE_DICTIONARIES: "${SUMIRE_REFERENCE_NATIVE_DICTIONARIES}"
       targets:
         - SumireNativeTests
