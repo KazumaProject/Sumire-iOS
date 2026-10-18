@@ -125,6 +125,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         didSet {
             guard showsShortcuts != oldValue else { return }
             clipboardRequest = UUID()
+            height.constant = displayedHeight
             collection.isHidden = showsShortcuts
             resize.isHidden = !showsShortcuts
             symbols.isHidden = !showsShortcuts
@@ -167,10 +168,11 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         didSet {
             let count = min(3, max(1, rowCount))
             if rowCount != count { rowCount = count }
-            height.constant = CGFloat(count) * 44
+            height.constant = displayedHeight
             collection.collectionViewLayout.invalidateLayout()
         }
     }
+    var displayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
     private let collection: UICollectionView
     private struct Item: Hashable {
         let text: String
@@ -178,21 +180,24 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     }
     private lazy var dataSource = UICollectionViewDiffableDataSource<Int, Item>(collectionView: collection) { [weak self] collection, path, item in
         guard let self else { return nil }
-        let cell = collection.dequeueReusableCell(withReuseIdentifier: "candidate", for: path)
+        guard let cell = collection.dequeueReusableCell(withReuseIdentifier: "candidate", for: path) as? CandidateCell else { return nil }
         self.configure(cell, item: item)
         return cell
     }
     private var height: NSLayoutConstraint!
     override init(frame: CGRect) {
-        let layout = UICollectionViewFlowLayout()
+        let layout = CandidateRowsLayout()
         layout.scrollDirection = .horizontal
         layout.minimumLineSpacing = 6
         layout.minimumInteritemSpacing = 0
         collection = UICollectionView(frame: .zero, collectionViewLayout: layout)
         super.init(frame: frame)
         collection.backgroundColor = .clear
+        // KeyboardSurface already places this strip within its safe area. UIKit
+        // automatic scroll insets would offset the first row and clip the last.
+        collection.contentInsetAdjustmentBehavior = .never
         collection.delegate = self
-        collection.register(UICollectionViewCell.self, forCellWithReuseIdentifier: "candidate")
+        collection.register(CandidateCell.self, forCellWithReuseIdentifier: "candidate")
         _ = dataSource
         collection.accessibilityIdentifier = "candidate-items"
         collection.translatesAutoresizingMaskIntoConstraints = false
@@ -302,21 +307,17 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         UIView.performWithoutAnimation {
             for path in collection.indexPathsForVisibleItems {
                 guard let item = dataSource.itemIdentifier(for: path),
-                      let cell = collection.cellForItem(at: path) else { continue }
+                      let cell = collection.cellForItem(at: path) as? CandidateCell else { continue }
                 configure(cell, item: item)
             }
         }
     }
-    private func configure(_ cell: UICollectionViewCell, item: Item) {
-        var content = UIListContentConfiguration.cell()
-        content.text = item.text
-        content.textProperties.numberOfLines = 1
-        content.textProperties.font = .systemFont(ofSize: 18)
+    private func configure(_ cell: CandidateCell, item: Item) {
         let selected = selectedIndex.map { dataSource.indexPath(for: item)?.item == $0 } ?? false
-        content.textProperties.color = selected ? palette.accentForeground : palette.foreground
         cell.backgroundColor = selected ? palette.accent : .clear
         cell.layer.cornerRadius = 8
-        cell.contentConfiguration = content
+        cell.label.text = item.text
+        cell.label.textColor = selected ? palette.accentForeground : palette.foreground
         cell.accessibilityTraits = selected ? [.button, .selected] : .button
         if isUpdating { cell.accessibilityTraits.insert(.notEnabled) }
         cell.accessibilityLabel = item.text
@@ -330,5 +331,66 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         guard !isUpdating, let item = dataSource.itemIdentifier(for: indexPath),
               candidates.indices.contains(indexPath.item), candidates[indexPath.item] == item.text else { return }
         onSelect?(indexPath.item)
+    }
+}
+
+private final class CandidateCell: UICollectionViewCell {
+    let label = UILabel()
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        label.translatesAutoresizingMaskIntoConstraints = false
+        label.font = .systemFont(ofSize: 18)
+        label.textAlignment = .center
+        label.lineBreakMode = .byTruncatingTail
+        label.numberOfLines = 1
+        contentView.addSubview(label)
+        NSLayoutConstraint.activate([
+            label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
+            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
+            label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor)
+        ])
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Horizontal flow layout aligns each column to its widest candidate, leaving
+/// holes beside shorter candidates. Keep candidate order top-to-bottom while
+/// packing each row independently; expanded mode retains normal vertical flow.
+private final class CandidateRowsLayout: UICollectionViewFlowLayout {
+    private var packed: [UICollectionViewLayoutAttributes] = []
+    private var packedSize = CGSize.zero
+    override func prepare() {
+        guard scrollDirection == .horizontal, let collectionView else { super.prepare(); return }
+        let rows = min(3, max(1, Int(collectionView.bounds.height / 44)))
+        var ends = Array(repeating: CGFloat.zero, count: rows)
+        packed.removeAll(keepingCapacity: true)
+        let delegate = collectionView.delegate as? UICollectionViewDelegateFlowLayout
+        guard collectionView.numberOfSections > 0 else { packedSize = collectionView.bounds.size; return }
+        for index in 0..<collectionView.numberOfItems(inSection: 0) {
+            let path = IndexPath(item: index, section: 0)
+            let width = delegate?.collectionView?(collectionView, layout: self, sizeForItemAt: path).width ?? 44
+            let row = index % rows
+            let attributes = UICollectionViewLayoutAttributes(forCellWith: path)
+            attributes.frame = CGRect(x: ends[row], y: CGFloat(row) * 44, width: ceil(width), height: 44)
+            packed.append(attributes)
+            ends[row] = attributes.frame.maxX + minimumLineSpacing
+        }
+        packedSize = CGSize(width: max(collectionView.bounds.width, (ends.max() ?? 0) - minimumLineSpacing), height: collectionView.bounds.height)
+    }
+    override var collectionViewContentSize: CGSize {
+        scrollDirection == .horizontal ? packedSize : super.collectionViewContentSize
+    }
+    override func layoutAttributesForElements(in rect: CGRect) -> [UICollectionViewLayoutAttributes]? {
+        scrollDirection == .horizontal ? packed.filter { $0.frame.intersects(rect) } : super.layoutAttributesForElements(in: rect)
+    }
+    override func layoutAttributesForItem(at indexPath: IndexPath) -> UICollectionViewLayoutAttributes? {
+        guard scrollDirection == .horizontal else { return super.layoutAttributesForItem(at: indexPath) }
+        return indexPath.section == 0 && packed.indices.contains(indexPath.item) ? packed[indexPath.item] : nil
+    }
+    override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
+        scrollDirection == .horizontal ? collectionView?.bounds.size != newBounds.size : super.shouldInvalidateLayout(forBoundsChange: newBounds)
     }
 }
