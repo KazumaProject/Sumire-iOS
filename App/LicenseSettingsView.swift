@@ -15,6 +15,8 @@ struct LicenseSettingsView: View {
                 notice("Sumire 変換コア・入力コア", url: Bundle.main.url(forResource: "SumireCoreLicense", withExtension: "txt"))
                 notice("アプリのロゴ", url: Bundle.main.url(forResource: "SumireAssetLicense", withExtension: "txt"))
                 notice("特殊キーのアイコン", url: Bundle.main.url(forResource: "KeyboardIconsNotice", withExtension: "txt"))
+                notice("Material Color Utilities の出典", url: MaterialColorUtilitiesNotice.attributionURL)
+                notice("Material Color Utilities — Apache 2.0", url: MaterialColorUtilitiesNotice.licenseURL)
             }
             Section("絵文字・顔文字・記号") {
                 notice("収録データ・出典・変更内容", url: SymbolKeyboardCatalog.noticeURL)
