@@ -150,7 +150,25 @@ swift test --package-path Core --scratch-path "$HOME/sumire-build/swift-core"
 python3 Scripts/check_offline.py
 ```
 
-実辞書の品質比較は `ConversionCore/tests/compare_reference.py`、実資産検証・性能測定は同ディレクトリの対応スクリプトを利用します。Android の候補比較には固定参照、Android SDK と JDK が必要です。参照元との候補一致率を、独立した正解集の正解率とは扱いません。
+実辞書の候補比較は `ConversionCore/tests/compare_reference.py` で行います。最初の実行では、Android SDK と JDK を使って固定リビジョンの `KanaKanjiEngine.getCandidatesWithoutPrediction` から19読み×「分類なし／全分類」の38ケースを生成します。以後は同じ辞書・基準ファイルを指定して比較だけを再実行できます。
+
+```sh
+python3 ConversionCore/tests/compare_reference.py \
+  --source .reference/JapaneseKeyboard \
+  --cli ../sumire-build/conversion-quality/sumire-cli \
+  --data ../sumire-data/cli-priority-v1 \
+  --output ../sumire-validation/conversion-quality
+
+python3 ConversionCore/tests/compare_reference.py \
+  --cli ../sumire-build/conversion-quality/sumire-cli \
+  --data ../sumire-data/cli-priority-v1 \
+  --baseline ../sumire-validation/conversion-quality/baseline.jsonl \
+  --output ../sumire-validation/conversion-quality-rerun
+```
+
+`ConversionCore/tests/reference/quality-policy.json` は、Android revision・adapter hash・baseline SHA-256・変換辞書 manifest hash と合格閾値を固定します。38件すべての探索完了、Top-1候補一致が36/38以上、Top-10候補リスト完全一致が36/38以上、参照元のTop-1候補がC++のTop-10に含まれる件数が38/38であることを合格条件とします。これは固定したAndroid経路との一致度であり、独立した実利用正解率ではありません。この評価集では予測、省略検索、ユーザー辞書、学習を無効にしており、それらの品質評価は別途必要です。入力別比較と合否レポートは指定した出力先だけに保存します。CTestにはrevision・ケース構成・hash・閾値の拒否テストも含みます。
+
+実資産の検証・性能測定は同ディレクトリの対応スクリプトを利用します。参照元との候補一致率を、独立した正解集の正解率とは扱いません。
 
 ## 完成に向けた残作業
 
