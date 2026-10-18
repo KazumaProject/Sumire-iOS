@@ -14,6 +14,10 @@ struct LicenseSettingsView: View {
             Section("プログラム・画像・アイコン") {
                 notice("Sumire 変換コア・入力コア", url: Bundle.main.url(forResource: "SumireCoreLicense", withExtension: "txt"))
                 notice("アプリのロゴ", url: Bundle.main.url(forResource: "SumireAssetLicense", withExtension: "txt"))
+                NavigationLink("スミレ入力スタイルの定義・出典") {
+                    ScrollView { Text(ReferenceFlickMaps.provenanceNotice).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding() }
+                        .navigationTitle("入力スタイルの出典")
+                }
                 notice("特殊キーのアイコン", url: Bundle.main.url(forResource: "KeyboardIconsNotice", withExtension: "txt"))
                 notice("Material Color Utilities の出典", url: MaterialColorUtilitiesNotice.attributionURL)
                 notice("Material Color Utilities — Apache 2.0", url: MaterialColorUtilitiesNotice.licenseURL)
