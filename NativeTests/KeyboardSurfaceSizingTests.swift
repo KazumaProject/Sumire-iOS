@@ -1,6 +1,37 @@
 import XCTest
 
 final class KeyboardSurfaceSizingTests: XCTestCase {
+    func testHeightBudgetUsesScreenBoundsInsteadOfKeyboardWindowBounds() {
+        XCTAssertEqual(
+            KeyboardSurfaceSizingPlan.availableHeight(screenHeight: 896, windowHeight: 340),
+            896)
+    }
+
+    func testHeightBudgetFallsBackOnlyWhenScreenBoundsAreUnavailable() {
+        XCTAssertEqual(
+            KeyboardSurfaceSizingPlan.availableHeight(screenHeight: .nan, windowHeight: 340),
+            340)
+        XCTAssertEqual(
+            KeyboardSurfaceSizingPlan.availableHeight(screenHeight: nil, windowHeight: nil),
+            1000)
+    }
+
+    func testShortKeyboardHostWindowDoesNotSquashConfiguredRows() {
+        let screenHeight = KeyboardSurfaceSizingPlan.availableHeight(
+            screenHeight: 874,
+            windowHeight: 320)
+        let plan = KeyboardSurfaceSizingPlan.make(
+            keyAreaHeight: 275,
+            candidateHeight: 132,
+            bottomInset: 34,
+            availableHeight: screenHeight)
+
+        XCTAssertEqual(screenHeight, 874)
+        XCTAssertEqual(plan.keyAreaHeight, 275)
+        XCTAssertEqual(plan.candidateHeight, 132)
+        XCTAssertEqual(plan.totalHeight, 441)
+    }
+
     func testThreeRowsGrowTheKeyboardWhenThereIsRoom() {
         let plan = KeyboardSurfaceSizingPlan.make(
             keyAreaHeight: 275,

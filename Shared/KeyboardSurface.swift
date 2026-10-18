@@ -80,9 +80,14 @@ final class KeyboardSurface: UIInputView {
         loadedSizing = true
         applySizing()
     }
+    private var availableSizingHeight: CGFloat {
+        KeyboardSurfaceSizingPlan.availableHeight(
+            screenHeight: window?.screen.bounds.height,
+            windowHeight: window?.bounds.height)
+    }
     private func applySizing() {
         guard preferredHeight != nil else { return }
-        let availableHeight = window?.bounds.height ?? 1000
+        let availableHeight = availableSizingHeight
         sizedAvailableHeight = availableHeight
         // Keep the configured key-area size stable as candidate rows are added.
         // In constrained hosts, show only complete rows and let the candidate
@@ -115,7 +120,7 @@ final class KeyboardSurface: UIInputView {
             sizeOrientation = orientation
             reloadSizing()
         } else if !isAppearancePreview,
-                  sizedAvailableHeight.map({ abs($0 - (window?.bounds.height ?? 1000)) > 0.5 }) ?? true {
+                  sizedAvailableHeight.map({ abs($0 - availableSizingHeight) > 0.5 }) ?? true {
             applySizing()
         }
         let free = max(0, max(0, bounds.width - safeAreaInsets.left - safeAreaInsets.right) * (1 - sizeValue.width))
