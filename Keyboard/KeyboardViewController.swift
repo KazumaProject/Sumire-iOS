@@ -12,6 +12,7 @@ final class KeyboardViewController: UIInputViewController {
     private var expectedContext: Context?
     private var changing = false
     private var keyboardHeight: NSLayoutConstraint!
+    private var settingsAccess: KeyboardSettingsAccess?
     override func viewDidLoad() {
         super.viewDidLoad()
         ProcessMemory.record("extension.loaded")
@@ -72,21 +73,27 @@ final class KeyboardViewController: UIInputViewController {
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
         expectedContext = context()
-        let defaults = hasFullAccess ? (KeyboardSettings.sharedDefaults ?? .standard) : .standard
+        let access = KeyboardSettings.extensionAccess(hasFullAccess: hasFullAccess)
+        settingsAccess = access
+        let defaults = access.readDefaults
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
         surface.candidateBar.automaticallyPreviewClipboard = defaults.bool(forKey: "clipboardAutomaticPreview")
         surface.settingsDefaults = defaults
-        surface.configureClipboard(accessAllowed: hasFullAccess, allowShared: hasFullAccess)
+        surface.settingsWriteDefaults = access.writeDefaults
+        surface.onSettingsWritten = { [weak access] keys in access?.didWrite(keys) }
+        let clipboardReset = LocalDataReset(store: .clipboard, url: PersonalDataLocation.clipboardURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
+        surface.configureClipboard(accessAllowed: hasFullAccess, allowShared: hasFullAccess, localReset: clipboardReset)
         surface.reloadTheme()
         surface.reloadRomaji()
         surface.reloadCustomLayouts()
         surface.reloadAppearance()
         let learningEnabled = defaults.object(forKey: "learningEnabled") == nil || defaults.bool(forKey: "learningEnabled")
-        surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: hasFullAccess) : nil)
+        let learningReset = LocalDataReset(store: .learning, url: PersonalDataLocation.learningURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
+        surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: hasFullAccess) : nil, localReset: learningReset)
         surface.learnFirstCandidate = defaults.bool(forKey: "learnFirstCandidate")
         surface.reloadSizing()
         do {
-            let loaded = try PersonalDataLocation.store(allowShared: hasFullAccess).load()
+            let loaded = try PersonalDataLocation.readableStore().load()
             surface.personalLexicon = loaded.lexicon
             if loaded.recovered { surface.showDataNotice("ユーザー辞書を直前の正常な世代から復元しました") }
         } catch { surface.showDataNotice("ユーザー辞書: " + error.localizedDescription) }

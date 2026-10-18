@@ -2,13 +2,15 @@ import XCTest
 import UIKit
 
 final class CandidateBarTests: XCTestCase {
-    private func withBar(_ body: @escaping (CandidateBar, UICollectionView) -> Void) {
+    private func withBar(rows: Int = 1, _ body: @escaping (CandidateBar, UICollectionView) -> Void) {
         let finished = expectation(description: "Rendered candidate bar")
         DispatchQueue.main.async {
             let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
             let controller = UIViewController()
             window.rootViewController = controller
-            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: CGFloat(rows * 44)))
+            bar.backgroundColor = .white
+            bar.rowCount = rows
             bar.clipboardAccessAllowed = false
             controller.view.addSubview(bar)
             window.isHidden = false
@@ -20,6 +22,81 @@ final class CandidateBarTests: XCTestCase {
             finished.fulfill()
         }
         wait(for: [finished], timeout: 10)
+    }
+
+    func testThreeRowsPackVariableWidthsWithoutBlankColumns() {
+        withBar(rows: 3) { bar, list in
+            bar.candidates = ["か", "株式会社", "かな", "神奈川県横浜市", "家", "加", "蚊", "科学", "カメラ", "漢字", "課", "仮名"]
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            list.visibleCells.forEach { $0.layoutIfNeeded() }
+            let first = list.cellForItem(at: IndexPath(item: 0, section: 0))
+            let middle = list.cellForItem(at: IndexPath(item: 1, section: 0))
+            let last = list.cellForItem(at: IndexPath(item: 2, section: 0))
+            XCTAssertEqual(first?.accessibilityLabel, "か")
+            XCTAssertEqual(middle?.accessibilityLabel, "株式会社")
+            XCTAssertEqual(last?.accessibilityLabel, "かな")
+            XCTAssertEqual(first?.contentView.bounds.height ?? 0, 44)
+            XCTAssertEqual(middle?.contentView.bounds.height ?? 0, 44)
+            XCTAssertEqual(last?.contentView.bounds.height ?? 0, 44)
+            let labels = [first, middle, last].compactMap { cell in
+                cell?.contentView.subviews.compactMap { $0 as? UILabel }.first
+            }
+            XCTAssertEqual(labels.count, 3)
+            XCTAssertEqual(labels.map(\.text), ["か", "株式会社", "かな"])
+            for label in labels {
+                XCTAssertGreaterThan(label.frame.height, 0)
+                XCTAssertGreaterThanOrEqual(label.frame.minY, 0)
+                XCTAssertLessThanOrEqual(label.frame.maxY, label.superview?.bounds.maxY ?? 0)
+            }
+            var didDrawHierarchy = false
+            let image = UIGraphicsImageRenderer(bounds: bar.bounds).image { _ in
+                didDrawHierarchy = bar.drawHierarchy(in: bar.bounds, afterScreenUpdates: true)
+            }
+            XCTAssertTrue(didDrawHierarchy)
+            let attachment = XCTAttachment(image: image); attachment.name = "three-row-variable-width"; attachment.lifetime = .keepAlways
+            self.add(attachment)
+            let attributes = (0..<bar.candidates.count).compactMap { list.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: $0, section: 0)) }
+            XCTAssertEqual(list.adjustedContentInset, .zero)
+            XCTAssertEqual(Set(attributes.map { $0.frame.minY }).count, 3)
+            for row in Dictionary(grouping: attributes, by: { $0.frame.minY }).values {
+                let sorted = row.sorted { $0.frame.minX < $1.frame.minX }
+                for pair in zip(sorted, sorted.dropFirst()) {
+                    XCTAssertEqual(pair.1.frame.minX - pair.0.frame.maxX, 6, accuracy: 0.5)
+                }
+            }
+        }
+    }
+
+    func testSavedThreeRowsCollapseOnlyWhileShortcutsAreVisible() {
+        withBar(rows: 3) { bar, list in
+            XCTAssertEqual(bar.displayedHeight, 132)
+            bar.showsShortcuts = true
+            XCTAssertEqual(bar.rowCount, 3)
+            XCTAssertEqual(bar.displayedHeight, 44)
+            bar.showsShortcuts = false
+            XCTAssertEqual(bar.rowCount, 3)
+            XCTAssertEqual(bar.displayedHeight, 132)
+        }
+    }
+
+    func testThreeRowRepackingPreservesSelectionAndFitsChangedWidth() {
+        withBar(rows: 3) { bar, list in
+            bar.candidates = (0..<24).map { $0 % 4 == 0 ? "長い変換候補\($0)" : "候補\($0)" }
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            bar.frame.size.width = 240
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            bar.candidates = (0..<18).map { "更新\($0)" }
+            list.layoutIfNeeded()
+            var selected: Int?
+            bar.onSelect = { selected = $0 }
+            bar.collectionView(list, didSelectItemAt: IndexPath(item: 7, section: 0))
+            XCTAssertEqual(selected, 7)
+            for index in 0..<18 {
+                let attributes = list.collectionViewLayout.layoutAttributesForItem(at: IndexPath(item: index, section: 0))!
+                XCTAssertEqual(attributes.frame.minY, CGFloat(index % 3) * 44)
+                XCTAssertLessThanOrEqual(attributes.frame.width, ceil(list.bounds.width))
+            }
+        }
     }
 
     func testPendingUpdateKeepsFrameAndRejectsOldCandidateSelection() {

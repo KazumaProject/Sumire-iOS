@@ -181,7 +181,8 @@ struct HomeView: View {
             let message: String
             do {
                 if FileManager.default.fileExists(atPath: url.path) { try LearningStore(url: url).clear() }
-                message = "学習データを削除しました"
+                KeyboardSettings.appDefaults.set(UUID().uuidString, forKey: "learning.resetToken")
+                message = "本体の学習データを削除しました。キーボード側は次回表示時に削除します。"
             } catch { message = error.localizedDescription }
             DispatchQueue.main.async {
                 learningNotice = message; clearingLearning = false; appearanceRevision += 1
