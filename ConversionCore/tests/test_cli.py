@@ -57,6 +57,42 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def test_japanese_completion_defaults_and_preserved_full_candidates(self):
+        entries=[('あいう','Exact',1,100), ('あいうえ','Next',1,-9000),
+                 ('あいうえお','Long',1,-9000), ('あいうえおか','Longest',1,-9000),
+                 ('あいうえおかき','TooFar',1,-30000), ('あいうか','Cheap',1,-9500),
+                 ('あいうき','Fifth',1,10000)]
+        dictionary(self.data/'system.sud',entries)
+        plain=json.loads(self.run_cli('--nbest','2','あいう').stdout)
+        predicted=json.loads(self.run_cli('--nbest','2','--predict-japanese','あいう').stdout)
+        candidates=predicted['candidates']
+        self.assertEqual([c['text'] for c in candidates[:2]],['Cheap','Next'])
+        self.assertEqual({c['text']:c['score'] for c in candidates if c['text'] in ['Cheap','Next','Long','Longest']},
+                         {'Cheap':-1500,'Next':-1000,'Long':7000,'Longest':15000})
+        self.assertTrue(all(any(c['text']==p['text'] and c['score']==p['score'] and c['segments']==p['segments'] for c in candidates) for p in plain['candidates']))
+        self.assertNotIn('TooFar',[c['text'] for c in candidates])
+        self.assertNotIn('Fifth',[c['text'] for c in candidates])
+        for c in candidates:
+            if c['text'] in ['Cheap','Next','Long','Longest']:
+                self.assertEqual(c['segments'][0]['length_utf16'],3)
+                self.assertEqual(c['segments'][0]['dictionary'],'system')
+                self.assertEqual(c['bunsetsu_boundaries_utf16'],[])
+        short=json.loads(self.run_cli('--predict-japanese','あい').stdout)
+        self.assertNotIn('Next',[c['text'] for c in short['candidates']])
+
+    def test_japanese_completion_utf16_surface_penalty_and_budget(self):
+        dictionary(self.data/'system.sud', [('あいうえおかき',-2,1,100), ('あいうえおかく',-1,1,200)])
+        result=json.loads(self.run_cli('--predict-japanese','あいうえおか').stdout)
+        completions=[c for c in result['candidates'] if c['text'] in ['あいうえおかき','アイウエオカク']]
+        self.assertEqual([c['score'] for c in completions],[6100,6200])
+        self.assertTrue(all(c['segments'][0]['length_utf16']==6 for c in completions))
+        limited=json.loads(self.run_cli('--predict-japanese','--max-states','1','あいうえおか').stdout)
+        self.assertFalse(limited['complete'])
+        for reading in ['あいうえおかきくけこさしすせそたち', 'あいうえおかきくけこさしすせそた']:
+            dictionary(self.data/'system.sud',[(reading+'な','Completion',1,100)])
+            value=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+            self.assertEqual('Completion' in [c['text'] for c in value['candidates']], len(reading)==16)
+
     def test_bunsetsu_boundaries_follow_selected_path(self):
         # Context IDs 1 and 2 map to independent POS 12/13. Every connection
         # cost is zero: boundaries must come from POS, not matrix values.

@@ -152,7 +152,9 @@ int main(int argc, char **argv) {
   req.generation = 2; req.flags = 3;
   CHECK(sumire_session_update(session, &req, &failed, error, sizeof error) < 0 && failed == NULL);
   CHECK(sumire_session_commit(session, 1, candidate.candidate_id, error, sizeof error) == 0);
-  req.flags = 0; req.reading = "あい"; req.reading_bytes = strlen(req.reading);
+  req.flags = 10; // English and Japanese prediction cannot be combined.
+  CHECK(sumire_session_update(session, &req, &failed, error, sizeof error) < 0 && failed == NULL);
+  req.flags = 8; req.reading = "あい"; req.reading_bytes = strlen(req.reading);
   CHECK(sumire_session_update(session, &req, &second, error, sizeof error) == 0);
   sumire_personal_entry english_entries[] = {
       {{"hello", 5}, {"MyHello", 7}, 0, -1000, 0},
