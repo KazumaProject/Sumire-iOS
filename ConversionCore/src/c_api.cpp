@@ -166,7 +166,7 @@ int sumire_session_update(sumire_session *session,
   return guarded(error, size, [&] {
     check(out && session && request, "null update argument");
     check(request->reading || request->reading_bytes == 0, "null reading");
-    check((request->flags & ~uint32_t(7)) == 0 &&
+    check((request->flags & ~uint32_t(15)) == 0 &&
           ((request->flags & 2) == 0 || request->flags == 2), "unsupported or incompatible conversion flags");
     check(!session->has_generation || request->generation > session->generation,
           "stale generation");
@@ -186,7 +186,7 @@ int sumire_session_update(sumire_session *session,
         ? session->engine->predict_english(reading, request->candidate_count, true, session->personal.get(), session->learned.get())
         : session->engine->convert(
         reading, request->candidate_count, request->max_states,
-        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0);
+        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0);
     snapshot->generation = request->generation;
     snapshot->length = uint32_t(units.size());
     auto result = std::make_unique<sumire_result>();

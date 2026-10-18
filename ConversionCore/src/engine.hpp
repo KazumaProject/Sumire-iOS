@@ -67,7 +67,7 @@ public:
                  size_t state_limit = 200000, bool omission = false,
                  const PersonalDictionary *personal = nullptr,
                  const PersonalDictionary *learned = nullptr,
-                 Workspace *workspace = nullptr, bool prefix_candidates = false) const;
+                 Workspace *workspace = nullptr, bool prefix_candidates = false, bool japanese_prediction = false) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;

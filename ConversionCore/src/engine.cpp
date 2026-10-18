@@ -229,6 +229,48 @@ struct Dictionary {
       while (end > first) pending.push_back(--end);
     }
   }
+  // Depth-bounded DFS in reference trie order. Keep no dictionary subtree
+  // strings; callback sees terminals only. False reports node/token-budget exhaustion.
+  template <class F>
+  bool completion(const std::u16string &prefix, size_t lookahead,
+                  size_t budget, F callback) const {
+    size_t node = 0;
+    for (auto c : prefix) {
+      size_t child = tree.select0(tree.rank(node)) + 1;
+      for (; tree.at(child); ++child)
+        if (labels[tree.rank(child)] == c) break;
+      if (!tree.at(child)) return true;
+      node = child;
+    }
+    struct Frame { size_t node, depth, next; bool visited; };
+    std::vector<Frame> stack{{node, 0, 0, false}};
+    size_t visited = 0;
+    while (!stack.empty()) {
+      auto &frame = stack.back();
+      if (!frame.visited) {
+        if (visited == budget) return false;
+        ++visited;
+        frame.visited = true;
+        if (frame.depth && leaf.at(frame.node)) {
+          auto term = terms[leaf.rank(frame.node) - 1];
+          for (uint32_t token = postings[term]; token < postings[term + 1]; ++token) {
+            if (visited == budget) return false;
+            ++visited;
+            callback(frame.node, token, frame.depth);
+          }
+        }
+        frame.next = tree.select0(tree.rank(frame.node)) + 1;
+      }
+      if (frame.depth == lookahead || !tree.at(frame.next)) {
+        stack.pop_back();
+      } else {
+        const auto child = frame.next++;
+        const auto depth = frame.depth + 1;
+        stack.push_back({child, depth, 0, false});
+      }
+    }
+    return true;
+  }
   // Same directional kana variations as the pinned Android LOUDS search.
   // Follow only existing trie edges; never enumerate all possible input
   // strings.
@@ -747,7 +789,7 @@ size_t Workspace::retained_bytes() const noexcept { return impl->bytes(); }
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
-                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates) const {
+                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
@@ -902,6 +944,31 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         push(id, index,
              state.cost + conn.cost(node.right, nodes[id].left) +
                  nodes[id].cost);
+  }
+  if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
+    // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
+    // Retain token references only; materialize surfaces after top-k selection.
+    const auto &d = *impl->dictionaries.front();
+    struct Prediction { size_t node; uint32_t token; int64_t score; };
+    std::vector<Prediction> best;
+    const bool complete = d.completion(reading, 3, limit, [&](size_t node, uint32_t token, size_t extra) {
+      const int64_t score = d.costs[token] + (reading.size() <= 5 ? int64_t(extra) * 8000 : 6000);
+      const auto at = std::upper_bound(best.begin(), best.end(), score,
+          [](int64_t value, const Prediction &entry) { return value < entry.score; });
+      if (best.size() == 4 && at == best.end()) return;
+      best.insert(at, {node, token, score});
+      if (best.size() > 4) best.pop_back();
+    });
+    result.complete = result.complete && complete;
+    const size_t full_count = result.candidates.size();
+    for (const auto &prediction : best) {
+      auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
+      if (seen.insert(text).second)
+        result.candidates.push_back({text, prediction.score,
+            {{text, d.name, 0, uint32_t(reading.size())}}});
+    }
+    std::inplace_merge(result.candidates.begin(), result.candidates.begin() + full_count,
+                       result.candidates.end(), [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
   }
   if (impl->english_reading && !reading.empty()) {
     const auto &d = *impl->english_reading;
