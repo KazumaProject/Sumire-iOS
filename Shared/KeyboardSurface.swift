@@ -69,6 +69,7 @@ final class KeyboardSurface: UIInputView {
     private var sizeValue = KeyboardSize.standard(.portrait)
     private var dragSize = KeyboardSize.standard(.portrait)
     private var loadedSizing = false
+    private var sizedAvailableHeight: CGFloat?
     private var isAppearancePreview = false
     private var resizeOverlay: KeyboardResizeOverlay?
     private var stackLeading: NSLayoutConstraint!
@@ -82,8 +83,17 @@ final class KeyboardSurface: UIInputView {
     private func applySizing() {
         guard preferredHeight != nil else { return }
         let availableHeight = window?.bounds.height ?? 1000
-        let rows = CGFloat(min(3, max(1, candidateRowCount))) * 44
-        let height = min(sizeValue.height + rows + safeAreaInsets.bottom, max(210, availableHeight * 0.72))
+        sizedAvailableHeight = availableHeight
+        // Keep the configured key-area size stable as candidate rows are added.
+        // In constrained hosts, show only complete rows and let the candidate
+        // strip scroll vertically to reach the remaining configured rows.
+        let plan = KeyboardSurfaceSizingPlan.make(
+            keyAreaHeight: sizeValue.height,
+            candidateHeight: candidateBar.requestedDisplayedHeight,
+            bottomInset: safeAreaInsets.bottom,
+            availableHeight: availableHeight)
+        candidateBar.setDisplayedHeightLimit(plan.candidateHeight)
+        let height = plan.totalHeight
         if abs(preferredHeight.constant - height) > 0.5 {
             preferredHeight.constant = height
             invalidateIntrinsicContentSize()
@@ -104,6 +114,9 @@ final class KeyboardSurface: UIInputView {
             if resizeOverlay != nil { saveSize() }
             sizeOrientation = orientation
             reloadSizing()
+        } else if !isAppearancePreview,
+                  sizedAvailableHeight.map({ abs($0 - (window?.bounds.height ?? 1000)) > 0.5 }) ?? true {
+            applySizing()
         }
         let free = max(0, max(0, bounds.width - safeAreaInsets.left - safeAreaInsets.right) * (1 - sizeValue.width))
         stackLeading.constant = geometry.horizontalInset + free * sizeValue.alignment
@@ -373,6 +386,7 @@ final class KeyboardSurface: UIInputView {
         clipboardHistory.onNotice = { [weak self] text in self?.symbolPanel?.showNotice(text); self?.showDataNotice(text) }
         clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
         candidateBar.onClipboardCaptured = { [weak self] text, image in self?.clipboardHistory.capture(text: text, image: image) }
+        candidateBar.onSizingChange = { [weak self] in self?.applySizing() }
         candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard() }
         candidateBar.onClipboardNotice = { [weak self] in self?.showDataNotice($0) }
         candidateBar.onResize = { [weak self] in self?.beginResize() }
@@ -1629,9 +1643,15 @@ final class KeyboardSurface: UIInputView {
     }
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()
+        let previousEnglishComposition = englishComposition
         inputMode = mode
         if let customID { activeCustomID = customID }
         rememberKeyboard()
+        updateModeConversionLanguage()
+        if hasComposition && englishComposition != previousEnglishComposition {
+            composition.optionsChanged()
+            refreshConversion()
+        }
         shifted = false
         qwertyCapsLock = false; qwertyLastShiftTap = 0
         rebuild()
@@ -1731,7 +1751,8 @@ final class KeyboardSurface: UIInputView {
         }
     }
     private func updateModeConversionLanguage() {
-        let englishMode = (inputMode == .tenKey && tenKeyMode == .english)
+        let englishMode = inputMode == .english
+            || (inputMode == .tenKey && tenKeyMode == .english)
             || (inputMode == .sumire && sumireMode == .english)
             || (inputMode == .kana && gojuonMode == .english)
         // Keep mixed kana/Latin compositions in the Japanese lattice. Mode

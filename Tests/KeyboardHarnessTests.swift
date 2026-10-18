@@ -1555,7 +1555,6 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["⇧"].tap()
         app.buttons["A"].tap()
         XCTAssertEqual(editor.value as? String, "日本語A")
-        app.buttons["かな"].tap()
         selectKeyboard("ローマ字", in: app)
         for key in "kan" { app.buttons[String(key)].tap() }
         XCTAssertEqual(editor.value as? String, "日本語Aかn")
@@ -1743,9 +1742,21 @@ final class KeyboardHarnessTests: XCTestCase {
         editor.tap()
         let key = app.buttons["あ"]
         XCTAssertTrue(key.waitForExistence(timeout: 5))
-        key.tap()
         let originalHeight = key.frame.height
         let originalTop = key.frame.minY
+        // In shortcut mode only one row is visible. Entering composition with
+        // three configured rows must grow the whole keyboard, keeping the key
+        // grid at its original point size and bottom position.
+        app.buttons["3段"].tap()
+        XCTAssertEqual(key.frame.height, originalHeight, accuracy: 1)
+        XCTAssertEqual(key.frame.minY, originalTop, accuracy: 1)
+        key.tap()
+        XCTAssertEqual(editor.value as? String, "あ")
+        XCTAssertEqual(key.frame.height, originalHeight, accuracy: 1)
+        XCTAssertEqual(key.frame.minY, originalTop, accuracy: 1)
+        let candidates = app.collectionViews["candidate-items"]
+        XCTAssertTrue(candidates.waitForExistence(timeout: 5))
+        XCTAssertEqual(candidates.frame.height, 132, accuracy: 1)
         for rows in [2, 3, 1] {
             app.buttons["\(rows)段"].tap()
             XCTAssertEqual(editor.value as? String, "あ")

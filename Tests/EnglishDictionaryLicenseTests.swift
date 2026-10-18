@@ -16,7 +16,11 @@ final class EnglishDictionaryLicenseTests: XCTestCase {
         let status = app.staticTexts["english-dictionary-license-status"]
         for _ in 0..<5 where !status.isHittable { app.swipeUp() }
         XCTAssertTrue(status.waitForExistence(timeout: 5))
-        XCTAssertTrue(status.label.contains("未確認"))
+        XCTAssertTrue(status.label.contains("固定Android参照のリビジョン"))
+        XCTAssertTrue(status.label.contains("english/word.dat"))
+        XCTAssertTrue(status.label.contains("SHA-256は特定済み"))
+        XCTAssertTrue(status.label.contains("収録語の元データとその版、各語の帰属、適用ライセンスは未確認"))
+        XCTAssertFalse(status.label.contains("固定Android資産の取得元・版・適用ライセンスは未確認"))
 
         let currentNotice = app.buttons["english-word-dictionary-notice"]
         for _ in 0..<5 where !currentNotice.isHittable { app.swipeUp() }
@@ -25,7 +29,7 @@ final class EnglishDictionaryLicenseTests: XCTestCase {
         let currentText = app.staticTexts["license-notice-text"]
         XCTAssertTrue(currentText.waitForExistence(timeout: 5))
         XCTAssertTrue(currentText.label.contains("Source and applicable data license: unconfirmed"))
-        app.navigationBars.buttons.firstMatch.tap()
+        app.navigationBars["英単語辞書の配布通知"].buttons.firstMatch.tap()
 
         let legacyNotice = app.buttons["english-legacy-wikitext-notice"]
         for _ in 0..<5 where !legacyNotice.isHittable { app.swipeUp() }
@@ -36,7 +40,7 @@ final class EnglishDictionaryLicenseTests: XCTestCase {
         XCTAssertTrue(legacyText.label.contains("現行の英単語資産への適用は未確認"))
         XCTAssertTrue(legacyText.label.contains("Salesforce WikiText"))
         XCTAssertTrue(legacyText.label.contains("CC BY-SA 4.0"))
-        app.navigationBars.buttons.firstMatch.tap()
+        app.navigationBars["旧WikiText通知（現行資産への適用範囲未確認）"].buttons.firstMatch.tap()
 
         let readingNotice = app.buttons["english-reading-dictionary-notice"]
         for _ in 0..<5 where !readingNotice.isHittable { app.swipeUp() }

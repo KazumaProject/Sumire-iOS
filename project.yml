@@ -95,6 +95,7 @@ targets:
       - Shared/CandidateBar.swift
       - Shared/KeyboardPalette.swift
       - Shared/KeyboardIcon.swift
+      - Shared/KeyboardSurfaceSizing.swift
       - path: ConversionCore/src
         excludes: [main.cpp]
     settings:
