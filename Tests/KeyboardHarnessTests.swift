@@ -968,6 +968,45 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "す")
     }
 
+    func testSeedColorPickerEditing() throws {
+        let app = XCUIApplication(); app.launch()
+        func openTheme() {
+            let button = app.buttons["キーボードの配色"]
+            for _ in 0..<8 {
+                if button.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            button.tap()
+            XCTAssertTrue(app.buttons["theme-seed-color"].waitForExistence(timeout: 5))
+        }
+        openTheme()
+        app.buttons["標準の配色に戻す"].tap()
+        let color = app.buttons["theme-seed-color"]
+        let original = color.value as? String
+        color.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        let panel = app.otherElements["UIColorPicker"]
+        XCTAssertTrue(panel.buttons.firstMatch.waitForExistence(timeout: 10))
+        panel.buttons["スライダ"].tap()
+        panel.sliders["sliderRed"].adjust(toNormalizedSliderPosition: 0.1)
+        panel.sliders["sliderGreen"].adjust(toNormalizedSliderPosition: 0.8)
+        panel.sliders["sliderBlue"].adjust(toNormalizedSliderPosition: 0.2)
+        panel.buttons["閉じる"].tap()
+        let selected = color.value as? String
+        XCTAssertNotEqual(selected, original)
+        let preview = XCTAttachment(screenshot: app.screenshot())
+        preview.name = "Custom seed color preview"; preview.lifetime = .keepAlways; add(preview)
+        app.buttons["完了"].tap()
+        app.textViews["入力テスト"].tap()
+        selectKeyboard("50音", in: app)
+        let keyboard = XCTAttachment(screenshot: app.screenshot())
+        keyboard.name = "Custom seed color keyboard"; keyboard.lifetime = .keepAlways; add(keyboard)
+        app.terminate(); app.launch()
+        openTheme()
+        XCTAssertEqual(color.value as? String, selected)
+        app.buttons["標準の配色に戻す"].tap()
+        app.buttons["完了"].tap()
+    }
+
     func testThemePersistsAndSwitchingPreservesComposition() throws {
         let app = XCUIApplication()
         app.launch()
