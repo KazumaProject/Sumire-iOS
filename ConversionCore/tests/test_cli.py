@@ -42,11 +42,33 @@ def dictionary(path,entries):
     b.pack_file(path,1,0,[b.le(a) for a in sections]+[blob])
 
 MATRIX=[[0,10,20],[30,-50,70],[40,-80,90]]
+MOZC_MAX_WORD_COST=32767
 ENTRIES=[('あ','A',1,100),('あ','B',2,200),('あ','A',2,150),('い','I',2,50),('あい','Whole',1,500)]
 
-def connection(path):
-    sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0,0,0]),array.array('Q',[6,7,7]),array.array('h',[10,20,30,-50,70,40,-80,90]),array.array('I',[0,2,5,8]),array.array('H',[0,0,0])]
-    b.pack_file(path,2,3,[b.le(a) for a in sections])
+def connection(path,dimension=3,overrides=None):
+    if dimension == 3 and overrides is None:
+        sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0,0,0]),array.array('Q',[6,7,7]),array.array('h',[10,20,30,-50,70,40,-80,90]),array.array('I',[0,2,5,8]),array.array('H',[0,0,0])]
+    else:
+        blocks=(dimension+63)//64
+        overrides=overrides or {}
+        bit_words=[0]*(dimension*blocks);rank_starts=[0]*(dimension*blocks)
+        values=[];starts=[0]
+        for row in range(dimension):
+            cells=overrides.get(row,{})
+            rank=0
+            for block in range(blocks):
+                offset=row*blocks+block
+                rank_starts[offset]=rank
+                word=0
+                for column,cost in sorted(cells.items()):
+                    if column//64==block:
+                        word|=1<<(column%64);values.append(cost)
+                bit_words[offset]=word
+                rank+=word.bit_count()
+            starts.append(len(values))
+        sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0]*dimension),
+                  array.array('Q',bit_words),array.array('h',values),array.array('I',starts),array.array('H',rank_starts)]
+    b.pack_file(path,2,dimension,[b.le(a) for a in sections])
 
 def standalone(path,words):
     offsets=array.array('I',[0]);text=bytearray()
@@ -57,7 +79,10 @@ def brute(reading,entries):
     paths=[]
     def visit(i,rid,cost,text):
         if i==len(reading):paths.append((cost+MATRIX[rid][0],text));return
-        for word,surface,pos,c in entries+[(reading[i],reading[i],0,16000)]:
+        matches=[entry for entry in entries if reading.startswith(entry[0],i)]
+        if not matches:
+            matches=[(reading[i],reading[i],0,10000)]
+        for word,surface,pos,c in matches:
             if reading.startswith(word,i):visit(i+len(word),pos,cost+MATRIX[rid][pos]+c,text+surface)
     visit(0,0,0,'');unique={}
     for cost,text in sorted(paths):unique.setdefault(text,cost)
@@ -172,6 +197,34 @@ class Tests(unittest.TestCase):
 
         self.assertEqual(texts[0],'あいう')
         self.assertIn('あいうえ',texts)
+
+    def test_unknown_fallback_matches_reference_cost_and_dictionary_suppression(self):
+        dictionary(self.data/'system.sud',[])
+        connection(self.data/'connection.sud',1842,{0:{1841:13},1841:{0:-9}})
+
+        multi=json.loads(self.run_cli('abc').stdout)['candidates']
+        self.assertEqual(multi[0]['text'],'abc')
+        self.assertEqual(multi[0]['score'],MOZC_MAX_WORD_COST//2+13-9)
+        self.assertEqual(multi[0]['segments'][0]['length_utf16'],3)
+
+        single=json.loads(self.run_cli('A').stdout)['candidates']
+        self.assertEqual(single[0]['text'],'A')
+        self.assertEqual(single[0]['score'],MOZC_MAX_WORD_COST+13-9)
+
+        dictionary(self.data/'system.sud',[('猫','KNOWN',1,100)])
+        connection(self.data/'connection.sud')
+        known=json.loads(self.run_cli('--nbest','10','猫').stdout)['candidates']
+        self.assertEqual([candidate['text'] for candidate in known],['KNOWN'])
+
+        dictionary(self.data/'system.sud',[])
+        fallback=json.loads(self.run_cli('猫').stdout)['candidates']
+        self.assertEqual(fallback[0]['text'],'猫')
+        self.assertEqual(fallback[0]['score'],10000)
+
+        emoji=json.loads(self.run_cli('💩').stdout)['candidates']
+        self.assertEqual(emoji[0]['text'],'💩')
+        self.assertEqual(emoji[0]['score'],10000)
+        self.assertEqual(emoji[0]['segments'][0]['length_utf16'],2)
 
     def test_japanese_completion_utf16_surface_penalty_and_budget(self):
         dictionary(self.data/'system.sud', [('あいうえおかき',-2,1,100), ('あいうえおかく',-1,1,200)])
@@ -362,6 +415,7 @@ class Tests(unittest.TestCase):
         # Inactive broken categories must never be opened.
         (self.data/'medical.sud').write_bytes(b'broken');self.run_cli('あ');self.run_cli('--categories','medical','あ',ok=False)
     def test_unicode_stdin_and_limits(self):
+        connection(self.data/'connection.sud',1842)
         r=self.run_cli('--stdin','--nbest','1',input='👩\u200d💻e\u0301\n\nあ\n'.encode())
         lines=[json.loads(x) for x in r.stdout.splitlines()]
         self.assertEqual(len(lines),3);self.assertEqual(lines[0]['candidates'][0]['text'],'👩\u200d💻e\u0301')

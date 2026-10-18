@@ -27,6 +27,11 @@ using detail::File;
 using detail::Bits;
 using detail::Dictionary;
 constexpr int64_t INF = std::numeric_limits<int64_t>::max() / 4;
+constexpr uint16_t MOZC_UNKNOWN_POS_ID = 1841;
+constexpr int32_t MOZC_MAX_WORD_COST = 32767;
+constexpr bool is_ascii_alphabet(char16_t c) {
+  return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z');
+}
 struct Connection {
   File file;
   std::span<const uint16_t> left, right, ranks;
@@ -609,6 +614,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   for (size_t i = 0; i < reading.size(); ++i) {
     if (reading[i] >= 0xdc00 && reading[i] <= 0xdfff)
       continue;
+    bool foundInAnyDictionary = false;
     auto add = [&](Node node) {
       require(nodes.size() < 2000000,
               "lattice limit exceeded (input not truncated)");
@@ -645,6 +651,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           }));
       }
     }
+    foundInAnyDictionary = !cached.nodes.empty();
     for (const auto *overlay : {personal, learned}) {
       if (!overlay) continue;
       auto first = overlay->entries.begin(), last = overlay->entries.end();
@@ -667,6 +674,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           const auto &entry = it->entry;
           if (entry.exact_only && (i != 0 || j + 1 != reading.size()))
             continue;
+          foundInAnyDictionary = true;
           uint16_t context = entry.exact_only ? 0 : entry.context_id;
           int64_t cost = entry.score;
           if (entry.exact_only)
@@ -678,8 +686,19 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         first = terminal;
       }
     }
+    const bool asciiAlphabet = is_ascii_alphabet(reading[i]);
+    if (!asciiAlphabet && foundInAnyDictionary) continue;
     size_t end = i + ((reading[i] >= 0xd800 && reading[i] <= 0xdbff) ? 2 : 1);
-    add({i, end, nullptr, 0, 0, 0, 16000});
+    uint16_t unknownPos = 0;
+    int32_t unknownCost = 10000;
+    if (asciiAlphabet) {
+      while (end < reading.size() && is_ascii_alphabet(reading[end])) ++end;
+      require(MOZC_UNKNOWN_POS_ID < conn.n,
+              "connection matrix lacks Mozc ASCII unknown POS 1841");
+      unknownPos = MOZC_UNKNOWN_POS_ID;
+      unknownCost = end - i > 1 ? MOZC_MAX_WORD_COST / 2 : MOZC_MAX_WORD_COST;
+    }
+    add({i, end, nullptr, 0, unknownPos, unknownPos, unknownCost});
   }
   // Backward Viterbi gives the exact best remaining cost for each token.
   // The lattice is acyclic, so negative word/connection costs are supported.
