@@ -17,6 +17,16 @@ struct FlickStyleSettingsView: View {
                 Text("各配列・文字モードの本家のキー定義を使用します。英字・数字など、選択したスタイルを使用しないキーもあります。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
+            Section("ポップアップの文字") {
+                Toggle("文字サイズを指定", isOn: Binding(get: { settings.popupTextSize != nil }, set: { settings.popupTextSize = $0 ? 20 : nil }))
+                if settings.popupTextSize != nil {
+                    LabeledContent("文字サイズ", value: "\(Int(settings.popupTextSize ?? 20))")
+                    Slider(value: Binding(get: { settings.popupTextSize ?? 20 }, set: { settings.popupTextSize = $0 }), in: 8...48, step: 1)
+                } else {
+                    Text("入力スタイルと長押し状態に合わせた本家の既定サイズを使用します。")
+                        .font(.footnote).foregroundStyle(.secondary)
+                }
+            }
             Section("二段・三段フリック") {
                 Picker("濁音・拗音の配置", selection: $settings.rotation) {
                     Text("標準").tag(FlickStyleSettings.Rotation.standard)

@@ -5,6 +5,15 @@ final class MultiStageFlickTests: XCTestCase {
     private let map: TwoStepFlickEvaluator.Map = [
         .tap: [.tap: "か"], .left: [.tap: "き", .left: "き", .upLeft: "ぎ", .downLeft: "きゃ"],
         .up: [.tap: "く", .up: "く", .upRight: "ぐ"]]
+    func testPopupOverridePreservesOldSettingsJSON() throws {
+        let legacy = FlickStyleSettings()
+        var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
+        object.removeValue(forKey: "popupTextSize")
+        let decoded = try JSONDecoder().decode(FlickStyleSettings.self, from: JSONSerialization.data(withJSONObject: object))
+        XCTAssertNil(decoded.popupTextSize)
+        var edited = decoded; edited.popupTextSize = 100
+        XCTAssertEqual(edited.normalized.popupTextSize, 48)
+    }
     func testReleaseMetadataUsesFinalDirectionAndConsumesOnce() throws {
         var single = SingleStageFlickEvaluator(style: .standard, map: [.tap: "あ", .right: "え"])
         single.begin(at: .init(0, 0), configuration: .init())

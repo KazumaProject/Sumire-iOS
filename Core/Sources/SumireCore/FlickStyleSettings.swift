@@ -27,11 +27,14 @@ public struct FlickStyleSettings: Codable, Equatable {
     public var diagonal = Diagonal.legacy
     public var startPosition = StartPosition.touchPoint
     public var presentation = Presentation.legacyGrid
+    /// Nil preserves each reference controller's default text size.
+    public var popupTextSize: Double?
     public var circularDirectionCount = 4
     public var hierarchicalModeAngleMargin = 20
     public init() {}
     public var normalized: Self {
         var value = self
+        if let size = popupTextSize { value.popupTextSize = size.isFinite ? min(48, max(8, size)) : nil }
         value.circularDirectionCount = min(7, max(4, value.circularDirectionCount))
         value.hierarchicalModeAngleMargin = min(34, max(0, value.hierarchicalModeAngleMargin))
         return value
