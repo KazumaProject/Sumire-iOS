@@ -4,6 +4,7 @@ import XCTest
 @testable import SumireCore
 
 final class DictionarySourceValidationTests: XCTestCase {
+    private let pinnedAndroidRevision = "df1f38315bf56d860d32919a3eaed6a75499e91e"
     private struct PinnedAndroidAssets: Decodable {
         let sourceRevision: String
         let assetSHA256: [String: String]
@@ -41,6 +42,33 @@ final class DictionarySourceValidationTests: XCTestCase {
                 throw PersonalDataError("固定Android辞書資産のSHA-256が一致しません: \(relativePath)")
             }
         }
+    }
+
+    private func sourceRevision(containing directory: URL) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/git")
+        process.arguments = ["-C", directory.path, "rev-parse", "HEAD"]
+        let output = Pipe()
+        process.standardOutput = output
+        try process.run()
+        process.waitUntilExit()
+        let revision = String(decoding: output.fileHandleForReading.readDataToEndOfFile(), as: UTF8.self)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard process.terminationStatus == 0, revision.count == 40 else {
+            throw PersonalDataError("SUMIRE_REFERENCE_ASSETS は固定revisionのGit checkout内に置いてください")
+        }
+        return revision
+    }
+
+    private func validatePinnedRevision(_ actual: String, expected: String? = nil) throws {
+        let expected = expected ?? pinnedAndroidRevision
+        guard actual == expected else {
+            throw PersonalDataError("Android参照revisionが一致しません: expected \(expected), got \(actual)")
+        }
+    }
+
+    func testReferenceRevisionMismatchIsRejected() {
+        XCTAssertThrowsError(try validatePinnedRevision("9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93"))
     }
 
     /// Small ObjectOutputStream-compatible fixture writer. Each descriptor is
@@ -355,7 +383,8 @@ final class DictionarySourceValidationTests: XCTestCase {
         let base = URL(fileURLWithPath: path, isDirectory: true)
         let pinnedURL = try XCTUnwrap(Bundle.module.url(forResource: "PinnedAndroidDictionaryAssets", withExtension: "json"))
         let pinned = try JSONDecoder().decode(PinnedAndroidAssets.self, from: Data(contentsOf: pinnedURL))
-        XCTAssertEqual(pinned.sourceRevision, "df1f38315bf56d860d32919a3eaed6a75499e91e")
+        XCTAssertEqual(pinned.sourceRevision, pinnedAndroidRevision)
+        try validatePinnedRevision(sourceRevision(containing: base), expected: pinned.sourceRevision)
         XCTAssertEqual(pinned.assetSHA256.count, 101)
         try verifyPinnedAssets(pinned.assetSHA256, under: base)
         let referenceDirectory = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_NATIVE_DICTIONARIES"]
@@ -459,6 +488,6 @@ final class DictionarySourceValidationTests: XCTestCase {
         if referenceManifest != nil {
             print("Converted all 33 dictionary groups and the connection matrix byte-for-byte to the pinned native binaries")
         }
-        print("Validated \(validatedSets) trie/token source sets and the common POS table against pinned Android asset hashes from df1f38315bf56d860d32919a3eaed6a75499e91e")
+        print("Validated \(validatedSets) trie/token source sets at Android Git revision \(pinned.sourceRevision), with pinned asset hashes")
     }
 }

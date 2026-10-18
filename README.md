@@ -98,6 +98,14 @@ xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
   -derivedDataPath "$HOME/sumire-build/benchmark" CODE_SIGNING_ALLOWED=NO test
 ```
 
+参照元の実辞書検証は、`SUMIRE_REFERENCE_ASSETS` を固定commit `df1f38315bf56d860d32919a3eaed6a75499e91e` のGit checkout内にある `app/src/main/assets` に設定します。テストはその場所を含むGit checkoutの実HEADと資産SHA-256の両方を照合します。単にファイルを展開したディレクトリではcommitを検証できないため受け付けません。
+
+```sh
+export SUMIRE_REFERENCE_ASSETS="$PWD/.reference/JapaneseKeyboard/app/src/main/assets"
+git -C "$SUMIRE_REFERENCE_ASSETS" rev-parse HEAD
+swift test --package-path Core --filter DictionarySourceValidationTests
+```
+
 実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` です。
 
 ```sh
