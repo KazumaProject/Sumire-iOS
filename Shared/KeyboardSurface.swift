@@ -281,6 +281,7 @@ final class KeyboardSurface: UIInputView {
     private var romajiPage = 0
     private var romajiLatin = false
     private var sumireMode = TenKeyMode.japanese
+    private var sumireFlickProfile: ReferenceFlickMaps?
     private var gojuonMode = TenKeyMode.japanese
     private var gojuonShift = false
     private var gojuonCapsLock = false
@@ -413,6 +414,12 @@ final class KeyboardSurface: UIInputView {
                 flick.popupPalette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
                 flick.popupHost = self
                 flick.touchPolicy = policy
+            } else if let multi = key as? MultiStageFlickKey {
+                multi.touchRouter = touchRouter
+                multi.feedbackSettings = touchFeedback
+                multi.popupPalette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
+                multi.popupHost = self
+                multi.touchPolicy = policy
             } else if let repeating = key as? RepeatingKey {
                 repeating.touchRouter = touchRouter
                 repeating.longPressMilliseconds = touchFeedback.longPressMilliseconds
@@ -440,6 +447,7 @@ final class KeyboardSurface: UIInputView {
         appearance = .load(keyboardKind, defaults: settingsDefaults)
         stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
         keyRows = []
+        sumireFlickProfile = nil
         let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
         backgroundColor = palette.background
         candidateBar.applyPalette(palette)
@@ -958,8 +966,11 @@ final class KeyboardSurface: UIInputView {
         }
     }
     private func addSumireGrid(palette: KeyboardPalette) {
-        // The validated built-in definition is fixed at compile time.
         let arrangement = SumireKeyArrangement(rawValue: settingsDefaults.string(forKey: "sumire.keyArrangement") ?? "") ?? .toggle
+        let style = FlickStyleSettings.load(defaults: settingsDefaults)
+        let slots = CircularSlotSetting.load(defaults: settingsDefaults)
+        do { sumireFlickProfile = try ReferenceFlickMaps(arrangement: arrangement, mode: sumireMode, style: style.style) }
+        catch { showDataNotice("入力スタイルの定義を読み込めません: " + error.localizedDescription) }
         guard let grid = try? KeyboardGrid(layout: arrangement.layout(mode: sumireMode),
                                           horizontalGap: geometry.keySpacing,
                                           verticalGap: geometry.rowSpacing, makeKey: { [weak self] definition in
@@ -967,20 +978,20 @@ final class KeyboardSurface: UIInputView {
             let appearance = keyAppearance(special: definition.action != .text && definition.action != .modifier)
             if definition.action == .text {
                 let index = definition.row * 3 + definition.column - 1
-                let outputs = self.sumireMode == .japanese ?
-                    ["a": "あいうえお", "ka": "かきくけこ", "sa": "さしすせそ",
-                     "ta": "たちつてと", "na": "なにぬねの", "ha": "はひふへほ",
-                     "ma": "まみむめも", "ya": "や(ゆ)よ", "ra": "らりるれろ",
-                     "wa": "わをんー〜", "punctuation": "、。？！…"][definition.id]!.map(String.init) :
-                    SumireInput.outputs(self.sumireMode, arrangement: arrangement, index: index)
-                let values = outputs.joined()
-                let key = FlickKey(type: .custom)
-                key.values = values
-                key.directionalValues = outputs
-                key.restingTitle = definition.label
-                key.thresholdShape = .radial
-                key.setTitle(definition.label, for: .normal)
-                key.accessibilityLabel = String(values.prefix(1))
+                let key = MultiStageFlickKey(type: .custom)
+                key.styleSettings = style
+                let reference = sumireFlickProfile?.key(row: definition.row, column: definition.column)
+                do {
+                    if let reference { key.definition = try sumireFlickProfile?.definition(for: reference, settings: style, slotSettings: slots) }
+                    if key.definition == nil { throw PersonalDataError("キーの入力定義がありません") }
+                } catch {
+                    key.isEnabled = false
+                    key.accessibilityHint = error.localizedDescription
+                    showDataNotice("入力スタイルのキーを読み込めません: " + error.localizedDescription)
+                }
+                let title = reference?.label ?? definition.label
+                key.setTitle(title, for: .normal)
+                key.accessibilityLabel = String(title.prefix(1))
                 key.accessibilityIdentifier = "sumire-" + definition.id
                 key.titleLabel?.font = .systemFont(ofSize: appearance.keyFontSize)
                 key.titleLabel?.numberOfLines = 2
@@ -990,22 +1001,27 @@ final class KeyboardSurface: UIInputView {
                 key.setTitleColor(palette.foreground, for: .normal)
                 key.backgroundColor = palette.key
                 key.layer.cornerRadius = geometry.keyCornerRadius
-                key.onFlick = { [weak self] direction in
-                    self?.sumireFlick(index: index, outputs: outputs, direction: direction)
+                // The reference STANDARD/HIERARCHICAL listeners always dispatch
+                // as flick input, including a center release (FlickKeyboardView).
+                // Other built-in controllers classify their final direction;
+                // a hold or an earlier excursion does not itself force flick input.
+                let supportsTapCycle = reference?.keyType != "STANDARD_FLICK" && reference?.keyType != "HIERARCHICAL_FLICK"
+                key.onCommit = { [weak self] event in
+                    self?.sumireStyleOutput(event.output, index: index, tapInput: event.isTap && supportsTapCycle)
                 }
-                if !appearance.guidesVisible, definition.label.contains("\n") {
-                    let label = definition.label as NSString
+                if !appearance.guidesVisible, title.contains("\n") {
+                    let label = title as NSString
                     let newline = label.range(of: "\n").location
-                    let secondarySize = self.settingsDefaults.object(forKey: "appearance.sumire.guideFontSize") == nil
+                    let secondarySize = settingsDefaults.object(forKey: "appearance.sumire.guideFontSize") == nil
                         ? max(8, appearance.keyFontSize * 0.625) : appearance.guideFontSize
-                    let text = NSMutableAttributedString(string: definition.label, attributes: [
+                    let text = NSMutableAttributedString(string: title, attributes: [
                         .font: UIFont.systemFont(ofSize: appearance.keyFontSize), .foregroundColor: palette.foreground])
                     text.addAttribute(.font, value: UIFont.systemFont(ofSize: secondarySize),
                         range: NSRange(location: newline + 1, length: label.length - newline - 1))
-                    key.restingAttributedTitle = text; key.setAttributedTitle(text, for: .normal)
+                    key.setAttributedTitle(text, for: .normal)
                 }
                 key.configureGuides(visible: appearance.guidesVisible, fontSize: appearance.guideFontSize, color: palette.foreground)
-                if appearance.guidesVisible { key.restingTitle = String(values.prefix(1)); key.setTitle(key.restingTitle, for: .normal) }
+                if appearance.guidesVisible { key.setTitle(String(title.prefix(1)), for: .normal) }
                 return SizedKey(key, scale: appearance.keyScale)
             }
             let configuredKey = SumireSpecialKeyID.resolve(definition.id, arrangement: arrangement, mode: self.sumireMode)
@@ -1084,25 +1100,51 @@ final class KeyboardSurface: UIInputView {
         minimum.isActive = true
         updateSumireKeys()
     }
-    private func sumireFlick(index: Int, outputs: [String], direction: FlickDirection) {
-        beforeInput?()
-        katakanaCycle.reset()
-        guard outputs.indices.contains(direction.rawValue), !outputs[direction.rawValue].isEmpty else {
-            tapCycle.reset(); return
+    private func sumireStyleOutput(_ output: CircularFlickOutput, index: Int, tapInput: Bool) {
+        switch output {
+        case .text(let text, _):
+            guard !text.isEmpty else { tapCycle.reset(); return }
+            beforeInput?(); katakanaCycle.reset()
+            if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
+            containsRomaji = false
+            let cycle = sumireMode.tapCycle(at: index)
+            if tapInput && sumireMode != .number && text == String(cycle.prefix(1)) {
+                let choice = tapCycle.choose(cycle, direction: .tap,
+                    generation: composition.generation, time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
+                if choice.replacing { _ = composition.replaceLast(choice.text) }
+                else { composition.append(choice.text) }
+            } else { tapCycle.reset(); composition.append(text) }
+            refreshConversion()
+        case .referenceAction(let action, _): dispatchFlickReferenceAction(action)
+        case .action(let action, let value, _):
+            var reference: [String: LayoutJSON] = ["type": .string(action)]
+            if let value { reference["text"] = .string(value) }
+            dispatchFlickReferenceAction(.object(reference))
+        case .mapSwitch: break // The circular evaluator owns its in-gesture map transition.
         }
-        if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
-        containsRomaji = false
-        // The reference routes Sumire taps through sendCharTap/getNextInputChar,
-        // while flicks append their mapped output. Layout arrangement does not
-        // select tap-vs-flick behavior; these are independent settings.
-        if direction == .tap && sumireMode != .number {
-            let choice = tapCycle.choose(sumireMode.tapCycle(at: index), direction: .tap,
-                generation: composition.generation, time: ProcessInfo.processInfo.systemUptime,
-                enabled: tenKeyToggle)
-            if choice.replacing { _ = composition.replaceLast(choice.text) }
-            else { composition.append(choice.text) }
-        } else { tapCycle.reset(); composition.append(outputs[direction.rawValue]) }
-        refreshConversion()
+    }
+    private func dispatchFlickReferenceAction(_ action: LayoutJSON) {
+        let type = action["type"]?.string ?? "不明な操作"
+        if type == "InputText", let text = action["text"]?.string {
+            beforeInput?(); tapCycle.reset(); katakanaCycle.reset()
+            if let marker = SumireFlickMarker(rawValue: text) {
+                if let previous = composition.characterBeforeCursor, let changed = marker.applying(to: previous) {
+                    _ = composition.replaceLast(String(changed)); refreshConversion()
+                }
+            } else if !text.isEmpty { sumireStyleOutput(.text(text), index: 0, tapInput: false) }
+            return
+        }
+        let actions: [String: SumireSpecialKeyAction] = [
+            "MoveCursorLeft": .cursorLeft, "MoveCursorRight": .cursorRight,
+            "MoveCursorUp": .cursorUp, "MoveCursorDown": .cursorDown,
+            "Delete": .deleteBackward, "DeleteUntilSymbol": .deleteUntilBoundary,
+            "Space": .space, "Paste": .paste, "SelectAll": .selectAll, "Copy": .copy,
+            "ToggleDakuten": .toggleDakuten, "Convert": .convert,
+            "SwitchToKanaLayout": .switchKana, "SwitchToEnglishLayout": .switchEnglish,
+            "SwitchToNumberLayout": .switchNumber, "ShowEmojiKeyboard": .openSymbols,
+            "NewLine": .enter, "SwitchToNextIme": .nextKeyboard]
+        if let mapped = actions[type] { executeSpecialAction(mapped) }
+        else { showDataNotice("この入力操作は未対応です: " + type) }
     }
     private func updateSumireKeys() {
         candidateBar.showsShortcuts = !hasComposition
@@ -1163,6 +1205,11 @@ final class KeyboardSurface: UIInputView {
         beforeInput?()
         let action = specialKeySettings.action(for: key, gesture: gesture,
             arrangement: arrangement, mode: sumireMode, hasComposition: hasComposition)
+        executeSpecialAction(action, key: key, gesture: gesture, prepareInput: false)
+    }
+    private func executeSpecialAction(_ action: SumireSpecialKeyAction, key: SumireSpecialKeyID = .paste,
+                                      gesture: SumireSpecialKeyGesture = .tap, prepareInput: Bool = true) {
+        if prepareInput { beforeInput?() }
         if let reason = action.unavailabilityReason(for: key, gesture: gesture) {
             showDataNotice(reason); return
         }
