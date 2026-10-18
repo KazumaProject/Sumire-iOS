@@ -3,7 +3,14 @@ import SumireCore
 
 /// Function-key gestures retain their direction while held outside the key.
 /// A repeated gesture emits no additional action on release.
-final class DirectionalActionKey: UIButton {
+final class DirectionalActionKey: UIButton, KeyTouchParticipant {
+    weak var touchRouter: KeyTouchRouter?
+    var touchPolicy: (() -> (exclusive: Bool, blocksFollowing: Bool))?
+    var exclusiveTouchAction = false
+    /// The reference bypasses subsequent fingers on IME-switch / emoji keys
+    /// even when independent multi-touch is disabled.
+    var blocksSequentialTouches = false
+    var longPressMilliseconds = 300
     var action: ((SumireSpecialKeyGesture) -> Void)?
     var repeats: ((SumireSpecialKeyGesture) -> Bool)?
     var longPressEnabled: (() -> Bool)?
@@ -14,6 +21,8 @@ final class DirectionalActionKey: UIButton {
     private var timer: Timer?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isEnabled, touch == nil, let first = touches.first else { return }
+        let policy = touchPolicy?() ?? (exclusiveTouchAction, blocksSequentialTouches)
+        guard touchRouter?.begin(self, exclusive: policy.0, blocksSequentialTouches: policy.1) != false else { return }
         touch = first; origin = first.location(in: window)
         direction = .tap; emitted = false; isHighlighted = true
         scheduleInitialHold()
@@ -39,9 +48,9 @@ final class DirectionalActionKey: UIButton {
         timer?.invalidate(); timer = nil
         if direction == .tap {
             guard longPressEnabled?() == true else { return }
-            schedule(.longPress, after: 0.4)
+            schedule(.longPress, after: Double(min(2000, max(100, longPressMilliseconds))) / 1000)
         } else if repeats?(gesture) == true {
-            schedule(gesture, after: 0.4)
+            schedule(gesture, after: Double(min(2000, max(100, longPressMilliseconds))) / 1000)
         }
     }
     private func schedule(_ selected: SumireSpecialKeyGesture, after delay: TimeInterval) {
@@ -59,12 +68,18 @@ final class DirectionalActionKey: UIButton {
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch, touches.contains(touch) else { return }
+        finishActiveInput()
+    }
+    func finishActiveInput() {
+        guard touch != nil else { return }
         let selected = gesture, shouldEmit = !emitted
         cancel()
         if shouldEmit { action?(selected) }
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { cancel() }
+    func cancelActiveInput() { cancel() }
     private func cancel() {
+        touchRouter?.end(self)
         timer?.invalidate(); timer = nil; touch = nil; isHighlighted = false
     }
     override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { cancel() } }

@@ -318,6 +318,8 @@ final class KeyboardSurface: UIInputView {
     var tenKeyToggle = true
     private let geometry = KeyboardGeometry()
     private var keyRows: [UIStackView] = []
+    private let touchRouter = KeyTouchRouter()
+    private var touchFeedback = TouchFeedbackSettings()
     private let stack = UIStackView()
     private let status = UILabel()
     private var expandedCandidates: UIView?
@@ -373,7 +375,62 @@ final class KeyboardSurface: UIInputView {
     override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
         CGSize(width: targetSize.width, height: preferredHeight.constant)
     }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { touchRouter.cancelAll() }
+    }
+    private func touchPolicy(for key: UIButton) -> (exclusive: Bool, blocksFollowing: Bool) {
+        let id = key.accessibilityIdentifier ?? ""
+        if id == "keyboard-switch" || ["tenkey-symbols", "gojuon-symbols"].contains(id) {
+            return (true, true)
+        }
+        if inputMode == .sumire, id.hasPrefix("sumire-") {
+            let arrangement = SumireKeyArrangement(rawValue: settingsDefaults.string(forKey: "sumire.keyArrangement") ?? "") ?? .toggle
+            if let special = SumireSpecialKeyID.resolve(String(id.dropFirst(7)), arrangement: arrangement, mode: sumireMode) {
+                switch specialKeySettings.action(for: special, gesture: .tap, arrangement: arrangement,
+                                                  mode: sumireMode, hasComposition: hasComposition) {
+                case .nextKeyboard, .openSymbols: return (true, true)
+                case .changeInputMode, .switchKana, .switchEnglish, .switchNumber: return (true, false)
+                default: break
+                }
+            }
+        }
+        if let key = key as? FlickKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        if let key = key as? RepeatingKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        if let key = key as? DirectionalActionKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        return (false, false)
+    }
+    private func configureTouchInput(in view: UIView) {
+        if let key = view as? UIButton {
+            // Resolve dynamic modifier/symbol actions at DOWN, not at layout time.
+            let policy = { [weak self, weak key] in
+                guard let self, let key else { return (exclusive: false, blocksFollowing: false) }
+                return self.touchPolicy(for: key)
+            }
+            if let flick = key as? FlickKey {
+                flick.touchRouter = touchRouter
+                flick.feedbackSettings = touchFeedback
+                flick.popupPalette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
+                flick.popupHost = self
+                flick.touchPolicy = policy
+            } else if let repeating = key as? RepeatingKey {
+                repeating.touchRouter = touchRouter
+                repeating.longPressMilliseconds = touchFeedback.longPressMilliseconds
+                repeating.touchPolicy = policy
+            } else if let directional = key as? DirectionalActionKey {
+                directional.touchRouter = touchRouter
+                directional.longPressMilliseconds = touchFeedback.longPressMilliseconds
+                directional.touchPolicy = policy
+            }
+        }
+        view.subviews.forEach { configureTouchInput(in: $0) }
+    }
     private func rebuild() {
+        touchRouter.cancelAll()
+        touchFeedback = TouchFeedbackSettings.load(defaults: settingsDefaults)
+        touchRouter.independentMultiTouch = touchFeedback.independentMultiTouch
+        // All arrangements, including early-return grids, share the same router.
+        defer { configureTouchInput(in: stack) }
         var specialKeyNotice: String?
         do { specialKeySettings = try SumireSpecialKeySettings.load(defaults: settingsDefaults) }
         catch { specialKeySettings = SumireSpecialKeySettings(); specialKeyNotice = error.localizedDescription }
@@ -822,6 +879,13 @@ final class KeyboardSurface: UIInputView {
             let hasExtra = ["circularFlicks", "twoStepFlicks", "longPressFlicks", "twoStepLongPressFlicks"].contains { !(placement.source[$0]?.array ?? []).isEmpty }
             if hasExtra { action = .unsupported(raw: placement.id, reason: "追加ジェスチャーは移植中です") }
             (key as? RepeatingKey)?.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(action)
+            if let repeating = key as? RepeatingKey {
+                switch action {
+                case .switchLayout, .command(.changeMode): repeating.exclusiveTouchAction = true
+                case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
+                default: break
+                }
+            }
             if let key = key as? FlickKey, !hasExtra, !(special && definition?["doubleTapAction"]?.string != nil && definition?["doubleTapEnabled"] != .bool(false)) {
                 do {
                     let mapping = try CustomStandardFlick(placement: placement)
