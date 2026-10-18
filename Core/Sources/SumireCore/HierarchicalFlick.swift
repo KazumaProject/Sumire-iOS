@@ -17,6 +17,7 @@ public indirect enum HierarchicalFlickNode: Equatable {
 /// while the diagonal guard measures displacement from each submenu entry.
 public struct HierarchicalFlickEvaluator {
     public typealias Map = [MultiFlickDirection: HierarchicalFlickNode]
+    public let directionOrders: [String: [MultiFlickDirection]]
     public let maps: [HierarchicalKeyMode: Map]
     public var modeSwitchAngleMargin = 20.0
     public private(set) var mode = HierarchicalKeyMode.normal
@@ -32,7 +33,9 @@ public struct HierarchicalFlickEvaluator {
     private var down = FlickPoint(0, 0)
     private var config = MultiFlickConfiguration()
     private var jitterGuard = false
-    public init(maps: [HierarchicalKeyMode: Map]) { self.maps = maps }
+    public init(maps: [HierarchicalKeyMode: Map], directionOrders: [String: [MultiFlickDirection]] = [:]) {
+        self.maps = maps; self.directionOrders = directionOrders
+    }
     public mutating func begin(at point: FlickPoint, configuration: MultiFlickConfiguration) {
         cancel(); config = configuration; down = point
         stages = [maps[.normal] ?? [:]]; entries = [.tap]; anchors = [point]
@@ -56,7 +59,9 @@ public struct HierarchicalFlickEvaluator {
         guard isActive, let map = stages.last else { return }
         let delta = point - down
         let enabled = Set(effectiveMap.keys)
-        let candidate = config.direction(delta: delta, enabled: enabled, position: config.guidePosition(point, down: down))
+        let path = ([mode.rawValue] + entries.dropFirst().map(\.rawValue)).joined(separator: "/")
+        let order = directionOrders[path].map { known in known + MultiFlickDirection.allCases.filter { !known.contains($0) } }
+        let candidate = config.direction(delta: delta, enabled: enabled, position: config.guidePosition(point, down: down), order: order)
         let direction = config.guarded(candidate, entry: entries.last ?? .tap,
             delta: point - (anchors.last ?? down), enabled: enabled)
         if direction == .tap {

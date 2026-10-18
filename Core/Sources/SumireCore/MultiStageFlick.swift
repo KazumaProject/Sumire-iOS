@@ -54,14 +54,15 @@ public struct MultiFlickConfiguration {
         return .init(min(1, max(0, offset.x / max(1, keyWidth) + (startsAtKeyCenter ? 0.5 : 0))),
                      min(1, max(0, offset.y / max(1, keyHeight) + (startsAtKeyCenter ? 0.5 : 0))))
     }
-    func direction(delta: FlickPoint, enabled: Set<MultiFlickDirection>, position: FlickPoint) -> MultiFlickDirection {
+    func direction(delta: FlickPoint, enabled: Set<MultiFlickDirection>, position: FlickPoint, order: [MultiFlickDirection]? = nil) -> MultiFlickDirection {
         guard crossed(delta), !enabled.isEmpty else { return .tap }
+        let priority = order ?? MultiFlickDirection.allCases
         if guideGrid {
             func cell(_ coordinate: Double) -> Int { coordinate < 1 / 3 ? 0 : (coordinate < 2 / 3 ? 1 : 2) }
             let column = cell(position.x), row = cell(position.y)
             let candidate = MultiFlickDirection.allCases.first { $0.cell == (column, row) } ?? .tap
             if candidate == .tap || enabled.contains(candidate) { return candidate }
-            return MultiFlickDirection.allCases.filter { enabled.contains($0) }.min {
+            return priority.filter { enabled.contains($0) }.min {
                 func distance(_ d: MultiFlickDirection) -> Double {
                     pow(position.x - (Double(d.cell.0) + 0.5) / 3, 2) + pow(position.y - (Double(d.cell.1) + 0.5) / 3, 2)
                 }
@@ -70,7 +71,7 @@ public struct MultiFlickConfiguration {
         }
         let angle = atan2(delta.y, delta.x) * 180 / .pi
         var best = MultiFlickDirection.tap, bestDifference = Double.infinity
-        for candidate in MultiFlickDirection.allCases where enabled.contains(candidate) {
+        for candidate in priority where enabled.contains(candidate) {
             guard let center = candidate.angle else { continue }
             let raw = abs(angle - center), difference = min(raw, 360 - raw)
             if difference < bestDifference { best = candidate; bestDifference = difference }

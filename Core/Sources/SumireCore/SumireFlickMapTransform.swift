@@ -46,6 +46,39 @@ public enum SumireFlickMapTransform {
             }
         }
     }
+    /// Rewrites both path identifiers and tie order with the same recursive
+    /// rotation as the node maps. Continuations belong to the parent stage.
+    public static func transformOrders(_ orders: [String: [MultiFlickDirection]],
+        maps: [HierarchicalKeyMode: HierarchicalFlickEvaluator.Map], label: String,
+        input: FlickStyleSettings.ThreeStepInput, rotation: FlickStyleSettings.Rotation) -> [String: [MultiFlickDirection]] {
+        guard input != .contracted, voicedLabels.contains(label), rotation != .standard else { return orders }
+        var result: [String: [MultiFlickDirection]] = [:]
+        func visit(_ map: HierarchicalFlickEvaluator.Map, oldPath: String, newPath: String,
+                   axis: MultiFlickDirection?, rotateOwn: Bool, continuation: Set<MultiFlickDirection>, rotateParent: Bool) {
+            result[newPath] = orders[oldPath]?.map { direction in
+                guard let axis else { return direction }
+                return (continuation.contains(direction) ? rotateParent : rotateOwn) ? swap(direction, axis: axis) : direction
+            }
+            for (direction, node) in map {
+                guard case .submenu(let child, _, _, let childContinuation) = node else { continue }
+                if let axis {
+                    let moved = rotateOwn ? swap(direction, axis: axis) : direction
+                    visit(child, oldPath: oldPath + "/" + direction.rawValue, newPath: newPath + "/" + moved.rawValue,
+                          axis: axis, rotateOwn: rotateOwn && moved != direction,
+                          continuation: childContinuation, rotateParent: rotateOwn)
+                } else {
+                    visit(child, oldPath: oldPath + "/" + direction.rawValue, newPath: newPath + "/" + direction.rawValue,
+                          axis: direction, rotateOwn: shouldSwap(direction, rotation),
+                          continuation: childContinuation, rotateParent: false)
+                }
+            }
+        }
+        for (mode, map) in maps {
+            visit(map, oldPath: mode.rawValue, newPath: mode.rawValue, axis: nil, rotateOwn: false,
+                  continuation: [], rotateParent: false)
+        }
+        return result
+    }
     private static func rotateStage(_ map: HierarchicalFlickEvaluator.Map, axis: MultiFlickDirection) -> HierarchicalFlickEvaluator.Map {
         Dictionary(uniqueKeysWithValues: map.map { entry in
             let direction = swap(entry.key, axis: axis)

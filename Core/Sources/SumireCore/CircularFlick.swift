@@ -26,6 +26,7 @@ public enum CircularFlickOutput: Equatable {
     /// silently substituted. mapSwitch corresponds to MoveCustomKeyboardTab/⇄.
     case action(String, value: String? = nil, label: String)
     case mapSwitch
+    case referenceAction(LayoutJSON, label: String?)
     var isEffective: Bool {
         if case .text(let text, let label) = self { return !text.isEmpty || label?.isEmpty == false }
         return true
