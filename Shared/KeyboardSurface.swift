@@ -8,6 +8,8 @@ final class KeyboardSurface: UIInputView {
     var delete: (() -> Void)?
     var deleteUntilBoundary: (() -> Void)?
     var nextKeyboard: (() -> Void)?
+    private var specialKeySettings = SumireSpecialKeySettings()
+    private var katakanaCycle = SumireKatakanaCycle()
     var moveCursorRight: (() -> Void)?
     var moveCursorLeft: (() -> Void)?
     var beforeInput: (() -> Void)?
@@ -372,6 +374,10 @@ final class KeyboardSurface: UIInputView {
         CGSize(width: targetSize.width, height: preferredHeight.constant)
     }
     private func rebuild() {
+        var specialKeyNotice: String?
+        do { specialKeySettings = try SumireSpecialKeySettings.load(defaults: settingsDefaults) }
+        catch { specialKeySettings = SumireSpecialKeySettings(); specialKeyNotice = error.localizedDescription }
+        defer { if let specialKeyNotice { showDataNotice(specialKeyNotice) } }
         closeExpandedCandidates()
         symbolPanel?.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness))
         appearance = .load(keyboardKind, defaults: settingsDefaults)
@@ -938,7 +944,8 @@ final class KeyboardSurface: UIInputView {
                 if appearance.guidesVisible { key.restingTitle = String(values.prefix(1)); key.setTitle(key.restingTitle, for: .normal) }
                 return SizedKey(key, scale: appearance.keyScale)
             }
-            let directional = definition.action == .cursorLeft || definition.action == .delete || definition.id == "cursor_right_key"
+            let configuredKey = SumireSpecialKeyID.resolve(definition.id, arrangement: arrangement, mode: self.sumireMode)
+            let directional = configuredKey != nil && definition.action != .nextKeyboard
             let key: UIButton = directional ? DirectionalActionKey(type: .system) : RepeatingKey(type: .system)
             key.setTitle(definition.label, for: .normal)
             key.accessibilityLabel = definition.label
@@ -956,30 +963,43 @@ final class KeyboardSurface: UIInputView {
                 key.setImage(icon.image, for: .normal)
                 key.tintColor = palette.foreground
             }
+            if definition.id == "cursor_right_key" {
+                key.setTitle(nil, for: .normal); key.setImage(KeyboardIcon.right.image, for: .normal)
+            }
             if definition.action == .nextKeyboard {
-                self.configureKeyboardSwitch(key)
-            } else if definition.action == .changeMode {
-                if definition.id == "cursor_right_key" {
-                    key.setTitle(nil, for: .normal); key.setImage(KeyboardIcon.right.image, for: .normal)
+                // Retain UIKit's public long-press UIMenu on the globe key.
+                self.configureKeyboardSwitch(key, cycleOnTap: false)
+                let hold = self.specialKeySettings.action(for: .keyboardSwitch, gesture: .longPress,
+                    arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition)
+                if let reason = hold.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress) {
+                    let unavailable = UIAction(title: "この長押し操作は iOS で未対応", attributes: .disabled) { _ in }
+                    unavailable.subtitle = reason
+                    key.menu = UIMenu(children: [unavailable])
+                    key.accessibilityHint = reason
                 }
                 key.addAction(UIAction { [weak self] _ in
-                    guard let self else { return }
-                    if definition.id == "cursor_right_key" {
-                        self.beforeInput?(); self.moveCompositionCursor(by: 1)
-                    } else if definition.id == "colon_key" || definition.id == "hyphen_key" {
-                        self.pressed(definition.label)
-                    } else {
-                        self.beforeInput?(); self.tapCycle.reset()
-                        switch definition.id {
-                        case "english_mode": self.sumireMode = .english
-                        case "number_mode": self.sumireMode = .number
-                        case "kana_mode": self.sumireMode = .japanese
-                        default: self.sumireMode = self.sumireMode.next
-                        }
-                        self.rebuild()
-                    }
+                    self?.executeSpecialKey(.keyboardSwitch, gesture: .tap, arrangement: arrangement)
                 }, for: .touchUpInside)
+            } else if let configuredKey, let gestureKey = key as? DirectionalActionKey {
+                gestureKey.action = { [weak self] gesture in
+                    self?.executeSpecialKey(configuredKey, gesture: gesture, arrangement: arrangement)
+                }
+                gestureKey.repeats = { [weak self] gesture in
+                    guard let self else { return false }
+                    let action = self.specialKeySettings.action(for: configuredKey, gesture: gesture,
+                        arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition)
+                    return action.isRepeatable && action.unavailabilityReason(for: configuredKey, gesture: gesture) == nil
+                }
+                gestureKey.longPressEnabled = { [weak self] in
+                    guard let self else { return false }
+                    let assigned = self.specialKeySettings.assignedAction(for: configuredKey, gesture: .longPress,
+                        arrangement: arrangement, mode: self.sumireMode)
+                    return assigned != nil || self.specialKeySettings.action(for: configuredKey, gesture: .longPress,
+                        arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition) != .doNothing
+                }
             } else {
+                // The dakuten/case key is a normal key in the reference and
+                // retains its existing dynamic modifier behavior.
                 key.addAction(UIAction { [weak self] _ in
                     guard let self else { return }
                     if definition.action == .modifier && self.sumireMode == .english {
@@ -992,23 +1012,6 @@ final class KeyboardSurface: UIInputView {
                     } else { self.sumireAction(definition.action) }
                 }, for: .touchUpInside)
             }
-            if let gestureKey = key as? DirectionalActionKey {
-                let cursor = definition.action == .cursorLeft || definition.id == "cursor_right_key"
-                gestureKey.repeats = { direction in cursor ? [.tap, .left, .right].contains(direction) : direction == .tap }
-                gestureKey.action = { [weak self, weak key] direction in
-                    guard let self else { return }
-                    self.beforeInput?()
-                    if direction == .tap { key?.sendActions(for: .touchUpInside) }
-                    else if cursor && direction == .right { self.moveCompositionCursor(by: 1) }
-                    else if cursor && direction == .left { self.moveCompositionCursor(by: -1) }
-                    else if definition.action == .delete && direction == .left {
-                        if self.hasComposition {
-                            self.composition.invalidate(); self.containsRomaji = false; self.tapCycle.reset()
-                            self.refreshConversion()
-                        } else { self.deleteUntilBoundary?() }
-                    }
-                }
-            }
             return SizedKey(key, scale: appearance.keyScale)
         }) else { return }
         stack.addArrangedSubview(grid)
@@ -1019,6 +1022,7 @@ final class KeyboardSurface: UIInputView {
     }
     private func sumireFlick(index: Int, outputs: [String], direction: FlickDirection) {
         beforeInput?()
+        katakanaCycle.reset()
         guard outputs.indices.contains(direction.rawValue), !outputs[direction.rawValue].isEmpty else {
             tapCycle.reset(); return
         }
@@ -1047,6 +1051,7 @@ final class KeyboardSurface: UIInputView {
             }
         }
         guard inputMode == .sumire, let grid = stack.arrangedSubviews.last as? KeyboardGrid else { return }
+        let arrangement = SumireKeyArrangement(rawValue: settingsDefaults.string(forKey: "sumire.keyArrangement") ?? "") ?? .toggle
         for case let wrapper as SizedKey in grid.subviews {
             let key = wrapper.key
             switch key.accessibilityIdentifier {
@@ -1065,7 +1070,100 @@ final class KeyboardSurface: UIInputView {
                 key.accessibilityLabel = label
             default: break
             }
+            let rawID = key.accessibilityIdentifier == "keyboard-switch" ? "switch_next_ime" :
+                String((key.accessibilityIdentifier ?? "").dropFirst("sumire-".count))
+            if let specialID = SumireSpecialKeyID.resolve(rawID, arrangement: arrangement, mode: sumireMode) {
+                if specialID == .katakanaToggle {
+                    key.setTitle(hasComposition ? "カナ" : "123", for: .normal)
+                    key.accessibilityLabel = hasComposition ? "カタカナ切り替え" : "数字モード"
+                }
+                if let assigned = specialKeySettings.assignedAction(for: specialID, gesture: .tap, arrangement: arrangement, mode: sumireMode) {
+                    let icon: KeyboardIcon? = [.deleteBackward: .delete, .cursorLeft: .left, .cursorRight: .right,
+                        .paste: .paste, .space: .space, .enter: .enter, .confirm: .done, .nextKeyboard: .globe][assigned]
+                    let shortTitle: [SumireSpecialKeyAction: String] = [.doNothing: "—", .deleteUntilBoundary: "区切削除",
+                        .changeInputMode: "モード", .switchKana: "あいう", .switchEnglish: "ABC", .switchNumber: "123",
+                        .toggleKatakana: "カナ", .toggleDakuten: "小゛゜", .convert: "変換", .insertColon: ":", .insertHyphen: "-"]
+                    key.setImage(icon?.image, for: .normal)
+                    key.setTitle(icon == nil ? (shortTitle[assigned] ?? assigned.title) : nil, for: .normal)
+                    key.titleLabel?.numberOfLines = 2
+                    key.titleLabel?.adjustsFontSizeToFitWidth = true
+                    key.titleLabel?.minimumScaleFactor = 0.5
+                    key.accessibilityLabel = assigned.title
+                    key.accessibilityHint = assigned.unavailabilityReason(for: specialID, gesture: .tap)
+                }
+            }
         }
+    }
+    private func executeSpecialKey(_ key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture,
+                                   arrangement: SumireKeyArrangement) {
+        beforeInput?()
+        let action = specialKeySettings.action(for: key, gesture: gesture,
+            arrangement: arrangement, mode: sumireMode, hasComposition: hasComposition)
+        if let reason = action.unavailabilityReason(for: key, gesture: gesture) {
+            showDataNotice(reason); return
+        }
+        if action != .toggleKatakana { katakanaCycle.reset() }
+        tapCycle.reset()
+        switch action {
+        case .doNothing: break
+        case .deleteBackward: pressed("⌫")
+        case .deleteUntilBoundary:
+            if hasComposition {
+                composition.invalidate(); containsRomaji = false
+                refreshConversion()
+            } else if let deleteUntilBoundary { deleteUntilBoundary() }
+            else { showDataNotice("この入力先では区切りまでの削除を実行できません") }
+        case .cursorLeft: moveCompositionCursor(by: -1)
+        case .cursorRight: moveCompositionCursor(by: 1)
+        case .paste:
+            guard candidateBar.clipboardAccessAllowed else {
+                showDataNotice("クリップボードを利用するにはキーボードのフルアクセスが必要です"); return
+            }
+            if let text = UIPasteboard.general.string, !text.isEmpty {
+                composition.append(text); refreshConversion()
+            } else { showDataNotice("貼り付けできる文字がありません") }
+        case .space:
+            commitComposition(); insert?(" ")
+        case .convert:
+            guard hasComposition else { return }
+            composition.select()
+            if !converted.isEmpty {
+                selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
+                updateMarkedText?(previewText(converted[selectedCandidate!]))
+            }
+        case .enter: pressed("改行")
+        case .confirm: commitComposition()
+        case .nextKeyboard: cycleKeyboard()
+        case .changeInputMode: setSumireMode(sumireMode.next)
+        case .switchKana: setSumireMode(.japanese)
+        case .switchEnglish: setSumireMode(.english)
+        case .switchNumber: setSumireMode(.number)
+        case .toggleDakuten: pressed("゛")
+        case .toggleKatakana:
+            guard hasComposition else { return }
+            let oldCursor = composition.cursor
+            let text = katakanaCycle.next(composition.reading)
+            composition.invalidate(); composition.append(text)
+            _ = composition.moveCursor(by: min(oldCursor, text.count) - text.count)
+            containsRomaji = false; refreshConversion()
+        case .openSymbols: showSymbolKeyboard()
+        case .insertColon: pressed(":")
+        case .insertHyphen: pressed("-")
+        case .keyboardMenu:
+            // The globe's UIKit menu handles this gesture without invoking a
+            // second action or synthesizing private context-menu events.
+            break
+        case .deleteAfterCursorUntilBoundary, .undoDelete, .cursorUp, .cursorDown, .copy, .cut, .selectAll:
+            // The shared availability table rejects these before any edit.
+            break
+        }
+        updateSumireKeys()
+    }
+    private func setSumireMode(_ mode: TenKeyMode) {
+        guard mode != sumireMode else { return }
+        sumireMode = mode
+        if hasComposition { composition.optionsChanged(); refreshConversion() }
+        rebuild()
     }
     private func sumireAction(_ action: KeyboardLayout.Action) {
         beforeInput?()
@@ -1160,6 +1258,7 @@ final class KeyboardSurface: UIInputView {
     }
     func invalidateComposition() {
         closeSymbolKeyboard()
+        katakanaCycle.reset()
         closeExpandedCandidates()
         composition.invalidate()
         containsRomaji = false
@@ -1222,6 +1321,15 @@ final class KeyboardSurface: UIInputView {
         if let updateMarkedSelection {
             updateMarkedSelection(composition.reading, NSRange(location: composition.cursorUTF16, length: 0))
         } else { updateMarkedText?(composition.reading) }
+    }
+    /// Adopt a host caret in the unchanged reading, never in a converted
+    /// preview surface or an externally modified marked range.
+    func synchronizeCompositionSelection(markedText: String, selection: NSRange) -> Bool {
+        let generation = composition.generation
+        guard composition.synchronizeCursor(markedText: markedText, selection: selection) else { return false }
+        tapCycle.reset()
+        if composition.generation != generation { refreshConversion() }
+        return true
     }
     private func refreshConversion() {
         closeExpandedCandidates()
@@ -1353,16 +1461,20 @@ final class KeyboardSurface: UIInputView {
         key.showsMenuAsPrimaryAction = false
         guard cycleOnTap else { return }
         key.addAction(UIAction { [weak self] _ in
-            guard let self else { return }
-            let choices = self.keyboardChoices
-            let current = choices.firstIndex { $0.mode == self.inputMode &&
-                ($0.mode != .custom || $0.customID == self.activeCustomID) } ?? -1
-            let next = choices[(current + 1) % choices.count]
-            self.selectKeyboard(next.mode, customID: next.customID)
+            self?.cycleKeyboard()
         }, for: .touchUpInside)
+    }
+    private func cycleKeyboard() {
+        let choices = keyboardChoices
+        guard !choices.isEmpty else { return }
+        let current = choices.firstIndex { $0.mode == inputMode &&
+            ($0.mode != .custom || $0.customID == activeCustomID) } ?? -1
+        let next = choices[(current + 1) % choices.count]
+        selectKeyboard(next.mode, customID: next.customID)
     }
     private func pressed(_ value: String) {
         beforeInput?()
+        katakanaCycle.reset()
         tapCycle.reset()
         switch value {
         case "🌐":

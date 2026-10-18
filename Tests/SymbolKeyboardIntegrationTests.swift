@@ -124,4 +124,26 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         waitForExpectations(timeout: 5)
     }
 
+
+    func testConfiguredSpecialKeyOpensSymbolsWithoutLosingReading() throws {
+        let app = XCUIApplication()
+        let payload: [String: Any] = ["version": 1, "overrides": [
+            ["arrangement": "toggle", "inputMode": 0, "key": "paste_key", "gesture": "up", "action": "openSymbols"]
+        ]]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        let argument = "<" + data.map { String(format: "%02x", $0) }.joined() + ">"
+        app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "-sumire.specialKeyActions", argument]
+        app.launch()
+        let editor = app.textViews["入力テスト"]; editor.tap(); chooseGojuon(app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap()
+        app.buttons["keyboard-switch"].press(forDuration: 0.8); app.buttons["Sumire"].tap()
+        let paste = app.buttons["sumire-paste_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        paste.press(forDuration: 0.05, thenDragTo: paste.withOffset(CGVector(dx: 0, dy: -45)))
+        XCTAssertTrue(app.collectionViews["symbol-items"].waitForExistence(timeout: 5))
+        XCTAssertEqual(editor.value as? String, "あい")
+        app.buttons["symbol-close"].tap()
+        XCTAssertTrue(app.buttons["sumire-paste_key"].exists)
+        XCTAssertEqual(editor.value as? String, "あい")
+    }
+
 }

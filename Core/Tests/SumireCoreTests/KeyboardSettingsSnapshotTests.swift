@@ -35,6 +35,9 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         romaji.activeID = romaji.profiles[0].id
         try romaji.save(defaults: defaults)
         try CustomKeyboardLibrary().save(defaults: defaults)
+        var specialKeys = SumireSpecialKeySettings()
+        try specialKeys.set(.doNothing, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
+        try specialKeys.save(defaults: defaults)
         defaults.set("must not export", forKey: "unrelated.account")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         XCTAssertNil(original.values["unrelated.account"])
@@ -53,6 +56,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: "qwerty.english.flickDown"))
         XCTAssertEqual(defaults.string(forKey: "unrelated.account"), "keep")
         XCTAssertEqual(try RomajiLibrary.load(defaults: defaults), romaji)
+        XCTAssertEqual(try SumireSpecialKeySettings.load(defaults: defaults), specialKeys)
         XCTAssertEqual(KeyboardSizingStore(defaults: defaults).load(.portrait).height, 350)
         XCTAssertEqual(KeyboardSizingStore(defaults: defaults).load(.landscape).height, 180)
     }
@@ -72,6 +76,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
             ("appearance.english.keyScale", .number(0.1)),
             ("customRomaji.library", .data(Data("{}".utf8))),
             ("customKeyboard.library", .data(Data("{}".utf8))),
+            (SumireSpecialKeySettings.storageKey, .data(Data("{}".utf8))),
             ("keyboardSize.portrait", .data(try JSONEncoder().encode(KeyboardSize(height: 100))))
         ]
         for (key, value) in invalid {
