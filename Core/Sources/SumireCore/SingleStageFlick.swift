@@ -76,9 +76,12 @@ public struct SingleStageFlickEvaluator {
         return text?.isEmpty == false ? text : nil
     }
     public mutating func end(at point: FlickPoint) -> String? {
+        endSelection(at: point)?.text
+    }
+    public mutating func endSelection(at point: FlickPoint) -> Selection? {
         guard isActive else { return nil }
         if style == .standard { selected = resolve(point - down) }
-        return finishSelection()?.text
+        return finishSelection()
     }
     /// CROSS_FLICK action adapters use the held flag to call upAfterLongPress
     /// rather than invoking the ordinary command again on release.

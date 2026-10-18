@@ -99,6 +99,11 @@ public struct MultiFlickConfiguration {
 /// It returns selections, never emits text on DOWN/MOVE/hold. UP consumes once.
 public struct TwoStepFlickEvaluator {
     public typealias Map = [MultiFlickDirection: [MultiFlickDirection: String]]
+    public struct Selection {
+        public let text: String?
+        public let first: MultiFlickDirection, second: MultiFlickDirection
+        public let longPress: Bool
+    }
     public let map: Map
     public let longPressMap: Map
     public let sticky: Bool
@@ -169,7 +174,8 @@ public struct TwoStepFlickEvaluator {
             second = candidate == .tap ? (sticky ? second : first) : candidate
         }
     }
-    public mutating func end(at point: FlickPoint) -> String? {
+    public mutating func end(at point: FlickPoint) -> String? { endSelection(at: point)?.text }
+    public mutating func endSelection(at point: FlickPoint) -> Selection? {
         guard isActive else { return nil }
         if secondStage {
             let candidate = secondDirection(at: point)
@@ -178,7 +184,7 @@ public struct TwoStepFlickEvaluator {
             first = config.direction(delta: point - down, enabled: enabledFirst, position: config.guidePosition(point, down: down))
             second = sticky || first == .tap ? .tap : first
         }
-        let output = selectedText
+        let output = Selection(text: selectedText, first: first, second: second, longPress: longPress || expandedGuide)
         cancel()
         return output
     }
