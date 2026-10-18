@@ -82,7 +82,8 @@ int sumire_session_set_personal(sumire_session *session,
                        uint16_t(e.context_id), e.score, e.kind == 1});
     }
     auto replacement = session->engine->personal_dictionary(std::move(words));
-    session->personal = std::move(replacement);
+    if (!session->personal || !session->personal->equivalent(*replacement))
+      session->personal = std::move(replacement);
     session->latest.reset();
   });
 }
@@ -109,7 +110,8 @@ int sumire_session_set_learning(sumire_session *session,
                        uint16_t(e.context_id), e.score, true, true});
     }
     auto replacement = session->engine->personal_dictionary(std::move(words));
-    session->learned = std::move(replacement);
+    if (!session->learned || !session->learned->equivalent(*replacement))
+      session->learned = std::move(replacement);
     session->latest.reset();
   });
 }
@@ -181,6 +183,7 @@ int sumire_session_update(sumire_session *session,
       check(units[request->edit_start_utf16] < 0xdc00 ||
                 units[request->edit_start_utf16] > 0xdfff,
             "edit start splits surrogate pair");
+    if ((request->flags & 2) != 0) session->workspace.purge();
     auto snapshot = std::make_shared<Snapshot>();
     snapshot->value = (request->flags & 2) != 0
         ? session->engine->predict_english(reading, request->candidate_count, true, session->personal.get(), session->learned.get())
@@ -232,6 +235,12 @@ int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidat
                                    size_t index, uint32_t *out_utf16) {
   if (!out_utf16 || index >= sumire_result_bunsetsu_count(result, candidate)) return -1;
   *out_utf16 = result->snapshot->value.candidates[candidate].bunsetsu_boundaries[index];
+  return 0;
+}
+int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched) {
+  if (!result || !reused || !searched) return -1;
+  *reused = result->snapshot->value.reused_search_rows;
+  *searched = result->snapshot->value.searched_rows;
   return 0;
 }
 int sumire_result_metrics(const sumire_result *result, sumire_metrics *out) {

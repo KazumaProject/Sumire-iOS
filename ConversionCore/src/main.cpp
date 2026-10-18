@@ -178,6 +178,8 @@ int main(int argc, char **argv) {
                   << ",\"conversion_ms\":" << r.elapsed_ms
                   << ",\"mapped_bytes\":" << engine.mapped_bytes()
                   << ",\"workspace_cache_bytes\":" << workspace.retained_bytes()
+                  << ",\"reused_search_rows\":" << r.reused_search_rows
+                  << ",\"searched_rows\":" << r.searched_rows
                   << ",\"lattice_nodes\":" << r.lattice_nodes
                   << ",\"expanded_states\":" << r.expanded_states
                   << ",\"candidates\":[";
