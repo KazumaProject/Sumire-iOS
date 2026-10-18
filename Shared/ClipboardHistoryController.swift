@@ -157,7 +157,7 @@ final class ClipboardHistoryController {
         }
     }
     private func loadThumbnail(id: String) {
-        if id == "current" { return }
+        guard id != "current", panel?.isClipboardItemVisible(id: id) == true else { return }
         if let image = thumbnails.object(forKey: id as NSString) { panel?.setClipboardThumbnail(id: id, image: image); return }
         guard let row = Int64(id), !pendingThumbnails.contains(id), let url else { return }
         pendingThumbnails.insert(id)

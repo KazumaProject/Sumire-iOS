@@ -147,6 +147,13 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         onClipboardProviders?(itemProviders)
     }
     /// Thumbnails live in the host's bounded cache or visible cells, not in every metadata row.
+    func isClipboardItemVisible(id: String) -> Bool {
+        guard mode == .clipboard else { return false }
+        return collection.indexPathsForVisibleItems.contains { path in
+            let entries = clipboardSection(path.section)
+            return entries.indices.contains(path.item) && entries[path.item].id == id
+        }
+    }
     func setClipboardThumbnail(id: String, image: UIImage) {
         guard mode == .clipboard else { return }
         for path in collection.indexPathsForVisibleItems {
@@ -254,7 +261,10 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         guard mode == .clipboard else { return }
         let item = clipboardSection(indexPath.section)[indexPath.item]
         if item.isImage && item.image == nil {
-            DispatchQueue.main.async { [weak self] in self?.onClipboardThumbnailRequested?(item.id) }
+            DispatchQueue.main.async { [weak self] in
+                guard let self, self.isClipboardItemVisible(id: item.id) else { return }
+                self.onClipboardThumbnailRequested?(item.id)
+            }
         }
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
