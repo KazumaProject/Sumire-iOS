@@ -90,6 +90,7 @@ targets:
     sources:
       - NativeTests
       - Shared/ConversionService.swift
+      - Shared/NativeDictionaryEngineOpener.swift
       - Shared/KeyboardSettings.swift
       - Shared/PersonalDataLocation.swift
       - Shared/DocumentProxyIdentity.swift
