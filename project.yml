@@ -91,6 +91,7 @@ targets:
       - NativeTests
       - Shared/ConversionService.swift
       - Shared/KeyboardSettings.swift
+      - Shared/PersonalDataLocation.swift
       - Shared/DocumentProxyIdentity.swift
       - Shared/CandidateBar.swift
       - Shared/KeyboardPalette.swift

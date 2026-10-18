@@ -37,15 +37,33 @@ final class ConversionService {
     private let queue = DispatchQueue(label: "sumire.conversion", qos: .userInitiated)
     private let state = NativeState()
     private let pending = PendingRequest()
-    private let directory: URL?
+    private let directoryOverride: URL?
+    private var cachedDictionaryDirectory: URL?
+    private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var categoryMask: UInt32
     private var personal = PersonalLexicon()
     private var learningURL: URL?
 
-    init(directory: URL? = ConversionService.bundledDictionary, categoryMask: UInt32 = 0) {
-        self.directory = directory
+    init(categoryMask: UInt32 = 0) {
+        self.directoryOverride = nil
         self.categoryMask = categoryMask
+    }
+    init(directory: URL?, categoryMask: UInt32 = 0) {
+        self.directoryOverride = directory
+        self.categoryMask = categoryMask
+    }
+    private static var activeDictionary: URL? {
+        PersonalDataLocation.readableDictionaryGeneration()?.directory ?? bundledDictionary
+    }
+    // Called only on the serial conversion queue. Avoid resolving App Group
+    // metadata on the keyboard's main thread for every keystroke.
+    private func resolveActiveDictionary() -> URL? {
+        let now = ProcessInfo.processInfo.systemUptime
+        if now - lastDictionaryRefresh < 0.5 { return cachedDictionaryDirectory }
+        lastDictionaryRefresh = now
+        cachedDictionaryDirectory = Self.activeDictionary
+        return cachedDictionaryDirectory
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
@@ -89,10 +107,12 @@ final class ConversionService {
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false, includeBunsetsu: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
-        let state = state, directory = directory, mask = categoryMask, englishReading = englishReadingEnabled
+        let state = state, directoryOverride = directoryOverride
+        let mask = categoryMask, englishReading = englishReadingEnabled
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
+            let directory = directoryOverride ?? self.resolveActiveDictionary()
             ProcessMemory.record("conversion.begin")
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
@@ -224,6 +244,9 @@ final class ConversionService {
         var learningFailure: String?
         var lastReading = ""
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
+        private var openedDirectory: URL?
+        private var openedMask: UInt32?
+        private var openedEnglishReading: Bool?
         func prepareLearning(reading: String) throws -> String? {
             var entries: [LearningStore.Entry] = []
             if let url = learningURL, learningFailure == nil {
@@ -259,7 +282,10 @@ final class ConversionService {
         }
         private var englishLoaded = false
         func open(directory: URL?, mask: UInt32, english: Bool, englishReading: Bool) throws {
-            if session != nil && (!english || englishLoaded) { return }
+            let requestedDirectory = directory?.standardizedFileURL
+            let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&
+                openedMask == mask && openedEnglishReading == englishReading
+            if sameConfiguration && (!english || englishLoaded) { return }
             if session != nil { close() }
             guard let directory else { throw NativeError("変換辞書が見つかりません。読みは保持しています") }
             var engine: OpaquePointer?
@@ -269,7 +295,13 @@ final class ConversionService {
             }
             defer { sumire_engine_close(engine) }
             guard sumire_session_create(engine, &session, &error, error.count) == 0 else { throw NativeError(String(cString: error)) }
-            do { try installPersonal(); englishLoaded = english } catch { close(); throw error }
+            do {
+                try installPersonal()
+                openedDirectory = requestedDirectory
+                openedMask = mask
+                openedEnglishReading = englishReading
+                englishLoaded = english
+            } catch { close(); throw error }
         }
         private func installPersonal() throws {
             try personal.validate()
@@ -306,6 +338,9 @@ final class ConversionService {
             lastReading = ""
             lastCandidates.removeAll(keepingCapacity: false)
             englishLoaded = false
+            openedDirectory = nil
+            openedMask = nil
+            openedEnglishReading = nil
         }
         deinit { close() }
     }
