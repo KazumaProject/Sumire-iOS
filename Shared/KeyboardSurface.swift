@@ -1329,6 +1329,7 @@ final class KeyboardSurface: UIInputView {
         resultGeneration = nil
         selectedCandidate = nil
         candidateBar.candidates = []
+        candidateBar.isUpdating = false
         status.text = "Sumire · C++変換"
         englishComposition = false
         updateSumireKeys()
@@ -1400,8 +1401,11 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = nil
         converted = []
         resultGeneration = nil
-        candidateBar.candidates = []
         let reading = composition.reading
+        // Preserve the last accepted frame instead of submitting an empty list
+        // between keystrokes. Pending candidates cannot be selected or expanded.
+        candidateBar.isUpdating = !reading.isEmpty
+        if reading.isEmpty { candidateBar.candidates = [] }
         updateSumireKeys()
         markReading()
         status.text = reading.isEmpty ? "Sumire · C++変換" : reading
@@ -1418,6 +1422,7 @@ final class KeyboardSurface: UIInputView {
                 self.converted = result.candidates
                 self.resultGeneration = generation
                 self.candidateBar.candidates = result.candidates.map(\.text)
+                self.candidateBar.isUpdating = false
                 if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
@@ -1425,6 +1430,8 @@ final class KeyboardSurface: UIInputView {
                 self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "")
             case .failure(let error):
                 // Keep every reading character; Return can still commit the reading.
+                self.candidateBar.candidates = []
+                self.candidateBar.isUpdating = false
                 self.status.text = reading + " · " + error.localizedDescription
             }
         }
@@ -1467,7 +1474,8 @@ final class KeyboardSurface: UIInputView {
         converted = []
         resultGeneration = nil
         selectedCandidate = nil
-        candidateBar.candidates = []
+        candidateBar.isUpdating = !composition.reading.isEmpty
+        if composition.reading.isEmpty { candidateBar.candidates = [] }
         status.text = "Sumire · C++変換"
         englishComposition = false
         updateSumireKeys()
