@@ -189,7 +189,7 @@ struct SettingsDashboardView: View {
     }
     private var welcome: some View {
         HStack(alignment: .center, spacing: 14) {
-            Image("SumireLogo.png").resizable().scaledToFit().frame(width: 52, height: 52).accessibilityHidden(true)
+            Image("SumireLogo.png").renderingMode(.template).resizable().scaledToFit().foregroundStyle(.purple).frame(width: 52, height: 52).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sumireを、あなたらしく。").font(.title3.bold())
                 Text("お気に入りの入力を育てましょう。").font(.subheadline).foregroundStyle(.secondary)
