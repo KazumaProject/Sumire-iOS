@@ -90,7 +90,9 @@ targets:
     sources:
       - NativeTests
       - Shared/ConversionService.swift
+      - Shared/NativeDictionaryEngineOpener.swift
       - Shared/KeyboardSettings.swift
+      - Shared/PersonalDataLocation.swift
       - Shared/DocumentProxyIdentity.swift
       - Shared/CandidateBar.swift
       - Shared/KeyboardPalette.swift
@@ -132,5 +134,9 @@ schemes:
         SumireNativeTests: [test]
     test:
       config: Release
+      environmentVariables:
+        SUMIRE_BENCHMARK_REVISION: "${SUMIRE_BENCHMARK_REVISION}"
+        SUMIRE_REFERENCE_SOURCE_ZIP: "${SUMIRE_REFERENCE_SOURCE_ZIP}"
+        SUMIRE_REFERENCE_NATIVE_DICTIONARIES: "${SUMIRE_REFERENCE_NATIVE_DICTIONARIES}"
       targets:
         - SumireNativeTests

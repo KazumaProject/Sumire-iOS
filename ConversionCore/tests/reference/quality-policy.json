@@ -1,0 +1,27 @@
+{
+  "schema_version": 1,
+  "reference": {
+    "revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
+    "adapter_path": "SumireIOSBaselineTest.kt",
+    "adapter_sha256": "cdaa865550ab41a902d0a182ed8bf1c2ff38b3118f7dfc53214b4a6325cefd96",
+    "path": "KanaKanjiEngine.getCandidatesWithoutPrediction",
+    "n": 10,
+    "beam_width": 20,
+    "omission": false,
+    "categories": ["none", "all"]
+  },
+  "baseline": {
+    "sha256": "b14ea3e15f923f109ac21524eb2c5a8e2bcc617219d606b1aa0dd089c8097a5e",
+    "readings": 19,
+    "cases": 38
+  },
+  "conversion_data": {
+    "source_revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
+    "manifest_sha256": "40db276c103659f76f9708f8b8a5bf67d839fdb3f0bf6ac82cb1489c5dc2dc85"
+  },
+  "quality": {
+    "minimum_top1_equal": 36,
+    "minimum_reference_top1_in_cpp10": 38,
+    "minimum_top10_equal": 36
+  }
+}
