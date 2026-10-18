@@ -11,6 +11,13 @@ int main(int argc, char **argv) {
     }
     const bool quiet = argc > 5;
     const auto total = sumire_dictionary_browser_token_count(browser);
+    if (argc > 5 && std::string(argv[5]) == "bounded") {
+        assert(sumire_dictionary_browser_step(browser, 100, error, sizeof error) == 0);
+        assert(sumire_dictionary_browser_count(browser) == 0);
+        assert(sumire_dictionary_browser_done(browser) == 0);
+        sumire_dictionary_browser_close(browser);
+        return 0;
+    }
     size_t count = 0;
     while (!sumire_dictionary_browser_done(browser)) {
         if (sumire_dictionary_browser_step(browser, 3, error, sizeof error)) {
@@ -28,7 +35,7 @@ int main(int argc, char **argv) {
         sumire_dictionary_row invalid{};
         assert(sumire_dictionary_browser_row(browser, size, &invalid) == -1);
     }
-    if (quiet) std::cout << count << '\t' << total << '\t' << sumire_dictionary_browser_mapped_bytes(browser) << '\n';
+    if (quiet) std::cout << count << '\t' << total << '\t' << sumire_dictionary_browser_mapped_bytes(browser) << '\t' << sumire_dictionary_browser_entry_count(browser) << '\n';
     sumire_dictionary_browser_close(browser);
     // Cancellation of a live traversal must return an error and no partial page.
     assert(sumire_dictionary_browser_open(argv[1], argv[2], "", 0, &browser, error, sizeof error) == 0);

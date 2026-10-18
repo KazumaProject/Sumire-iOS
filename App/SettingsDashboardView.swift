@@ -40,13 +40,13 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 
 enum SettingsDestination: String, CaseIterable, Identifiable {
     case keyboards, customKeyboard, romaji, specialKeys, conversion, appearance, theme, candidates
-    case personalDictionary, dictionaries, learning, symbols, clipboard, backup, setup, licenses
+    case personalDictionary, dictionaries, dictionaryBrowser, learning, symbols, clipboard, backup, setup, licenses
     var id: String { rawValue }
     var category: SettingsCategory {
         switch self {
         case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion: return .input
         case .appearance, .theme, .candidates: return .appearance
-        case .personalDictionary, .dictionaries, .learning: return .dictionaries
+        case .personalDictionary, .dictionaries, .dictionaryBrowser, .learning: return .dictionaries
         case .symbols, .clipboard, .backup: return .data
         case .setup, .licenses: return .app
         }
@@ -62,6 +62,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "キーボードの配色"
         case .candidates: return "候補欄の段数"
         case .personalDictionary: return "ユーザー辞書・定型文"
+        case .dictionaryBrowser: return "辞書の単語を見る"
         case .dictionaries: return "分類辞書・英語辞書"
         case .learning: return "変換の学習"
         case .symbols: return "記号・クリップボード"
@@ -82,6 +83,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "好きな色とライト・ダーク表示"
         case .candidates: return "候補を1・2・3段で表示"
         case .personalDictionary: return "名前、よく使うことば、決まり文句"
+        case .dictionaryBrowser: return "収録した読み・表記を検索して確認"
         case .dictionaries: return "30のカテゴリと英語の読みを選択"
         case .learning: return "学習の有効化と履歴の削除"
         case .symbols: return "最初に開くタブ、肌色、履歴の保存"
@@ -102,6 +104,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "paintpalette"
         case .candidates: return "rectangle.split.3x1"
         case .personalDictionary: return "book.closed"
+        case .dictionaryBrowser: return "text.book.closed"
         case .dictionaries: return "books.vertical"
         case .learning: return "sparkles"
         case .symbols: return "face.smiling"

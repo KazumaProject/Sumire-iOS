@@ -37,6 +37,8 @@ size_t sumire_dictionary_browser_count(const sumire_dictionary_browser *browser)
 int sumire_dictionary_browser_row(const sumire_dictionary_browser *browser,
                                   size_t index, sumire_dictionary_row *out);
 int sumire_dictionary_browser_done(const sumire_dictionary_browser *browser);
+/* Number of rows reachable from reading terminals, distinct from raw token count. */
+size_t sumire_dictionary_browser_entry_count(const sumire_dictionary_browser *browser);
 size_t sumire_dictionary_browser_token_count(const sumire_dictionary_browser *browser);
 size_t sumire_dictionary_browser_mapped_bytes(const sumire_dictionary_browser *browser);
 #ifdef __cplusplus

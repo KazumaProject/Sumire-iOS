@@ -14,10 +14,12 @@ struct sumire_dictionary_browser {
     std::vector<Row> rows;
     std::string query;
     uint32_t mode, token = 0, tokenEnd = 0;
-    size_t current = 0;
+    size_t current = 0, entryCount = 0;
     bool first = true, done = false;
     sumire_dictionary_browser(const char *dir, const char *name, const char *q, uint32_t m)
         : dictionary(dir, name), query(q), mode(m) {
+        for (auto term : dictionary.terms)
+            entryCount += dictionary.postings[term + 1] - dictionary.postings[term];
         size_t node = 0;
         if (!mode) for (auto c : sumire::utf16(query)) {
             auto child = dictionary.tree.select0(dictionary.tree.rank(node)) + 1;
@@ -129,3 +131,5 @@ extern "C" int sumire_dictionary_browser_row(const sumire_dictionary_browser *b,
 extern "C" int sumire_dictionary_browser_done(const sumire_dictionary_browser *b) { return !b || b->done; }
 extern "C" size_t sumire_dictionary_browser_token_count(const sumire_dictionary_browser *b) { return b ? b->dictionary.pos.size() : 0; }
 extern "C" size_t sumire_dictionary_browser_mapped_bytes(const sumire_dictionary_browser *b) { return b ? b->dictionary.file.size : 0; }
+
+extern "C" size_t sumire_dictionary_browser_entry_count(const sumire_dictionary_browser *b) { return b ? b->entryCount : 0; }

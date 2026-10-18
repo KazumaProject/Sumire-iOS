@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Paged browsing uses the exact same fixture format as conversion tests."""
-import importlib.util, pathlib, subprocess, sys, tempfile, unittest
+import importlib.util, pathlib, subprocess, sys, tempfile, unittest, struct, zlib
 BROWSER = sys.argv.pop(1)
 saved = sys.argv[:]
 sys.argv = [sys.argv[0], 'unused-cli']
@@ -39,6 +39,23 @@ class BrowserTests(unittest.TestCase):
         self.browse(query='a'*1025, ok=False)
         path = self.root/'system.sud'; content=bytearray(path.read_bytes()); content[-1] ^= 1; path.write_bytes(content)
         self.browse(ok=False)
+    def test_empty_dictionary(self):
+        fixtures.dictionary(self.root/'system.sud', [])
+        self.assertEqual(self.browse(), [])
+    def test_step_budget(self):
+        fixtures.dictionary(self.root/'system.sud', [(str(i).zfill(5), 'word', 1, 0) for i in range(4200)])
+        run = subprocess.run([BROWSER, str(self.root), 'system', 'no-match', '1', 'bounded'], capture_output=True, text=True)
+        self.assertEqual(run.returncode, 0, run.stderr)
+    def test_valid_crc_invalid_posting_reference(self):
+        path=self.root/'system.sud'; content=bytearray(path.read_bytes())
+        offset,length=struct.unpack_from('<QQ',content,24+3*24)
+        struct.pack_into('<I',content,offset,0xffffffff)
+        struct.pack_into('<I',content,24+3*24+16,zlib.crc32(content[offset:offset+length]))
+        path.write_bytes(content); self.browse(ok=False)
+    def test_invalid_section_range(self):
+        path=self.root/'system.sud'; content=bytearray(path.read_bytes())
+        struct.pack_into('<Q',content,24,len(content)+8)
+        path.write_bytes(content); self.browse(ok=False)
     def test_surface_size_limit(self):
         fixtures.dictionary(self.root/'system.sud', [('あ', 'x'*65537, 1, 0)])
         self.browse(ok=False)

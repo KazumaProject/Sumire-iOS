@@ -5,7 +5,7 @@ import Foundation
 /// onto the main queue. Generation changes cancel scans between native steps.
 private final class DictionaryBrowserWorker: @unchecked Sendable {
     struct Row: Identifiable { let id: UInt32; let reading: String; let surface: String; let context: UInt16; let cost: Int16 }
-    struct Page { let rows: [Row]; let done: Bool; let total: Int; let bytes: Int }
+    struct Page { let rows: [Row]; let done: Bool; let total: Int; let tokens: Int; let bytes: Int }
     private let queue = DispatchQueue(label: "sumire.dictionary-browser", qos: .userInitiated)
     private let lock = NSLock()
     private var generation: UInt64 = 0
@@ -45,7 +45,7 @@ private final class DictionaryBrowserWorker: @unchecked Sendable {
                     }
                 }
                 let result = Page(rows: rows, done: sumire_dictionary_browser_done(cursor) != 0,
-                                  total: sumire_dictionary_browser_token_count(cursor), bytes: sumire_dictionary_browser_mapped_bytes(cursor))
+                                  total: sumire_dictionary_browser_entry_count(cursor), tokens: sumire_dictionary_browser_token_count(cursor), bytes: sumire_dictionary_browser_mapped_bytes(cursor))
                 DispatchQueue.main.async { [self] in if current(generation) { completion(.success(result)) } }
             } catch {
                 DispatchQueue.main.async { [self] in if current(generation) { completion(.failure(error)) } }
@@ -62,6 +62,7 @@ private final class DictionaryBrowserModel: ObservableObject {
     @Published var error: String?
     @Published var pageNumber = 1
     @Published var total = 0
+    @Published var tokens = 0
     @Published var bytes = 0
     private let worker = DictionaryBrowserWorker()
     private var pending: DispatchWorkItem?
@@ -71,12 +72,12 @@ private final class DictionaryBrowserModel: ObservableObject {
     func reload(name: String, query: String, mode: Int, debounce: Bool = false) {
         pending?.cancel(); generation = worker.invalidate()
         self.name = name; self.query = query; self.mode = mode
-        rows = []; error = nil; done = true; loading = true; pageNumber = 1
+        rows = []; total = 0; tokens = 0; bytes = 0; error = nil; done = true; loading = true; pageNumber = 1
         let task = DispatchWorkItem { [weak self] in self?.load(restart: true) }
         pending = task
         DispatchQueue.main.asyncAfter(deadline: .now() + (debounce ? 0.3 : 0), execute: task)
     }
-    func next() { guard !loading && !done else { return }; pageNumber += 1; load(restart: false) }
+    func next() { guard !loading && !done else { return }; load(restart: false) }
     func cancel() { pending?.cancel(); worker.invalidate(); loading = false }
     private func load(restart: Bool) {
         loading = true; error = nil
@@ -85,7 +86,9 @@ private final class DictionaryBrowserModel: ObservableObject {
             guard let self else { return }
             loading = false
             switch result {
-            case .success(let page): rows = page.rows; done = page.done; total = page.total; bytes = page.bytes
+            case .success(let page):
+                if !restart { pageNumber += 1 }
+                rows = page.rows; done = page.done; total = page.total; tokens = page.tokens; bytes = page.bytes
             case .failure(let failure): error = failure.localizedDescription; done = true
             }
         }
@@ -97,6 +100,7 @@ struct DictionaryBrowserView: View {
     @State private var dictionary = "system"
     @State private var query = ""
     @State private var mode = 0
+    @FocusState private var searchFocused: Bool
     private var dictionaries: [(id: String, title: String)] {
         [("system", "システム"), ("english", "英単語"), ("english_reading", "かなから英単語")] +
         (0..<sumire_category_count()).map { index in
@@ -113,11 +117,25 @@ struct DictionaryBrowserView: View {
                 Picker("検索方法", selection: $mode) {
                     Text("読みの先頭").tag(0); Text("表記に含む").tag(1)
                 }.pickerStyle(.segmented).accessibilityIdentifier("dictionary-browser-search-mode")
-                TextField(mode == 0 ? "読みを入力" : "探したい表記を入力", text: $query)
-                    .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    .accessibilityIdentifier("dictionary-browser-query")
-            } footer: {
-                Text("同梱辞書の内容を見る画面です。無効にしている分類も閲覧できます。学習やユーザー辞書は含みません。検索は入力した文字のまま照合します。")
+                HStack {
+                    TextField(mode == 0 ? "読みを入力" : "探したい表記を入力", text: $query)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                        .focused($searchFocused).submitLabel(.search).onSubmit { searchFocused = false }
+                        .accessibilityIdentifier("dictionary-browser-query")
+                    if searchFocused {
+                        Button { searchFocused = false } label: {
+                            Image(systemName: "keyboard.chevron.compact.down").frame(minWidth: 44, minHeight: 44)
+                        }.buttonStyle(.borderless).accessibilityLabel("検索を閉じる")
+                    }
+                }
+            }
+            Section {
+                HStack {
+                    Button("先頭に戻る") { reload() }.disabled(model.loading).frame(minHeight: 44)
+                    Spacer()
+                    Button("次の100件") { model.next() }.disabled(model.loading || model.done).frame(minHeight: 44)
+                        .accessibilityIdentifier("dictionary-browser-next")
+                }.buttonStyle(.borderless)
             }
             Section {
                 if model.loading {
@@ -140,15 +158,21 @@ struct DictionaryBrowserView: View {
                 }
             } header: { Text("\(model.pageNumber)ページ · \(model.rows.count)件表示 / 辞書全体 \(model.total)件") }
             Section {
-                Button("次の100件") { model.next() }.disabled(model.loading || model.done)
-                    .accessibilityIdentifier("dictionary-browser-next")
-                Button("先頭に戻る") { reload() }.disabled(model.loading)
-            } footer: { Text("表示は1ページずつ切り替わります。表記検索は辞書全体を調べるため時間がかかる場合があります。品詞・接続IDは配布辞書の数値で、品詞名ではありません。") }
+                DisclosureGroup("この一覧について") {
+                    Text("同梱辞書の内容を見る画面です。無効にしている分類も閲覧できます。学習やユーザー辞書は含みません。検索は入力した文字のまま照合します。")
+                    Text("表示は1ページずつ切り替わります。表記検索は辞書全体を調べるため時間がかかる場合があります。品詞・接続IDは配布辞書の数値で、品詞名ではありません。")
+                }.font(.footnote)
+            }
             Section("配布データ") {
+                if model.total != model.tokens {
+                    Text("格納トークン \(model.tokens)件のうち、読みから参照できる \(model.total)件を表示対象にしています。読みのないトークンは表示しません。")
+                        .font(.caption).accessibilityIdentifier("dictionary-browser-unreferenced")
+                }
                 Text("\(dictionary).sud · \(model.bytes) bytes").font(.caption).textSelection(.enabled)
                 Text(provenance).font(.caption).textSelection(.enabled)
             }
         }
+        .scrollDismissesKeyboard(.interactively)
         .navigationTitle("辞書の単語を見る")
         .onAppear { reload() }
         .onDisappear { model.cancel() }
