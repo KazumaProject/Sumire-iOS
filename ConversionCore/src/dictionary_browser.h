@@ -11,9 +11,10 @@ extern "C" {
  * Text pointers returned by row remain valid until next step or close.
  * A page holds at most 100 rows. step examines at most 4096 trie nodes/tokens;
  * callers must continue on a background queue when count=0 and done=0.
- * mode 0: reading prefix (LOUDS indexed), 1: literal surface substring scan.
+ * mode 0: reading prefix (LOUDS indexed), 1: literal surface substring scan,
+ * 2: reading or surface substring after NFKC, root lowercase, and kana folding.
  * UTF-8 query is bounded to 1024 bytes. Readings are limited to 1024 UTF-16
- * units and surfaces to 64 KiB; oversized records fail explicitly. No implicit transliteration/normalization.
+ * units and surfaces to 64 KiB; oversized records fail explicitly. Modes 0/1 do not normalize; mode 2 follows the reference dictionary browser.
  */
 typedef struct sumire_dictionary_browser sumire_dictionary_browser;
 typedef struct {

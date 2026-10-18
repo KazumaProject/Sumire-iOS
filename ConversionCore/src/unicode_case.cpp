@@ -7,6 +7,7 @@
 #else
 #include <unicode/ustring.h>
 #include <unicode/uchar.h>
+#include <unicode/unorm2.h>
 #endif
 
 namespace sumire {
@@ -89,6 +90,36 @@ static std::u16string transform_case(const std::u16string &value, bool uppercase
   std::u16string result(length, u'\0');
   transform(reinterpret_cast<UChar *>(result.data()), length, reinterpret_cast<const UChar *>(value.data()), value.size(), "", &status);
   if (U_FAILURE(status)) throw std::runtime_error("Unicode case conversion failed");
+  return result;
+#endif
+}
+std::u16string unicode_nfkc(const std::u16string &value) {
+  if (std::all_of(value.begin(), value.end(), [](char16_t c) { return c < 128; })) return value;
+#ifdef __APPLE__
+  auto release = [](auto p) { if (p) CFRelease(p); };
+  std::unique_ptr<__CFString, decltype(release)> text(
+      CFStringCreateMutable(kCFAllocatorDefault, 0), release);
+  if (!text) throw std::bad_alloc();
+  CFStringAppendCharacters(text.get(), reinterpret_cast<const UniChar *>(value.data()), value.size());
+  CFStringNormalize(text.get(), kCFStringNormalizationFormKC);
+  // Compose combining marks produced by compatibility expansion (half-width kana).
+  CFStringNormalize(text.get(), kCFStringNormalizationFormC);
+  std::u16string result(CFStringGetLength(text.get()), u'\0');
+  CFStringGetCharacters(text.get(), CFRangeMake(0, result.size()), reinterpret_cast<UniChar *>(result.data()));
+  return result;
+#else
+  UErrorCode status = U_ZERO_ERROR;
+  const auto *normalizer = unorm2_getNFKCInstance(&status);
+  if (U_FAILURE(status)) throw std::runtime_error("Unicode normalization unavailable");
+  auto length = unorm2_normalize(normalizer, reinterpret_cast<const UChar *>(value.data()),
+                                 value.size(), nullptr, 0, &status);
+  if (status != U_BUFFER_OVERFLOW_ERROR && U_FAILURE(status))
+    throw std::runtime_error("Unicode normalization failed");
+  status = U_ZERO_ERROR;
+  std::u16string result(length, u'\0');
+  unorm2_normalize(normalizer, reinterpret_cast<const UChar *>(value.data()), value.size(),
+                   reinterpret_cast<UChar *>(result.data()), length, &status);
+  if (U_FAILURE(status)) throw std::runtime_error("Unicode normalization failed");
   return result;
 #endif
 }

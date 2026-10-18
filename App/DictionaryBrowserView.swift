@@ -99,7 +99,7 @@ struct DictionaryBrowserView: View {
     @StateObject private var model = DictionaryBrowserModel()
     @State private var dictionary = "system"
     @State private var query = ""
-    @State private var mode = 0
+    @State private var mode = 2
     @FocusState private var searchFocused: Bool
     private var dictionaries: [(id: String, title: String)] {
         [("system", "システム"), ("english", "英単語"), ("english_reading", "かなから英単語")] +
@@ -115,10 +115,10 @@ struct DictionaryBrowserView: View {
                     ForEach(dictionaries, id: \.id) { item in Text(item.title).tag(item.id) }
                 }.accessibilityIdentifier("dictionary-browser-choice")
                 Picker("検索方法", selection: $mode) {
-                    Text("読みの先頭").tag(0); Text("表記に含む").tag(1)
+                    Text("読み・表記").tag(2); Text("読みの先頭").tag(0); Text("表記に含む").tag(1)
                 }.pickerStyle(.segmented).accessibilityIdentifier("dictionary-browser-search-mode")
                 HStack {
-                    TextField(mode == 0 ? "読みを入力" : "探したい表記を入力", text: $query)
+                    TextField(mode == 0 ? "読みを入力" : mode == 1 ? "探したい表記を入力" : "読み・表記を検索", text: $query)
                         .textInputAutocapitalization(.never).autocorrectionDisabled()
                         .focused($searchFocused).submitLabel(.search).onSubmit { searchFocused = false }
                         .accessibilityIdentifier("dictionary-browser-query")
@@ -139,7 +139,7 @@ struct DictionaryBrowserView: View {
             }
             Section {
                 if model.loading {
-                    HStack { ProgressView(); Text(mode == 1 ? "表記を検索中…" : "読み込み中…") }
+                    HStack { ProgressView(); Text(mode == 0 ? "読み込み中…" : "辞書を検索中…") }
                 }
                 if let error = model.error {
                     Text(error).foregroundStyle(.secondary)
@@ -159,7 +159,7 @@ struct DictionaryBrowserView: View {
             } header: { Text("\(model.pageNumber)ページ · \(model.rows.count)件表示 / 辞書全体 \(model.total)件") }
             Section {
                 DisclosureGroup("この一覧について") {
-                    Text("同梱辞書の内容を見る画面です。無効にしている分類も閲覧できます。学習やユーザー辞書は含みません。検索は入力した文字のまま照合します。")
+                    Text("同梱辞書の内容を見る画面です。無効にしている分類も閲覧できます。学習やユーザー辞書は含みません。「読み・表記」は幅や英字の大小、かなの違いをそろえて途中の文字も探します。ほかの検索方法は入力した文字のまま照合します。")
                     Text("表示は1ページずつ切り替わります。表記検索は辞書全体を調べるため時間がかかる場合があります。品詞・接続IDは配布辞書の数値で、品詞名ではありません。")
                 }.font(.footnote)
             }

@@ -33,9 +33,22 @@ class BrowserTests(unittest.TestCase):
         self.assertEqual([x[4] for x in self.browse('愛', 1)], ['愛'])
         self.assertEqual(self.browse('なし'), [])
         self.assertEqual(self.browse('なし', 1), [])
+    def test_reference_normalized_reading_and_surface_contains(self):
+        fixtures.dictionary(self.root/'system.sud', [
+            ('がっこう', '学校', 1, 0), ('あい', '愛', 1, 0),
+            ('えいご', 'ＦＯＯ', 1, 0), ('ぎりしゃ', 'ΟΔΟΣ', 1, 0),
+            ('ごうじ', '㍿', 1, 0), ('すまほ', 'iPhone', 1, 0)])
+        for query, expected in [('ｶﾞｯｺｳ', '学校'), ('アイ', '愛'), ('ｆｏｏ', 'ＦＯＯ'),
+                                ('οδος', 'ΟΔΟΣ'), ('株式会社', '㍿'), ('ＩＰＨＯＮＥ', 'iPhone')]:
+            self.assertEqual([r[4] for r in self.browse(query, 2)], [expected])
+        # It searches within a reading rather than only its first characters.
+        self.assertEqual([r[4] for r in self.browse('っこ', 2)], ['学校'])
+        self.assertEqual(self.browse('ｶﾞｯｺｳ', 0), [])
+        self.assertEqual(self.browse('ｆｏｏ', 1), [])
+
     def test_invalid_and_corrupt(self):
         self.browse(name='../system', ok=False)
-        self.browse(mode=2, ok=False)
+        self.browse(mode=3, ok=False)
         self.browse(query='a'*1025, ok=False)
         path = self.root/'system.sud'; content=bytearray(path.read_bytes()); content[-1] ^= 1; path.write_bytes(content)
         self.browse(ok=False)
