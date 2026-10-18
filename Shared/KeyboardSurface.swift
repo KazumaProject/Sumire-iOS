@@ -968,6 +968,7 @@ final class KeyboardSurface: UIInputView {
     private func addSumireGrid(palette: KeyboardPalette) {
         let arrangement = SumireKeyArrangement(rawValue: settingsDefaults.string(forKey: "sumire.keyArrangement") ?? "") ?? .toggle
         let style = FlickStyleSettings.load(defaults: settingsDefaults)
+        let slots = CircularSlotSetting.load(defaults: settingsDefaults)
         do { sumireFlickProfile = try ReferenceFlickMaps(arrangement: arrangement, mode: sumireMode, style: style.style) }
         catch { showDataNotice("入力スタイルの定義を読み込めません: " + error.localizedDescription) }
         guard let grid = try? KeyboardGrid(layout: arrangement.layout(mode: sumireMode),
@@ -981,7 +982,7 @@ final class KeyboardSurface: UIInputView {
                 key.styleSettings = style
                 let reference = sumireFlickProfile?.key(row: definition.row, column: definition.column)
                 do {
-                    if let reference { key.definition = try sumireFlickProfile?.definition(for: reference, settings: style) }
+                    if let reference { key.definition = try sumireFlickProfile?.definition(for: reference, settings: style, slotSettings: slots) }
                     if key.definition == nil { throw PersonalDataError("キーの入力定義がありません") }
                 } catch {
                     key.isEnabled = false

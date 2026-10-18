@@ -47,7 +47,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             for suffix in ["flickUp", "flickDown"] { result["qwerty.\(kind).\(suffix)"] = .boolean }
         }
         for suffix in ["halfWidthNumbers", "halfWidthSymbols"] { result["qwerty.romaji.\(suffix)"] = .boolean }
-        for key in [FlickStyleSettings.storageKey, TouchFeedbackSettings.storageKey, SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
+        for key in [CircularSlotSetting.storageKey, FlickStyleSettings.storageKey, TouchFeedbackSettings.storageKey, SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
             result[key] = .data
         }
         return result
@@ -90,7 +90,14 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case (.boundedText(let limit), .text(let text)):
                 guard text.utf8.count <= limit else { throw Self.invalid(key) }
             case (.data, .data(let data)):
-                if key == FlickStyleSettings.storageKey {
+                if key == CircularSlotSetting.storageKey {
+                    guard data.count <= 1024 * 1024 else { throw Self.invalid(key) }
+                    let slots = try JSONDecoder().decode([CircularSlotSetting].self, from: data)
+                    guard slots.count <= 4096, slots.allSatisfy({
+                        (0...2).contains($0.mode) && (4...6).contains($0.slot) && !$0.keyIdentifier.isEmpty &&
+                        $0.keyIdentifier.utf8.count <= 4096 && $0.value.utf8.count <= 16384
+                    }) else { throw Self.invalid(key) }
+                } else if key == FlickStyleSettings.storageKey {
                     guard data.count <= 4096 else { throw Self.invalid(key) }
                     let style = try JSONDecoder().decode(FlickStyleSettings.self, from: data)
                     guard style == style.normalized else { throw Self.invalid(key) }

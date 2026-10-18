@@ -49,6 +49,21 @@ final class FlickStyleIntegrationUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "きく")
         key.tap(); XCTAssertEqual(input.value as? String, "きくか")
     }
+    func testMultiStageDirectionsDeliveredByUIKit() {
+        let app = XCUIApplication()
+        for (style, dx, expected) in [("second-flick", -65.0, "き"), ("third-flick", -65.0, "き"), ("sumire", 65.0, "け")] {
+            let input = launch(app, style: style)
+            let key = app.buttons["sumire-ka"]
+            let origin = key.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+            origin.press(forDuration: 0.05, thenDragTo: origin.withOffset(.init(dx: dx, dy: 0)))
+            XCTAssertEqual(input.value as? String, expected, style)
+            if style == "second-flick" {
+                key.press(forDuration: 0.6)
+                XCTAssertEqual(input.value as? String, expected + "か")
+            }
+            app.terminate()
+        }
+    }
     func testStyleSettingsPersistWithoutLosingComposition() {
         let app = XCUIApplication()
         let input = launch(app)

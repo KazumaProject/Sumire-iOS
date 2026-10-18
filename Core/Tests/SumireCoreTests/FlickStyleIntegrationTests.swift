@@ -24,10 +24,14 @@ final class FlickStyleIntegrationTests: XCTestCase {
         var settings = FlickStyleSettings(); settings.style = .donut; settings.circularDirectionCount = 7
         settings.rotation = .counterclockwise; settings.threeStepInput = .voiced
         settings.save(defaults: defaults)
+        let slots = [CircularSlotSetting(mode: 0, keyIdentifier: "か", slot: 4, action: .switchMap)]
+        XCTAssertTrue(CircularSlotSetting.save(slots, defaults: defaults))
         let backup = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         defaults.removeObject(forKey: FlickStyleSettings.storageKey)
+        defaults.removeObject(forKey: CircularSlotSetting.storageKey)
         try backup.restore(defaults: defaults)
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults), settings)
+        XCTAssertEqual(CircularSlotSetting.load(defaults: defaults), slots)
         XCTAssertEqual(defaults.string(forKey: "sumire.keyArrangement"), "flick")
         var invalid = settings; invalid.circularDirectionCount = 100
         defaults.set(try JSONEncoder().encode(invalid), forKey: FlickStyleSettings.storageKey)
