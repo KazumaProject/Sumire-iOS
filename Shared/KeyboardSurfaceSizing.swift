@@ -9,6 +9,16 @@ struct KeyboardSurfaceSizingPlan: Equatable {
     let candidateHeight: CGFloat
     let totalHeight: CGFloat
 
+    /// The keyboard host window may itself be sized to the keyboard. Use the
+    /// display height as the cap so the available budget does not shrink with
+    /// the keyboard's current frame. Fall back to the window only when screen
+    /// metrics are unavailable (such as isolated layout tests).
+    static func availableHeight(screenHeight: CGFloat?, windowHeight: CGFloat?) -> CGFloat {
+        if let screenHeight, screenHeight.isFinite, screenHeight > 0 { return screenHeight }
+        if let windowHeight, windowHeight.isFinite, windowHeight > 0 { return windowHeight }
+        return 1000
+    }
+
     static func make(keyAreaHeight: CGFloat, candidateHeight: CGFloat,
                      bottomInset: CGFloat, availableHeight: CGFloat) -> Self {
         let maximumHeight = max(210, availableHeight * 0.72)
