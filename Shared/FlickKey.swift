@@ -34,7 +34,21 @@ final class FlickKey: UIButton {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        guard !guides.isEmpty, bounds.width > 0, bounds.height > 0 else { return }
+        guard bounds.width > 0, bounds.height > 0 else { return }
+        if guides.isEmpty {
+            // The vertically stacked brackets in 50-on need two full lines.
+            // UILabel's width fitting alone lets a larger default overflow vertically.
+            guard let label = titleLabel, label.numberOfLines > 1,
+                  attributedTitle(for: .normal) == nil, let text = label.text else { return }
+            let lines = text.components(separatedBy: "\n")
+            let width = lines.map { ($0 as NSString).size(withAttributes: [.font: requestedTitleFont]).width }.max() ?? 0
+            let height = requestedTitleFont.lineHeight * CGFloat(lines.count)
+            let available = bounds.insetBy(dx: 3, dy: 2)
+            let scale = max(0.01, min(1, available.width / max(1, width), available.height / max(1, height)))
+            label.font = requestedTitleFont.withSize(requestedTitleFont.pointSize * scale)
+            label.frame = available
+            return
+        }
         // Preserve configured sizes as upper bounds. Scale the five labels together
         // only when their combined extents cannot fit, keeping directional regions separate.
         let characters = outputs + [restingTitle ?? ""]

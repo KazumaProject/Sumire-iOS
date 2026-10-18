@@ -25,16 +25,10 @@ public struct KeyboardAppearance: Equatable, Codable {
             let value = defaults.double(forKey: prefix + key)
             return value.isFinite ? min(range.upperBound, max(range.lowerBound, value)) : fallback
         }
-        // Pinned JapaneseKeyboard df1f383: ModeKeySizing / KEY_GOJUON_SIZE /
-        // qwerty_key_text_size. Android sp values at font scale 1 are used as
-        // logical point defaults; cross-platform glyph metrics still differ.
-        let defaultFont: Double
-        switch kind {
-        case .tenKey: defaultFont = 17
-        case .sumire, .custom: defaultFont = 16
-        case .romaji, .english, .gojuon: defaultFont = 18
-        }
-        return Self(keyFontSize: number("keyFontSize", fallback: defaultFont, range: 10...40),
+        // Chosen after comparing the iOS 26.4 Simulator's standard English
+        // keyboard with our keyboard at the same display scale. This is a
+        // visual reference, not a claim about Apple's private font metrics.
+        return Self(keyFontSize: number("keyFontSize", fallback: 23, range: 10...40),
                     guideFontSize: number("guideFontSize", fallback: kind == .sumire ? 9 : 11, range: 8...22),
                     guidesVisible: defaults.bool(forKey: prefix + "guidesVisible"),
                     keyScale: number("keyScale", fallback: 1, range: 0.7...1))
@@ -68,7 +62,7 @@ extension KeyboardAppearance {
             let value = defaults.double(forKey: prefix + key)
             return value.isFinite ? min(range.upperBound, max(range.lowerBound, value)) : fallback
         }
-        return Self(keyFontSize: number("keyFontSize", kind == .sumire || kind == .custom ? 12 : 16, 10...40),
+        return Self(keyFontSize: number("keyFontSize", 18, 10...40),
                     guideFontSize: number("guideFontSize", 9, 8...22),
                     guidesVisible: defaults.bool(forKey: prefix + "guidesVisible"),
                     keyScale: number("keyScale", 1, 0.7...1))
