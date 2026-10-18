@@ -722,8 +722,10 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              state.cost + conn.cost(node.right, nodes[id].left) +
                  nodes[id].cost);
   }
-  rank_primary(result.candidates);
-  if (result.candidates.size() > count) result.candidates.resize(count);
+  if (result.candidates.size() > count) {
+    rank_primary(result.candidates);
+    result.candidates.resize(count);
+  }
   seen.clear();
   std::unordered_map<std::string, size_t> primary;
   for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
@@ -738,10 +740,11 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
     exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
     exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
+    const bool exactMatched = exact.standalone_unigram_matched;
     auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
     if (inserted) result.candidates.push_back(std::move(exact));
     auto &winner = result.candidates[position->second];
-    const bool matched = winner.standalone_unigram_matched || exact.standalone_unigram_matched;
+    const bool matched = winner.standalone_unigram_matched || exactMatched;
     if (!inserted && exact.score < winner.score) {
       exact.classified_categories = std::move(winner.classified_categories);
       winner = std::move(exact);
@@ -750,7 +753,6 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
       winner.classified_categories.push_back(node.dict->name);
   }
-  rank_primary(result.candidates);
   for (const auto &candidate : result.candidates) seen.insert(candidate.text);
   if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
@@ -773,8 +775,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         result.candidates.push_back({text, prediction.score,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
-    rank_primary(result.candidates);
   }
+  rank_primary(result.candidates);
   if (impl->english_reading && !reading.empty()) {
     const auto &d = *impl->english_reading;
     auto add = [&](const std::string &text, int64_t score) {
