@@ -133,5 +133,7 @@ schemes:
         SumireNativeTests: [test]
     test:
       config: Release
+      environmentVariables:
+        SUMIRE_BENCHMARK_REVISION: "${SUMIRE_BENCHMARK_REVISION}"
       targets:
         - SumireNativeTests

@@ -67,6 +67,16 @@ xcodebuild -project Sumire.xcodeproj -scheme Sumire -sdk iphonesimulator \
   -derivedDataPath "$HOME/sumire-build/ios" CODE_SIGNING_ALLOWED=NO build
 ```
 
+Release の全辞書ベンチマークでは、測定対象のcommitをprovenanceに記録します。
+
+```sh
+export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
+xcodegen generate
+xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -derivedDataPath "$HOME/sumire-build/benchmark" CODE_SIGNING_ALLOWED=NO test
+```
+
 `project.yml` はチェックアウトの隣の `../sumire-data/cli-english-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
