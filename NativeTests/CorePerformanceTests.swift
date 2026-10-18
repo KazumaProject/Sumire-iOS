@@ -1,5 +1,6 @@
 import XCTest
 import Darwin
+import CryptoKit
 
 final class CorePerformanceTests: XCTestCase {
     func testUnicodeEnglishUppercaseWithBundledDictionary() throws {
@@ -62,6 +63,7 @@ final class CorePerformanceTests: XCTestCase {
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
+        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
         var cycles: [[String: Any]] = []
         let baseline = try footprint()
         for cycle in 0..<10 {
@@ -80,7 +82,7 @@ final class CorePerformanceTests: XCTestCase {
             let status = "とうきょうえき".utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
                 var request = sumire_request(generation: 1, reading: bytes.baseAddress,
                     reading_bytes: bytes.count - 1, edit_start_utf16: 0,
-                    candidate_count: 20, max_states: 200000, flags: 0)
+                    candidate_count: 20, max_states: 200000, flags: 12)
                 return sumire_session_update(session, &request, &result, &error, error.count)
             }
             XCTAssertEqual(status, 0, String(cString: error))
@@ -100,7 +102,8 @@ final class CorePerformanceTests: XCTestCase {
         }
         let report: [String: Any] = [
             "scope": "Release C ABI containing-app test host; sampled lifecycle memory, not extension memory",
-            "baseline_mib": baseline, "cycles": cycles,
+            "baseline_mib": baseline, "cycles": cycles, "conversion_flags": 12,
+            "provenance": provenance,
             "dictionary_configuration": "system + 30 categories + English words + English readings",
             "note": "Allocator retention and host activity may affect closed footprint; no OS peak or leak claim"
         ]
@@ -113,11 +116,22 @@ final class CorePerformanceTests: XCTestCase {
     }
 
     func testReleaseCoreWithAllDictionaries() throws {
+        try runReleaseCoreWithAllDictionaries(prediction: true)
+    }
+
+    func testReleaseCoreLegacyOptionsWithAllDictionaries() throws {
+        try runReleaseCoreWithAllDictionaries(prediction: false)
+    }
+
+    private func runReleaseCoreWithAllDictionaries(prediction: Bool) throws {
         #if DEBUG
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
         let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
+        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
+        let japaneseFlags: UInt32 = prediction ? 12 : 4
+        let omissionFlags: UInt32 = japaneseFlags | 1
         var error = [CChar](repeating: 0, count: 1024)
         var engine: OpaquePointer?
         let start = ProcessInfo.processInfo.systemUptime
@@ -131,9 +145,9 @@ final class CorePerformanceTests: XCTestCase {
         guard let session else { return }
         defer { sumire_session_destroy(session) }
         let cases: [(String, UInt32)] = [
-            ("あ", 4), ("あい", 4), ("にほんご", 4), ("とうきょうえき", 4),
-            ("きょうはいいてんきですね", 4), (String(repeating: "あ", count: 32), 4),
-            ("かつこう", 5), ("とうきよう", 5),
+            ("あ", japaneseFlags), ("あい", japaneseFlags), ("にほんご", japaneseFlags), ("とうきょうえき", japaneseFlags),
+            ("きょうはいいてんきですね", japaneseFlags), (String(repeating: "あ", count: 32), japaneseFlags),
+            ("かつこう", omissionFlags), ("とうきよう", omissionFlags),
             ("a", 2), ("hel", 2), ("iph", 2), ("computer", 2)
         ]
         let warmups = 24, trials = 240
@@ -170,13 +184,17 @@ final class CorePerformanceTests: XCTestCase {
             return sorted[Int(ceil(Double(sorted.count) * p)) - 1]
         }
         var groups: [String: Any] = [:]
-        for (name, flags) in [("japanese", UInt32(4)), ("omission", 5), ("english", 2)] {
+        for (name, flags) in [("japanese", japaneseFlags), ("omission", omissionFlags), ("english", 2)] {
             let values = samples.filter { cases[$0["case"] as! Int].1 == flags }.map { $0["core_ms"] as! Double }
             groups[name] = ["trials": values.count, "p95_ms": quantile(values, 0.95), "p99_ms": quantile(values, 0.99)]
         }
         let report: [String: Any] = [
             "scope": "Release C ABI in containing-app test host; not keyboard extension or touch-to-frame",
             "os": ProcessInfo.processInfo.operatingSystemVersionString,
+            "provenance": provenance, "japanese_prediction": prediction,
+            "primary_nbest_limit": 20, "state_limit": 200000,
+            "swift_bunsetsu_projection": false, "category_mask": "0x3fffffff", "dictionary_flags": 3,
+            "cache_scope": "Retained C++ workspace capacity only; excludes results, Swift objects, mappings and temporary prediction storage",
             "warmup_calls": warmups, "measured_calls": trials, "engine_open_ms_single_sample": openMilliseconds,
             "dictionary_manifest": try JSONSerialization.jsonObject(with: manifest),
             "cases": cases.map { ["reading": $0.0, "flags": $0.1, "utf16_units": $0.0.utf16.count] },
@@ -187,7 +205,7 @@ final class CorePerformanceTests: XCTestCase {
         ]
         let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
-        attachment.name = "release-core-all-dictionaries.json"; attachment.lifetime = .keepAlways
+        attachment.name = prediction ? "release-core-prediction-all-dictionaries.json" : "release-core-legacy-options-all-dictionaries.json"; attachment.lifetime = .keepAlways
         add(attachment)
         print("SUMIRE_CORE_CACHE max_bytes=\(samples.compactMap { $0["cache_bytes"] as? Int }.max() ?? 0)")
         print("SUMIRE_CORE_BENCHMARK \(groups) sampled_max_footprint_mib=\(measuredFootprints.max()!) lifetime_peak_mib=\(Double(try XCTUnwrap(ProcessMemory.sample()).lifetimePeakBytes) / 1_048_576)")
@@ -204,5 +222,47 @@ final class CorePerformanceTests: XCTestCase {
         }
         guard status == KERN_SUCCESS else { throw NSError(domain: "task_info", code: Int(status)) }
         return Double(info.phys_footprint) / 1_048_576
+    }
+}
+
+
+/// Hashing deliberately precedes timing: these are warm-file-cache benchmarks,
+/// never claims about OS cold pages, extension startup or touch-to-frame time.
+enum ConversionBenchmarkProvenance {
+    static func collect(directory: URL) throws -> [String: Any] {
+        let revision = ProcessInfo.processInfo.environment["SUMIRE_BENCHMARK_REVISION"] ?? ""
+        guard revision.count == 40 else {
+            throw NSError(domain: "SumireBenchmark", code: 1,
+                userInfo: [NSLocalizedDescriptionKey: "Set test runner SUMIRE_BENCHMARK_REVISION to the 40-character source commit"])
+        }
+        let beforeHash = ProcessMemory.sample()
+        let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
+        let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
+            .filter { $0.pathExtension == "sud" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
+        var hashes: [String: String] = [:]
+        var sizes: [String: UInt64] = [:]
+        for file in files {
+            let handle = try FileHandle(forReadingFrom: file)
+            defer { try? handle.close() }
+            var hash = SHA256()
+            var size: UInt64 = 0
+            while try autoreleasepool(invoking: { () throws -> Bool in
+                guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
+                hash.update(data: data)
+                size += UInt64(data.count)
+                return true
+            }) {}
+            hashes[file.lastPathComponent] = hash.finalize().map { String(format: "%02x", $0) }.joined()
+            sizes[file.lastPathComponent] = size
+        }
+        return ["source_revision": revision,
+                "before_hash_footprint_bytes": beforeHash?.footprintBytes ?? 0,
+                "after_hash_footprint_bytes": ProcessMemory.sample()?.footprintBytes ?? 0,
+                "dictionary_manifest": try JSONSerialization.jsonObject(with: manifest),
+                "manifest_sha256": SHA256.hash(data: manifest).map { String(format: "%02x", $0) }.joined(),
+                "dictionary_file_sha256": hashes, "dictionary_file_bytes": sizes,
+                "os": ProcessInfo.processInfo.operatingSystemVersionString,
+                "file_cache_condition": "All dictionary files hashed before measured setup; OS cache not cold",
+                "configuration": "Release", "network": "No network operations"]
     }
 }
