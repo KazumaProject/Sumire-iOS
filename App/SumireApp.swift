@@ -262,12 +262,23 @@ struct InputHarness: UIViewRepresentable {
         weak var textView: UITextView?
         private var appearanceMarkedRange: NSRange?
         private var appearanceText: String?
+        private var appearanceSelection: NSRange?
         private var preservingAppearance = false
         func prepareAppearanceEditing(_ active: Bool) {
-            if active && !preservingAppearance, let textView, let marked = textView.markedTextRange {
-                appearanceMarkedRange = NSRange(location: textView.offset(from: textView.beginningOfDocument, to: marked.start),
-                    length: textView.offset(from: marked.start, to: marked.end))
-                appearanceText = textView.text
+            if active && !preservingAppearance {
+                appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
+                if let textView, let marked = textView.markedTextRange {
+                    let length = max(0, textView.offset(from: marked.start, to: marked.end))
+                    appearanceMarkedRange = NSRange(location: textView.offset(from: textView.beginningOfDocument, to: marked.start), length: length)
+                    appearanceText = textView.text
+                    if let selected = textView.selectedTextRange {
+                        let start = min(length, max(0, textView.offset(from: marked.start, to: selected.start)))
+                        let end = min(length, max(start, textView.offset(from: marked.start, to: selected.end)))
+                        appearanceSelection = NSRange(location: start, length: end - start)
+                    } else {
+                        appearanceSelection = NSRange(location: length, length: 0)
+                    }
+                }
             }
             preservingAppearance = active
         }
@@ -284,7 +295,7 @@ struct InputHarness: UIViewRepresentable {
         func validateContext() {
             guard !changing, let textView else { return }
             if expectedText != textView.text || expectedSelection != textView.selectedRange {
-                appearanceMarkedRange = nil; appearanceText = nil
+                appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
                 surface.invalidateComposition()
                 expectedText = textView.text
                 expectedSelection = textView.selectedRange
@@ -297,14 +308,20 @@ struct InputHarness: UIViewRepresentable {
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
             guard let range = appearanceMarkedRange, let original = appearanceText else { return }
-            appearanceMarkedRange = nil; appearanceText = nil
-            guard textView.text == original, NSMaxRange(range) <= (original as NSString).length else {
+            let savedSelection = appearanceSelection
+            appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
+            let originalLength = (original as NSString).length
+            guard textView.text == original, range.location >= 0, range.location <= originalLength,
+                  range.length >= 0, range.length <= originalLength - range.location else {
                 surface.invalidateComposition(); return
             }
             perform {
                 textView.selectedRange = range
                 let value = (original as NSString).substring(with: range)
-                textView.setMarkedText(value, selectedRange: NSRange(location: value.utf16.count, length: 0))
+                let count = value.utf16.count
+                let start = min(count, max(0, savedSelection?.location ?? count))
+                let length = min(count - start, max(0, savedSelection?.length ?? 0))
+                textView.setMarkedText(value, selectedRange: NSRange(location: start, length: length))
             }
         }
         let surface = KeyboardSurface(frame: CGRect(x: 0, y: 0, width: 390, height: 464))
