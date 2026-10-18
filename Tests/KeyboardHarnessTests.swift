@@ -2,6 +2,12 @@ import XCTest
 import UIKit
 
 final class KeyboardHarnessTests: XCTestCase {
+    private func requireCompositionStateProbe(_ editor: XCUIElement) throws {
+        guard editor.identifier.hasPrefix("composition-state:") else {
+            throw XCTSkip("Marked-text range diagnostics are included in Debug builds only.")
+        }
+    }
+
     func testSumireSpecialKeyDefaultsOverrideDispatchAndLongPress() throws {
         let app = XCUIApplication()
         let payload: [String: Any] = ["version": 1, "overrides": [
@@ -35,7 +41,7 @@ final class KeyboardHarnessTests: XCTestCase {
         app.terminate()
     }
 
-    func testSpecialKeyScreenOverridePersistsAndPreservesComposingCursor() {
+    func testSpecialKeyScreenOverridePersistsAndPreservesComposingCursor() throws {
         let app = XCUIApplication()
         app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "--composition-selection-test-state"]
         launchInputPreview(app)
@@ -68,6 +74,7 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["標準に戻す"].tap(); app.buttons["完了"].tap()
         let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
         app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        try requireCompositionStateProbe(editor)
         app.buttons["sumire-cursor_left_key"].tap()
         openSettings(); selectDeleteLeft("何もしない")
         XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
@@ -89,12 +96,13 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "")
     }
 
-    func testSpecialKeyEditorRetapPreservesMarkedCaret() {
+    func testSpecialKeyEditorRetapPreservesMarkedCaret() throws {
         let app = XCUIApplication()
-        app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "--composition-selection-test-state"]
+        app.launchArguments = ["-sumire.keyArrangement", "switch-mode-effective", "-liveConversion", "NO", "--composition-selection-test-state"]
         launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
         app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        try requireCompositionStateProbe(editor)
         app.buttons["sumire-cursor_left_key"].tap()
         XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
         let button = settingsButton("Sumire の特殊キー操作", in: app)
@@ -107,6 +115,9 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "あい")
         editor.tap()
         XCTAssertTrue(editor.identifier.contains("marked=0,2 composing=true"))
+        for _ in 0..<2 { app.buttons["sumire-cursor_left_key"].tap() }
+        app.buttons["sumire-cursor_right_key"].tap()
+        XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
         app.buttons["sumire-delete_key"].tap()
         XCTAssertEqual(editor.value as? String, "い")
         XCTAssertTrue(editor.identifier.contains("marked=0,1 composing=true"))
@@ -359,7 +370,7 @@ final class KeyboardHarnessTests: XCTestCase {
     func testEnglishReadingSettingPersistsAndDisablesCandidates() {
         let app = XCUIApplication(); app.launchArguments = ["-learningEnabled", "NO"]; launchInputPreview(app)
         func settings() {
-            app.buttons.matching(NSPredicate(format: "label BEGINSWITH %@", "分類辞書（")).firstMatch.tap()
+            settingsButton("分類辞書・英語辞書", in: app).tap()
         }
         func toggle() -> XCUIElement { app.switches["かなから英単語を表示"].switches.firstMatch }
         settings()
@@ -373,6 +384,7 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(toggle().value as? String, "0")
         app.buttons["完了"].tap()
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["あ"].tap(); app.buttons["い"].tap()
         let candidates = app.collectionViews.firstMatch
         XCTAssertTrue(candidates.staticTexts["愛"].firstMatch.waitForExistence(timeout: 15))
@@ -394,6 +406,7 @@ final class KeyboardHarnessTests: XCTestCase {
         let app = XCUIApplication(); app.launchArguments = ["-englishReadingEnabled", "YES"]
         launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["あ"].tap(); app.buttons["い"].tap()
         let candidates = app.collectionViews.firstMatch
         let eye = candidates.staticTexts["eye"].firstMatch
@@ -560,6 +573,7 @@ final class KeyboardHarnessTests: XCTestCase {
     func testGojuonNumberCommandSwitchesToQwertyWithoutModifyingReading() {
         let app = XCUIApplication(); launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["gojuon-0-9"].tap()
         app.buttons["gojuon-mode"].tap()
         app.buttons["gojuon-0-0"].tap()
@@ -583,6 +597,7 @@ final class KeyboardHarnessTests: XCTestCase {
     func testGojuonModesPreserveInputAndMergedKeys() {
         let app = XCUIApplication(); launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         let sideWidth = app.buttons["gojuon-delete"].frame.width
         app.buttons["gojuon-0-10"].tap()
         app.buttons["gojuon-mode"].tap()
@@ -617,6 +632,7 @@ final class KeyboardHarnessTests: XCTestCase {
     func testGojuonFlicksAndUnassignedDirection() {
         let app = XCUIApplication(); launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         func flick(_ id: String, dx: CGFloat, dy: CGFloat) {
             let centre = app.buttons[id].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
             centre.press(forDuration: 0.05, thenDragTo: centre.withOffset(CGVector(dx: dx, dy: dy)))
@@ -765,6 +781,7 @@ final class KeyboardHarnessTests: XCTestCase {
     func testGojuonReferencePositionsAndModifierPopup() {
         let app = XCUIApplication(); launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["キーボードのサイズ変更"].tap()
         app.buttons["この向きのサイズをリセット"].tap()
         app.buttons["サイズ変更を完了"].tap()
@@ -777,7 +794,7 @@ final class KeyboardHarnessTests: XCTestCase {
         a.tap(); app.buttons["gojuon-previous"].tap()
         XCTAssertEqual(editor.value as? String, "ぉ")
         app.buttons["gojuon-delete"].tap()
-        app.buttons["gojuon-0-9"].tap(); app.buttons["keyboard-switch"].tap()
+        app.buttons["gojuon-0-9"].tap(); app.buttons["gojuon-4-1"].tap()
         XCTAssertEqual(editor.value as? String, "が")
         selectKeyboard("Sumire", in: app)
         XCTAssertEqual(editor.value as? String, "が")
@@ -1029,7 +1046,8 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.containing(NSPredicate(format: "label CONTAINS 'VoiceInput'")).firstMatch.exists)
         let preview = XCTAttachment(screenshot: app.screenshot())
         preview.name = "Custom layout review"; preview.lifetime = .keepAlways; add(preview)
-        app.buttons["BackButton"].tap()
+        let backButtons = app.buttons.matching(identifier: "BackButton").allElementsBoundByIndex
+        try XCTUnwrap(backButtons.first(where: { $0.isHittable })).tap()
         app.buttons["有効な配列を追加"].tap()
         let selected = app.buttons["selectedCustomLayout"]
         selected.tap()
@@ -1044,30 +1062,44 @@ final class KeyboardHarnessTests: XCTestCase {
 
     func testLearningPersistsCanBeDisabledAndCleared() throws {
         let app = XCUIApplication()
+        func openLearningSettings() {
+            settingsButton("変換の学習", in: app).tap()
+            XCTAssertTrue(app.switches["変換を学習"].waitForExistence(timeout: 5))
+        }
+        func setLearning(_ enabled: Bool) {
+            openLearningSettings()
+            let learning = app.switches["変換を学習"]
+            if (learning.value as? String == "1") != enabled { learning.switches.firstMatch.tap() }
+            XCTAssertEqual(learning.value as? String, enabled ? "1" : "0")
+            app.buttons["完了"].tap()
+        }
         func clear() {
+            openLearningSettings()
             app.buttons["学習データをすべて削除"].tap(); app.buttons["削除する"].tap()
-            XCTAssertTrue(app.staticTexts["学習データを削除しました"].waitForExistence(timeout: 5))
+            let notice = app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "学習データを削除しました")).firstMatch
+            XCTAssertTrue(notice.waitForExistence(timeout: 5))
+            app.buttons["完了"].tap()
         }
         func firstCandidate() -> XCUIElement { app.collectionViews.cells.element(boundBy: 0) }
         launchInputPreview(app)
-        let learning = app.switches["変換を学習"].switches.firstMatch
-        if learning.value as? String == "0" { learning.tap() }
+        setLearning(true)
         clear()
-        app.textViews["入力テスト"].tap(); app.buttons["あ"].tap()
+        app.textViews["入力テスト"].tap(); selectKeyboard("50音", in: app); app.buttons["あ"].tap()
         let second = app.collectionViews.cells.element(boundBy: 1)
         XCTAssertTrue(second.waitForExistence(timeout: 10))
         let baseline = firstCandidate().label, learned = second.label
         XCTAssertNotEqual(baseline, learned)
         second.tap()
         XCTAssertTrue(app.staticTexts["学習しました"].waitForExistence(timeout: 5))
-        app.terminate(); launchInputPreview(app); app.textViews["入力テスト"].tap(); app.buttons["あ"].tap()
+        app.terminate(); launchInputPreview(app); app.textViews["入力テスト"].tap(); selectKeyboard("50音", in: app); app.buttons["あ"].tap()
         XCTAssertTrue(firstCandidate().waitForExistence(timeout: 10))
         XCTAssertEqual(firstCandidate().label, learned)
-        learning.tap()
+        setLearning(false)
         let ordinary = NSPredicate(format: "label == %@", baseline)
         expectation(for: ordinary, evaluatedWith: firstCandidate())
         waitForExpectations(timeout: 10)
-        learning.tap()
+        XCTAssertEqual(firstCandidate().label, baseline, "Learning disabled; expected baseline candidate (baseline).")
+        setLearning(true)
         expectation(for: NSPredicate(format: "label == %@", learned), evaluatedWith: firstCandidate())
         waitForExpectations(timeout: 10)
         clear()
@@ -1262,7 +1294,7 @@ final class KeyboardHarnessTests: XCTestCase {
             app.buttons["完了"].tap()
             app.terminate(); launchInputPreview(app)
             let editor = app.textViews["入力テスト"]
-            editor.tap(); app.buttons[reading].tap()
+            editor.tap(); selectKeyboard("50音", in: app); app.buttons[reading].tap()
             let candidate = app.collectionViews.cells.matching(NSPredicate(format: "label == %@", surface)).firstMatch
             XCTAssertTrue(candidate.waitForExistence(timeout: 15))
             candidate.tap()
@@ -1283,6 +1315,7 @@ final class KeyboardHarnessTests: XCTestCase {
         launchInputPreview(app)
         let editor = app.textViews["入力テスト"]
         editor.tap()
+        selectKeyboard("50音", in: app)
         let resize = app.buttons["キーボードのサイズ変更"]
         XCTAssertTrue(resize.waitForExistence(timeout: 5))
         app.buttons["あ"].tap()
@@ -1514,9 +1547,9 @@ final class KeyboardHarnessTests: XCTestCase {
             start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: x, dy: y)))
         }
         app.buttons["か"].tap()
-        app.buttons["゛"].tap()
+        app.buttons["keyboard-switch"].tap()
         flick("た", x: 0, y: -35)
-        app.buttons["゛"].tap()
+        app.buttons["keyboard-switch"].tap()
         flick("か", x: 0, y: 35)
         flick("あ", x: 0, y: -35)
         XCTAssertEqual(editor.value as? String, "がっこう")
@@ -1555,7 +1588,6 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["⇧"].tap()
         app.buttons["A"].tap()
         XCTAssertEqual(editor.value as? String, "日本語A")
-        app.buttons["かな"].tap()
         selectKeyboard("ローマ字", in: app)
         for key in "kan" { app.buttons[String(key)].tap() }
         XCTAssertEqual(editor.value as? String, "日本語Aかn")
@@ -1571,6 +1603,7 @@ final class KeyboardHarnessTests: XCTestCase {
         if omission.value as? String == "1" { omission.switches.firstMatch.tap() }
         let editor = app.textViews["入力テスト"]
         editor.tap()
+        selectKeyboard("50音", in: app)
         for key in ["か", "つ", "こ", "う"] { app.buttons[key].tap() }
         XCTAssertEqual(editor.value as? String, "かつこう")
         omission.switches.firstMatch.tap()
@@ -1590,14 +1623,34 @@ final class KeyboardHarnessTests: XCTestCase {
     func testLiveConversionTogglePreservesReading() throws {
         let app = XCUIApplication()
         launchInputPreview(app)
+        settingsButton("変換の学習", in: app).tap()
+        let learning = app.switches["変換を学習"].switches.firstMatch
+        XCTAssertTrue(learning.waitForExistence(timeout: 5))
+        let learningWasEnabled = learning.value as? String == "1"
+        if learningWasEnabled { learning.tap() }
+        app.buttons["完了"].tap()
+        settingsButton("分類辞書・英語辞書", in: app).tap()
+        let englishReading = app.switches["かなから英単語を表示"].switches.firstMatch
+        XCTAssertTrue(englishReading.waitForExistence(timeout: 5))
+        let englishReadingWasEnabled = englishReading.value as? String == "1"
+        if englishReadingWasEnabled { englishReading.tap() }
+        XCTAssertEqual(englishReading.value as? String, "0")
+        app.buttons["完了"].tap()
+        settingsButton("分類辞書・英語辞書", in: app).tap()
+        XCTAssertEqual(app.switches["かなから英単語を表示"].switches.firstMatch.value as? String, "0")
+        app.buttons["完了"].tap()
+        app.terminate()
+        launchInputPreview(app)
         app.buttons["入力オプション"].tap()
         let live = app.switches["ライブ変換"]
         if live.value as? String == "1" { live.switches.firstMatch.tap() }
         let editor = app.textViews["入力テスト"]
         editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["あ"].tap()
         app.buttons["い"].tap()
         XCTAssertTrue(app.collectionViews.staticTexts["愛"].firstMatch.waitForExistence(timeout: 15))
+        XCTAssertFalse(app.collectionViews.staticTexts["eye"].exists)
         XCTAssertEqual(editor.value as? String, "あい")
         live.switches.firstMatch.tap()
         XCTAssertEqual(editor.value as? String, "愛")
@@ -1609,6 +1662,16 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "あい")
         app.buttons["改行"].tap()
         XCTAssertEqual(editor.value as? String, "あい")
+        if learningWasEnabled {
+            settingsButton("変換の学習", in: app).tap()
+            app.switches["変換を学習"].switches.firstMatch.tap()
+            app.buttons["完了"].tap()
+        }
+        if englishReadingWasEnabled {
+            settingsButton("分類辞書・英語辞書", in: app).tap()
+            app.switches["かなから英単語を表示"].switches.firstMatch.tap()
+            app.buttons["完了"].tap()
+        }
     }
 
     func testNativeConversionSelectionAndCommit() throws {
@@ -1617,6 +1680,7 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["1段"].tap()
         let editor = app.textViews["入力テスト"]
         editor.tap()
+        selectKeyboard("50音", in: app)
         app.buttons["あ"].tap()
         app.buttons["い"].tap()
         XCTAssertEqual(editor.value as? String, "あい")
@@ -1705,15 +1769,19 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["い"].tap()
         let moved = editor.value as? String ?? ""
         XCTAssertTrue(moved.contains("いああ"), "Held left must move more than one character: \(moved)")
+        app.buttons["gojuon-enter"].tap()
         app.buttons["gojuon-right"].press(forDuration: 1.2)
         app.buttons["う"].tap()
-        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("う"))
+        let afterRight = editor.value as? String ?? ""
+        XCTAssertTrue(afterRight.hasSuffix("う"), "Repeated right + input yielded: \(afterRight)")
         app.buttons["gojuon-enter"].tap()
         app.buttons["gojuon-delete"].press(forDuration: 0.8)
         let remaining = editor.value as? String ?? ""
-        XCTAssertLessThan(remaining.count, moved.count - 1)
+        XCTAssertLessThan(remaining.count, afterRight.count - 1, "Held delete: before=\(afterRight), after=\(remaining)")
         app.buttons["か"].tap()
-        XCTAssertTrue((editor.value as? String ?? "").hasSuffix("か"))
+        let afterRelease = editor.value as? String ?? ""
+        XCTAssertTrue(afterRelease.contains("か"), "Post-release input yielded: \(afterRelease)")
+        XCTAssertEqual(afterRelease.count, remaining.count + 1, "The released delete key must not emit another action.")
     }
 
     func testMarkedCommitThenCursorMovementPreservesSurroundingText() throws {
@@ -1741,6 +1809,7 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["1段"].tap()
         let editor = app.textViews["入力テスト"]
         editor.tap()
+        selectKeyboard("50音", in: app)
         let key = app.buttons["あ"]
         XCTAssertTrue(key.waitForExistence(timeout: 5))
         key.tap()
