@@ -1,4 +1,5 @@
 import UIKit
+import SumireCore
 
 /// Tonal palette for the native prototype. Android Material parity remains a separate validation gate.
 struct KeyboardPalette {
@@ -8,11 +9,15 @@ struct KeyboardPalette {
     let accent: UIColor
     let foreground: UIColor
     let accentForeground: UIColor
-    init(hue: CGFloat, dark: Bool) {
-        background = UIColor(hue: hue, saturation: dark ? 0.20 : 0.08, brightness: dark ? 0.14 : 0.94, alpha: 1)
-        key = UIColor(hue: hue, saturation: dark ? 0.15 : 0.025, brightness: dark ? 0.27 : 1, alpha: 1)
-        function = UIColor(hue: hue, saturation: dark ? 0.28 : 0.14, brightness: dark ? 0.36 : 0.86, alpha: 1)
-        accent = UIColor(hue: hue, saturation: 0.5, brightness: dark ? 0.75 : 0.70, alpha: 1)
+    init(hue: CGFloat, dark: Bool, saturation: CGFloat = 0.5, brightness: CGFloat = 0.7) {
+        let tones = KeyboardTheme(hue: Double(hue), saturation: Double(saturation), brightness: Double(brightness)).tones(dark: dark)
+        func color(_ tone: KeyboardThemeTone) -> UIColor {
+            UIColor(hue: tone.hue, saturation: tone.saturation, brightness: tone.brightness, alpha: 1)
+        }
+        background = color(tones.background)
+        key = color(tones.key)
+        function = color(tones.function)
+        accent = color(tones.accent)
         var red: CGFloat = 0, green: CGFloat = 0, blue: CGFloat = 0, alpha: CGFloat = 0
         accent.getRed(&red, green: &green, blue: &blue, alpha: &alpha)
         func linear(_ value: CGFloat) -> CGFloat {
