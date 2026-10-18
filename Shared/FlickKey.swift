@@ -12,6 +12,19 @@ final class FlickKey: UIButton {
     var thresholdShape: FlickThresholdShape = .rectangular
     var resolveDirection: ((Double, Double) -> FlickDirection)?
     var onFlick: ((FlickDirection) -> Void)?
+    /// Set to the keyboard's overlay host, never the app-wide window.
+    weak var popupHost: UIView?
+    var feedbackSettings = TouchFeedbackSettings()
+    /// Only use for an explicitly supported five-direction alternate map.
+    /// TFBI / hierarchical maps need their own controller, not this adapter.
+    var longPressValues: [String]?
+    var onLongPressFlick: ((FlickDirection) -> Void)?
+    private var gestureSettings = TouchFeedbackSettings()
+    private var popup: FlickPopupView?
+    private var holdTimer: Timer?
+    private var selectedDirection: FlickDirection = .tap
+    private var longPressActive = false
+
     private var guides: [UILabel] = []
     private var requestedTitleFont = UIFont.systemFont(ofSize: 24)
     private var requestedGuideFont = UIFont.systemFont(ofSize: 12)
@@ -34,6 +47,10 @@ final class FlickKey: UIButton {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
+        if let host = popupHost, let popup {
+            popup.place(keyRect: convert(bounds, to: host), within: host,
+                        scale: CGFloat(gestureSettings.popupScalePercent / 100))
+        }
         guard bounds.width > 0, bounds.height > 0 else { return }
         if guides.isEmpty {
             // The vertically stacked brackets in 50-on need two full lines.
@@ -88,6 +105,9 @@ final class FlickKey: UIButton {
         return .resolve(dx: point.x - start.x, dy: point.y - start.y, shape: thresholdShape)
     }
     private func restore() {
+        holdTimer?.invalidate(); holdTimer = nil
+        popup?.removeFromSuperview(); popup = nil
+        longPressActive = false
         tracked = nil; isHighlighted = false
         setTitle(restingTitle ?? outputs.first, for: .normal)
         setAttributedTitle(restingAttributedTitle, for: .normal)
@@ -95,18 +115,71 @@ final class FlickKey: UIButton {
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard tracked == nil, let touch = touches.first else { return }
         tracked = touch; start = touch.location(in: window); isHighlighted = true
+        gestureSettings = feedbackSettings.normalized()
+        selectedDirection = .tap
+        updatePopup()
+        scheduleHold()
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = tracked, touches.contains(touch) else { return }
         setAttributedTitle(nil, for: .normal)
-        let index = direction(touch).rawValue
+        let next = direction(touch)
+        if next != selectedDirection {
+            selectedDirection = next
+            longPressActive = false
+            scheduleHold()
+        }
+        let index = next.rawValue
         setTitle(outputs.indices.contains(index) ? outputs[index] : "", for: .normal)
+        updatePopup()
     }
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = tracked, touches.contains(touch) else { return }
-        let selected = direction(touch)
-        restore(); onFlick?(selected)
+        finishActiveFlick()
     }
+    /// Used by the keyboard-wide touch coordinator for the reference's default
+    /// second-finger policy: commit the first key before starting the next.
+    func finishActiveFlick() {
+        guard let touch = tracked else { return }
+        let selected = direction(touch)
+        let useAlternate = longPressActive && selected == selectedDirection
+        restore()
+        if useAlternate { onLongPressFlick?(selected) } else { onFlick?(selected) }
+    }
+    func cancelActiveFlick() { restore() }
+    private func scheduleHold() {
+        holdTimer?.invalidate(); holdTimer = nil
+        let index = selectedDirection.rawValue
+        guard onLongPressFlick != nil, let values = longPressValues,
+              values.indices.contains(index), !values[index].isEmpty else { return }
+        let timer = Timer(timeInterval: Double(gestureSettings.longPressMilliseconds) / 1000, repeats: false) { [weak self] _ in
+            guard let self, self.tracked != nil else { return }
+            self.longPressActive = true
+            self.updatePopup()
+        }
+        holdTimer = timer
+        RunLoop.main.add(timer, forMode: .common)
+    }
+    private func updatePopup() {
+        guard gestureSettings.popupVisible, let host = popupHost, tracked != nil else { return }
+        if popup == nil {
+            let view = FlickPopupView(frame: .zero)
+            host.addSubview(view)
+            popup = view
+        }
+        let values = longPressActive ? (longPressValues ?? outputs) : outputs
+        popup?.update(values: values, selected: selectedDirection.rawValue,
+                      fontSize: CGFloat(gestureSettings.popupTextSize),
+                      background: backgroundColor ?? .secondarySystemBackground,
+                      foreground: titleColor(for: .normal) ?? .label, highlight: tintColor.withAlphaComponent(0.45))
+        popup?.place(keyRect: convert(bounds, to: host), within: host,
+                     scale: CGFloat(gestureSettings.popupScalePercent / 100))
+    }
+    override func willMove(toWindow newWindow: UIWindow?) {
+        if newWindow == nil { restore() }
+        super.willMove(toWindow: newWindow)
+    }
+    deinit { holdTimer?.invalidate(); popup?.removeFromSuperview() }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { restore() }
     override func accessibilityActivate() -> Bool { onFlick?(.tap); return true }
 }
