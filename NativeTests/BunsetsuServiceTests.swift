@@ -5,15 +5,33 @@ import SumireCore
 /// This tests owned metadata, not keyboard rendering or host marked text.
 final class BunsetsuServiceTests: XCTestCase {
     private func convert(_ service: ConversionService, _ reading: String,
-                         generation: UInt64, english: Bool = false) throws -> ConversionResponse {
+                         generation: UInt64, english: Bool = false, includeBunsetsu: Bool = true) throws -> ConversionResponse {
         let completed = expectation(description: "Bunsetsu conversion")
         var response: Result<ConversionResponse, Error>?
-        service.convert(reading, generation: generation, editStart: 0, english: english) {
+        service.convert(reading, generation: generation, editStart: 0, english: english, includeBunsetsu: includeBunsetsu) {
             response = $0
             completed.fulfill()
         }
         wait(for: [completed], timeout: 20)
         return try XCTUnwrap(response).get()
+    }
+
+    func testOptionalMetadataDoesNotChangeCandidateIdentityOrRanking() throws {
+        let service = ConversionService()
+        let reading = "きょうはとうきょうにいきます"
+        let without = try convert(service, reading, generation: 1, includeBunsetsu: false)
+        let with = try convert(service, reading, generation: 2, includeBunsetsu: true)
+        XCTAssertEqual(without.candidates.count, with.candidates.count)
+        XCTAssertTrue(without.candidates.allSatisfy { $0.bunsetsu.isEmpty })
+        XCTAssertFalse(with.candidates.isEmpty)
+        for (plain, detailed) in zip(without.candidates, with.candidates) {
+            XCTAssertEqual(plain.id, detailed.id)
+            XCTAssertEqual(plain.text, detailed.text)
+            XCTAssertEqual(plain.range, detailed.range)
+            XCTAssertEqual(plain.score, detailed.score)
+            XCTAssertEqual(plain.dictionaries, detailed.dictionaries)
+            XCTAssertFalse(detailed.bunsetsu.isEmpty)
+        }
     }
 
     func testWholeCandidatePathRemainsOwnedAfterSnapshotAndSessionRelease() throws {

@@ -81,7 +81,7 @@ final class ConversionService {
         let state = state
         queue.async { state.learningURL = url; state.learning = nil; state.learningFailure = nil }
     }
-    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
+    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false, includeBunsetsu: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directory = directory, mask = categoryMask, englishReading = englishReadingEnabled
         let pending = pending, ticket = pending.advance()
@@ -115,31 +115,36 @@ final class ConversionService {
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
-                        tokens.append(BunsetsuToken(
-                            readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
-                            text: Self.copy(segment.text)))
+                        if includeBunsetsu {
+                            tokens.append(BunsetsuToken(
+                                readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
+                                text: Self.copy(segment.text)))
+                        }
                         let name = Self.copy(segment.dictionary)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
                     }
-                    var boundaries: [Int] = []
-                    for boundaryIndex in 0..<sumire_result_bunsetsu_count(result, index) {
-                        var offset: UInt32 = 0
-                        guard sumire_result_bunsetsu_boundary(result, index, boundaryIndex, &offset) == 0 else {
-                            throw NativeError("文節の範囲が不正です")
-                        }
-                        boundaries.append(Int(offset))
-                    }
                     let text = Self.copy(candidate.text)
                     let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
-                    guard range.location == 0, let consumedRange = Range(range, in: reading) else {
-                        throw NativeError("候補の読み範囲が不正です")
+                    var bunsetsu: [BunsetsuSegment] = []
+                    if includeBunsetsu {
+                        var boundaries: [Int] = []
+                        for boundaryIndex in 0..<sumire_result_bunsetsu_count(result, index) {
+                            var offset: UInt32 = 0
+                            guard sumire_result_bunsetsu_boundary(result, index, boundaryIndex, &offset) == 0 else {
+                                throw NativeError("文節の範囲が不正です")
+                            }
+                            boundaries.append(Int(offset))
+                        }
+                        guard range.location == 0, let consumedRange = Range(range, in: reading) else {
+                            throw NativeError("候補の読み範囲が不正です")
+                        }
+                        // Partial matches project only their consumed prefix. A completion
+                        // spans the typed prefix, not the longer predicted reading.
+                        // All text is owned before the native snapshot is destroyed.
+                        bunsetsu = try BunsetsuProjection.project(
+                            reading: String(reading[consumedRange]), candidate: text,
+                            tokens: tokens, boundaries: boundaries)
                     }
-                    // Partial matches project only their consumed prefix. A completion
-                    // has one whole surface token spanning the typed prefix, not the
-                    // longer predicted reading. No C pointer escapes this closure.
-                    let bunsetsu = try BunsetsuProjection.project(
-                        reading: String(reading[consumedRange]), candidate: text,
-                        tokens: tokens, boundaries: boundaries)
                     candidates.append(ConversionCandidate(id: candidate.candidate_id, text: text,
                                                           score: candidate.score, range: range,
                                                           dictionaries: dictionaries, bunsetsu: bunsetsu))
