@@ -106,13 +106,26 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .licenses: return "doc.text"
         }
     }
+    private var searchTerms: String {
+        switch self {
+        case .keyboards: return "テンキー TenKey QWERTY 50音 五十音 Sumire 配列"
+        case .customKeyboard: return "カスタム 配列 編集 JSON"
+        case .appearance: return "フォント ガイド フリック 通常キー 特殊キー 大きさ"
+        case .theme: return "マテリアル Material ライト ダーク 色"
+        case .symbols: return "絵文字 顔文字 記号 肌色 履歴 clipboard"
+        case .setup: return "フルアクセス App Groups 有効化 設定共有"
+        case .backup: return "インポート エクスポート 保存 復元"
+        default: return ""
+        }
+    }
     func matches(_ query: String) -> Bool {
-        [title, subtitle, category.title].contains { $0.localizedStandardContains(query) }
+        [title, subtitle, category.title, searchTerms].contains { $0.localizedStandardContains(query) }
     }
 }
 
 struct SettingsDashboardView: View {
     let sharingAvailable: Bool
+    let hasDataNotice: Bool
     let openPreview: () -> Void
     let open: (SettingsDestination) -> Void
     @State private var query = ""
@@ -135,14 +148,22 @@ struct SettingsDashboardView: View {
                         }
                         .foregroundStyle(.white).padding(20)
                         .frame(maxWidth: .infinity, minHeight: 72, alignment: .leading)
-                        .background(LinearGradient(colors: [.purple, Color(red: 0.38, green: 0.25, blue: 0.64)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 24))
+                        .background(LinearGradient(colors: [Color(red: 0.48, green: 0.29, blue: 0.70), Color(red: 0.38, green: 0.25, blue: 0.64)], startPoint: .topLeading, endPoint: .bottomTrailing), in: RoundedRectangle(cornerRadius: 24))
                     }
                     .buttonStyle(.plain).accessibilityIdentifier("settings-preview")
                     Button { open(.setup) } label: {
-                        Label(sharingAvailable ? "設定の共有先を確認" : "設定の共有は未設定です", systemImage: sharingAvailable ? "checkmark.circle" : "info.circle")
-                            .font(.subheadline).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        Label(sharingAvailable ? "設定の共有先を確認" : "設定を共有できません", systemImage: sharingAvailable ? "checkmark.circle" : "info.circle")
+                            .font(.subheadline).foregroundStyle(.primary).frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
                     }
                     .accessibilityIdentifier("settings-sharing-status")
+                    if hasDataNotice {
+                        Button { open(.setup) } label: {
+                            Label("保存データの状態を確認", systemImage: "exclamationmark.circle")
+                                .font(.subheadline).foregroundStyle(.primary)
+                                .frame(maxWidth: .infinity, minHeight: 44, alignment: .leading)
+                        }
+                        .accessibilityIdentifier("settings-data-notice")
+                    }
                     ForEach(SettingsCategory.allCases) { category in
                         NavigationLink(value: category) {
                             HStack(alignment: .center, spacing: 16) {

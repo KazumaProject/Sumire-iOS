@@ -10,7 +10,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
     func testTabsAndClosePreserveCompositionAndUnderlyingKeyboard() {
         let app = XCUIApplication()
         app.launchArguments = ["-symbol.initialMode", "emoji"]
-        app.launch()
+        launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap(); chooseGojuon(app)
         app.buttons["あ"].tap(); app.buttons["い"].tap()
         app.buttons["gojuon-symbols"].tap()
@@ -29,7 +29,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
     func testSkinTonePopupInsertsChosenVariantAndUpdatesDefault() {
         let app = XCUIApplication()
         app.launchArguments = ["-symbol.initialMode", "emoji"]
-        app.launch()
+        launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
         app.buttons["symbol-open"].tap()
         app.buttons["symbol-category-PEOPLE_BODY"].tap()
@@ -48,7 +48,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
     func testExplicitClipboardCaptureCreatesHistoryAndPastesText() {
         let app = XCUIApplication()
         app.launchArguments = ["--clipboard-test-text", "-symbol.initialMode", "clipboard", "-clipboard.historyEnabled", "YES", "-clipboardAutomaticPreview", "NO"]
-        app.launch()
+        launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap()
         app.buttons["symbol-open"].tap()
         let load = app.buttons["symbol-clipboard-load"]
@@ -62,7 +62,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         content.press(forDuration: 0.8)
         let pin = app.buttons["ピン留め"]
         XCTAssertTrue(pin.waitForExistence(timeout: 3)); pin.tap()
-        app.terminate(); app.launch()
+        app.terminate(); launchInputPreview(app)
         editor.tap(); app.buttons["symbol-open"].tap()
         let restored = app.descendants(matching: .any)[savedID].firstMatch
         XCTAssertTrue(restored.waitForExistence(timeout: 5))
@@ -80,7 +80,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
     func testClipboardImageHistoryOffDisappearsAfterRestart() {
         let app = XCUIApplication()
         app.launchArguments = ["--clipboard-test-image", "-symbol.initialMode", "clipboard", "-clipboard.historyEnabled", "NO", "-clipboardAutomaticPreview", "NO"]
-        app.launch()
+        launchInputPreview(app)
         app.textViews["入力テスト"].tap()
         app.buttons["symbol-open"].tap()
         let load = app.buttons["symbol-clipboard-load"]
@@ -92,7 +92,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         current.tap()
         XCTAssertTrue(app.staticTexts["画像をコピーしました。入力先の貼り付けメニューから挿入してください"].waitForExistence(timeout: 3))
         XCTAssertEqual(app.textViews["入力テスト"].value as? String, "")
-        app.terminate(); app.launch()
+        app.terminate(); launchInputPreview(app)
         app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
         XCTAssertTrue(app.collectionViews["symbol-items"].waitForExistence(timeout: 5))
         XCTAssertFalse(current.exists)
@@ -102,7 +102,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
     func testSavedClipboardImageRestoresAfterRestartAndDeletes() {
         let app = XCUIApplication()
         app.launchArguments = ["--clipboard-test-image", "-symbol.initialMode", "clipboard", "-clipboard.historyEnabled", "YES", "-clipboardAutomaticPreview", "NO"]
-        app.launch()
+        launchInputPreview(app)
         app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
         let load = app.buttons["symbol-clipboard-load"]
         XCTAssertTrue(load.waitForExistence(timeout: 5)); load.tap()
@@ -111,7 +111,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         let image = app.collectionViews["symbol-items"].descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像")).firstMatch
         XCTAssertTrue(image.waitForExistence(timeout: 8))
         let savedID = image.identifier
-        app.terminate(); app.launch()
+        app.terminate(); launchInputPreview(app)
         app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
         let restored = app.descendants(matching: .any)[savedID].firstMatch
         XCTAssertTrue(restored.waitForExistence(timeout: 5)); restored.tap()
@@ -133,10 +133,10 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         let data = try JSONSerialization.data(withJSONObject: payload)
         let argument = "<" + data.map { String(format: "%02x", $0) }.joined() + ">"
         app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "-sumire.specialKeyActions", argument]
-        app.launch()
+        launchInputPreview(app)
         let editor = app.textViews["入力テスト"]; editor.tap(); chooseGojuon(app)
         app.buttons["あ"].tap(); app.buttons["い"].tap()
-        app.buttons["keyboard-switch"].press(forDuration: 0.8); app.buttons["Sumire"].tap()
+        app.buttons["keyboard-switch"].press(forDuration: 0.8); app.collectionViews.buttons["Sumire"].tap()
         let paste = app.buttons["sumire-paste_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
         paste.press(forDuration: 0.05, thenDragTo: paste.withOffset(CGVector(dx: 0, dy: -45)))
         XCTAssertTrue(app.collectionViews["symbol-items"].waitForExistence(timeout: 5))

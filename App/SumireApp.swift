@@ -32,7 +32,7 @@ struct HomeView: View {
     @State private var showPreview = false
     var body: some View {
         NavigationStack {
-            SettingsDashboardView(sharingAvailable: KeyboardSettings.sharedDefaults != nil,
+            SettingsDashboardView(sharingAvailable: KeyboardSettings.sharedDefaults != nil, hasDataNotice: personalLibrary.notice != nil,
                                   openPreview: { showPreview = true }, open: { destination = $0 })
                 .navigationDestination(isPresented: $showPreview) { preview }
         }
@@ -69,11 +69,12 @@ struct HomeView: View {
                         Section(category.title) {
                             ForEach(SettingsDestination.allCases.filter { $0.category == category }) { item in
                                 Button(item.title, systemImage: item.icon) { destination = item }
+                                    .accessibilityLabel(item.title)
                             }
                         }
                     }
                 } label: { Label("設定", systemImage: "slider.horizontal.3") }
-                .accessibilityIdentifier("preview-settings")
+                .accessibilityIdentifier("preview-settings").accessibilityLabel("設定")
             }
         }
     }
@@ -145,6 +146,10 @@ struct HomeView: View {
                          ? "共有領域にアクセスできません。設定はこのアプリ内に保存しています。キーボード拡張への設定共有はまだ成立していません。"
                          : "共有領域にアクセスできます。キーボード拡張からの利用にはフルアクセスが必要です。入力先で設定が反映されることを確認してください。")
                         .accessibilityIdentifier("sharing-status-detail")
+                    if KeyboardSettings.sharedDefaults == nil {
+                        Text("開発用ビルドではApp Groupsの権限と署名プロファイルの設定が必要です。このアプリから署名の設定を変更することはできません。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
                 }
                 Section("キーボードを有効にする") {
                     Text("iOSの「設定」→「一般」→「キーボード」→「キーボード」→「新しいキーボードを追加」からSumireを選びます。")

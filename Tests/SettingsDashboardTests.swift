@@ -4,6 +4,8 @@ final class SettingsDashboardTests: XCTestCase {
     func testCategoriesAndSharingDetailsUseVisibleNavigation() {
         let app = XCUIApplication(); app.launch()
         XCTAssertTrue(app.buttons["settings-preview"].waitForExistence(timeout: 5))
+        let screenshot = XCTAttachment(screenshot: app.screenshot())
+        screenshot.name = "Sumire settings dashboard"; screenshot.lifetime = .keepAlways; add(screenshot)
         app.buttons["settings-sharing-status"].tap()
         XCTAssertTrue(app.staticTexts["キーボードの準備と共有"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.staticTexts["sharing-status-detail"].exists)
@@ -19,7 +21,7 @@ final class SettingsDashboardTests: XCTestCase {
     func testSearchOpensThemeAndReportsNoResults() {
         let app = XCUIApplication(); app.launch()
         let search = app.searchFields.firstMatch
-        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("配色")
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Material")
         let theme = app.buttons["settings-destination-theme"]
         XCTAssertTrue(theme.waitForExistence(timeout: 3)); theme.tap()
         XCTAssertTrue(app.otherElements["theme-settings"].waitForExistence(timeout: 3) || app.buttons["theme-seed-color"].exists)
@@ -33,7 +35,10 @@ final class SettingsDashboardTests: XCTestCase {
     func testPreviewRowsAndThemeKeepUncommittedInput() {
         let app = XCUIApplication(); app.launchArguments = ["-liveConversion", "NO"]
         app.launch(); app.buttons["settings-preview"].tap()
-        let editor = app.textViews["入力テスト"]; XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.tap()
+        let editor = app.textViews["入力テスト"]; XCTAssertTrue(editor.waitForExistence(timeout: 5))
+        app.buttons["入力オプション"].tap()
+        XCTAssertTrue(app.switches["ライブ変換"].exists)
+        app.buttons["入力オプション"].tap(); editor.tap()
         app.buttons["keyboard-switch"].press(forDuration: 0.8); app.buttons["50音"].tap()
         app.buttons["あ"].tap(); app.buttons["い"].tap()
         app.buttons["3段"].tap(); XCTAssertEqual(editor.value as? String, "あい")
