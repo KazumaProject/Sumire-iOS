@@ -3,11 +3,18 @@
 Usage: test_real_assets.py CLI GENERATED_DIR ANDROID_REFERENCE
 This is data/CLI verification, not Android application candidate parity.
 """
-import array, importlib.util, json, pathlib, struct, subprocess, sys, zipfile
+import array, hashlib, importlib.util, json, pathlib, struct, subprocess, sys, zipfile
 sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location('builder',pathlib.Path(__file__).resolve().parents[2]/'Scripts/build_dictionary.py')
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
-cli,data,source=sys.argv[1:];data=pathlib.Path(data);assets=pathlib.Path(source)/'app/src/main/assets'
+cli,data,source=sys.argv[1:];data=pathlib.Path(data);source=pathlib.Path(source);assets=source/'app/src/main/assets'
+manifest=json.loads((data/'manifest.json').read_text())
+revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+assert revision==b.REVISION==manifest['source_revision'], (revision,b.REVISION,manifest['source_revision'])
+source_files=['pos_table.dat','connectionId.dat.zip']+[f'{directory}/{filename}.dat.zip' for directory in ['system']+['categories/'+name for name in b.CATEGORIES] for filename in ['yomi','tango','token']]
+for name in source_files:
+    actual=hashlib.sha256((assets/name).read_bytes()).hexdigest()
+    assert manifest['asset_sha256'].get(name)==actual, name
 def raw(path):
     with zipfile.ZipFile(path) as z:return z.read(z.namelist()[0])
 def tree_parent(lbs,labels):
