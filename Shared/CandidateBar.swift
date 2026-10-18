@@ -5,6 +5,7 @@ import UniformTypeIdentifiers
 /// Horizontally scrolling, reusable candidate cells. No mock conversion candidates.
 final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     var onExpand: (() -> Void)?
+    var onDisplayedHeightChange: ((CGFloat) -> Void)?
     private let expand = UIButton(type: .system)
     private var collectionTrailing: NSLayoutConstraint!
     private var expanded = false
@@ -125,7 +126,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         didSet {
             guard showsShortcuts != oldValue else { return }
             clipboardRequest = UUID()
+            let previousHeight = CGFloat(oldValue ? 1 : rowCount) * 44
             height.constant = displayedHeight
+            if previousHeight != displayedHeight { onDisplayedHeightChange?(displayedHeight) }
             collection.isHidden = showsShortcuts
             resize.isHidden = !showsShortcuts
             symbols.isHidden = !showsShortcuts
@@ -164,14 +167,16 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             updateExpansionButton()
         }
     }
-    var rowCount = 1 {
-        didSet {
-            let count = min(3, max(1, rowCount))
-            if rowCount != count {
-                rowCount = count
-                return
-            }
+    private var storedRowCount = 1
+    var rowCount: Int {
+        get { storedRowCount }
+        set {
+            let count = min(3, max(1, newValue))
+            guard storedRowCount != count else { return }
+            let previousHeight = displayedHeight
+            storedRowCount = count
             height.constant = displayedHeight
+            if previousHeight != displayedHeight { onDisplayedHeightChange?(displayedHeight) }
             (collection.collectionViewLayout as? CandidateRowsLayout)?.setRowCount(count)
         }
     }
