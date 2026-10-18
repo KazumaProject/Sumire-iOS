@@ -88,6 +88,7 @@ struct HomeView: View {
         case .touchFeedback: detail(title: item.title) { TouchFeedbackSettingsView() }
         case .appearance: KeyAppearanceSettings()
         case .theme: detail(title: item.title) { ThemeSettingsView() }
+        case .dictionaryBrowser: detail(title: item.title) { DictionaryBrowserView() }
         case .personalDictionary: PersonalDictionarySettings(library: personalLibrary)
         case .dictionaries: DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled)
         case .symbols: SymbolKeyboardSettings()
