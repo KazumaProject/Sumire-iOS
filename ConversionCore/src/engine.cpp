@@ -499,20 +499,30 @@ Workspace::~Workspace() = default;
 void Workspace::purge() noexcept { impl->purge(); }
 size_t Workspace::retained_bytes() const noexcept { return impl->bytes(); }
 
-static void rank_primary(std::vector<Candidate> &candidates) {
+static void rank_primary(std::vector<Candidate> &candidates,
+                         size_t limit = std::numeric_limits<size_t>::max()) {
   std::vector<std::u16string> surfaces;
   surfaces.reserve(candidates.size());
   for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
   std::vector<size_t> order(candidates.size());
   std::iota(order.begin(), order.end(), 0);
-  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+  const auto less = [&](size_t a, size_t b) {
     if (candidates[a].standalone_unigram_matched != candidates[b].standalone_unigram_matched)
       return candidates[a].standalone_unigram_matched;
     if (candidates[a].score != candidates[b].score) return candidates[a].score < candidates[b].score;
-    return surfaces[a] < surfaces[b]; // Kotlin String.compareTo uses UTF-16.
-  });
+    if (surfaces[a] != surfaces[b])
+      return surfaces[a] < surfaces[b]; // Kotlin String.compareTo uses UTF-16.
+    // Reproduce stable_sort's original-order behavior if two entries compare
+    // equal, while making the comparator total for nth_element.
+    return a < b;
+  };
+  if (limit < order.size()) {
+    std::nth_element(order.begin(), order.begin() + limit, order.end(), less);
+    order.resize(limit);
+  }
+  std::sort(order.begin(), order.end(), less);
   std::vector<Candidate> ranked;
-  ranked.reserve(candidates.size());
+  ranked.reserve(order.size());
   for (auto index : order) ranked.push_back(std::move(candidates[index]));
   candidates = std::move(ranked);
 }
@@ -539,6 +549,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   using Node = Workspace::Impl::Node;
   auto &nodes = work.nodes;
   auto &at = work.at;
+  std::vector<size_t> exactCategoryNodes;
   at.resize(reading.size() + 1);
   const auto &conn = impl->connection;
   require((!personal || personal->context_count == conn.n) &&
@@ -564,8 +575,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     auto add = [&](Node node) {
       require(nodes.size() < 2000000,
               "lattice limit exceeded (input not truncated)");
-      at[i].push_back(nodes.size());
+      const size_t id = nodes.size();
+      at[i].push_back(id);
       nodes.push_back(node);
+      if (node.start == 0 && node.end == reading.size() && node.dict &&
+          node.dict != impl->dictionaries.front().get() && !node.correctedNode)
+        exactCategoryNodes.push_back(id);
     };
     auto &cached = work.search_rows[i];
     if (compatible && cached.horizon && (same || cached.horizon <= common)) {
@@ -723,18 +738,15 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                  nodes[id].cost);
   }
   if (result.candidates.size() > count) {
-    rank_primary(result.candidates);
-    result.candidates.resize(count);
+    rank_primary(result.candidates, count);
   }
   seen.clear();
   std::unordered_map<std::string, size_t> primary;
   for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
   // Category exact matches are independent of the N-best search limit. Keep
   // every homophone, but merge duplicate origins without fabricating segments.
-  for (size_t id : at[0]) {
+  for (size_t id : exactCategoryNodes) {
     const auto &node = nodes[id];
-    if (!node.dict || node.dict == impl->dictionaries.front().get() ||
-        node.end != reading.size() || node.correctedNode) continue;
     Candidate exact;
     exact.text = node.dict->surface(node.token, reading, 0, reading.size());
     exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);

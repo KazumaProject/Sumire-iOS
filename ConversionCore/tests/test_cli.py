@@ -113,6 +113,19 @@ class Tests(unittest.TestCase):
         large=json.loads(self.run_cli('--nbest','100','しろ').stdout)['candidates']
         self.assertEqual(len(large),100)  # Safety lookahead must not cap N at64.
         self.assertEqual(large[0]['text'],'しろ')
+    def test_oversampled_primary_top_k_preserves_utf16_tie_order(self):
+        surfaces=['\ue000','𐀀','Ω','𐀁']
+        entries=[('あ',surface,1,0) for surface in surfaces]+[('あ','あ',1,30000)]
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['あ'])
+
+        candidates=json.loads(self.run_cli('--nbest','4','あ').stdout)['candidates']
+
+        # The old stable full sort orders by UTF-16 (Kotlin String order):
+        # supplementary U+10000/U+10001 precede BMP private-use U+E000.
+        self.assertEqual([candidate['text'] for candidate in candidates],['あ','Ω','𐀀','𐀁'])
+        self.assertTrue(candidates[0]['standalone_unigram_matched'])
+        self.assertTrue(all(not candidate['standalone_unigram_matched'] for candidate in candidates[1:]))
     def test_corrupt_standalone_fails_closed_but_disabled_table_is_not_opened(self):
         standalone(self.data/'standalone.sud',['しろ'])
         path=self.data/'standalone.sud';good=path.read_bytes()
