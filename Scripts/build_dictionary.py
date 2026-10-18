@@ -1,0 +1,196 @@
+#!/usr/bin/env python3
+"""Convert pinned Android assets; no Java runtime or general object deserialization.
+Only primitive arrays and java.util.BitSet are accepted. Output is immutable.
+"""
+import argparse, array, collections, hashlib, json, math, pathlib, shutil, struct, subprocess, sys, tempfile, zipfile, zlib
+
+REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
+CATEGORIES = 'address agreement award character event facility initiative kampo lineage medical mythological_figure organization person place product station term transport_route vehicle work_anime work_book work_film work_franchise work_game work_manga work_music work_other work_periodical work_program work_stage'.split()
+
+class JavaArrays:
+    def __init__(self, data):
+        self.data, self.p, self.refs = data, 0, []
+        if self.take(4) != b'\xac\xed\x00\x05': raise ValueError('not a Java array stream')
+    def take(self, n):
+        if n < 0 or n > len(self.data)-self.p: raise ValueError('truncated stream')
+        b=self.data[self.p:self.p+n]; self.p+=n; return b
+    def num(self, f): return struct.unpack('>'+f, self.take(struct.calcsize('>'+f)))[0]
+    def utf(self): return self.take(self.num('H')).decode('utf-8')
+    def ref(self):
+        n=self.num('I')-0x7e0000
+        if not 0 <= n < len(self.refs): raise ValueError('invalid handle')
+        return self.refs[n]
+    def desc(self):
+        t=self.num('B')
+        if t==0x70: return None
+        if t==0x71: return self.ref()
+        if t!=0x72: raise ValueError('unsupported class descriptor')
+        name=self.utf(); self.take(8)
+        if name not in ('[S','[I','[J','[C','java.util.BitSet'): raise ValueError('unsupported class '+name)
+        d={'name':name};self.refs.append(d)
+        flags=self.num('B'); count=self.num('H'); fields=[]
+        for _ in range(count):
+            typ=chr(self.num('B')); field=self.utf()
+            if typ in '[L': self.obj()
+            fields.append((typ,field))
+        if self.num('B')!=0x78 or self.desc() is not None: raise ValueError('unsupported class annotations/superclass')
+        if name=='java.util.BitSet':
+            if flags!=3 or fields!=[('[','bits')]: raise ValueError('invalid BitSet descriptor')
+        elif flags!=2 or fields: raise ValueError('invalid array descriptor')
+        return d
+    def obj(self):
+        t=self.num('B')
+        if t==0x71: return self.ref()
+        if t==0x74:
+            s=self.utf()
+            if s!='[J': raise ValueError('unsupported string')
+            self.refs.append(s); return s
+        if t==0x75:
+            d=self.desc();i=len(self.refs);self.refs.append(None);n=self.num('i')
+            code={'[S':'h','[I':'i','[J':'q','[C':'H'}[d['name']]
+            a=array.array(code); a.frombytes(self.take(n*a.itemsize))
+            if sys.byteorder=='little':a.byteswap()
+            self.refs[i]=a;return a
+        if t==0x73:
+            d=self.desc()
+            if d['name']!='java.util.BitSet':raise ValueError('only BitSet objects supported')
+            i=len(self.refs);self.refs.append(None);a=self.obj()
+            if not isinstance(a,array.array) or a.typecode!='q' or self.num('B')!=0x78:raise ValueError('invalid BitSet')
+            self.refs[i]=a;return a
+        raise ValueError('unsupported serialization tag '+hex(t))
+    def all(self,n):
+        values=[self.obj() for _ in range(n)]
+        if self.p!=len(self.data):raise ValueError('trailing serialization data')
+        return values
+
+def le(a):
+    b=array.array(a.typecode,a)
+    if sys.byteorder!='little':b.byteswap()
+    return b.tobytes()
+
+def pack_file(path,kind,dimension,sections):
+    header=struct.pack('<8sIIII',b'SUMIRE01',1,kind,len(sections),dimension)
+    offset=24+24*len(sections);payload=bytearray();desc=[]
+    for s in sections:
+        padding=(-offset)%8;payload.extend(bytes(padding));offset+=padding
+        desc.append(struct.pack('<QQII',offset,len(s),zlib.crc32(s),0));payload.extend(s);offset+=len(s)
+    path.write_bytes(header+b''.join(desc)+payload)
+
+class Bits:
+    def __init__(self,a):
+        self.a=[x & ((1<<64)-1) for x in a];self.prefix=[0]
+        for x in self.a:self.prefix.append(self.prefix[-1]+x.bit_count())
+    def rank(self,p):
+        if p<0:return 0
+        w,b=divmod(p,64)
+        if w>=len(self.a):return self.prefix[-1]
+        return self.prefix[w]+(self.a[w]&((1<<(b+1))-1)).bit_count()
+    def ones(self):
+        for i,x in enumerate(self.a):
+            while x:
+                low=x&-x;yield i*64+low.bit_length()-1;x^=low
+
+def build(source,output,english_reading=False,english=False):
+    if output.exists():raise ValueError('output already exists; choose a new generation directory')
+    assets=source/'app/src/main/assets'
+    revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
+    if revision!=REVISION:raise ValueError('reference revision differs from pinned revision')
+    dictionary_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
+    if english_reading:dictionary_sources['english_reading']='english_reading'
+    paths=['pos_table.dat','connectionId.dat.zip']+[f'{d}/{f}.dat.zip' for d in dictionary_sources.values() for f in ['yomi','tango','token']]
+    if english:
+        dictionary_sources['english']='english'
+        paths += ['english/reading.dat.zip','english/word.dat','english/token.dat.zip']
+    # Refuse locally modified shipped assets, even when HEAD still matches.
+    subprocess.run(['git','-C',str(source),'diff','--exit-code','HEAD','--']+['app/src/main/assets/'+p for p in paths],check=True,stdout=subprocess.DEVNULL)
+    hashes={}
+    def read(name):
+        raw=(assets/name).read_bytes();hashes[name]=hashlib.sha256(raw).hexdigest()
+        if not name.endswith('.zip'):return raw
+        with zipfile.ZipFile(assets/name) as z:
+            files=z.infolist()
+            if name in ('english/reading.dat.zip','english/token.dat.zip'):
+                expected=pathlib.PurePosixPath(name).name.removesuffix('.zip')
+                allowed={expected,'__MACOSX/._'+expected}
+                if len({f.filename for f in files})!=len(files) or any(f.filename not in allowed or f.file_size>256*1024*1024 for f in files):raise ValueError('invalid English archive')
+                files=[f for f in files if f.filename==expected]
+            if len(files)!=1 or files[0].file_size>256*1024*1024:raise ValueError('invalid archive')
+            return z.read(files[0])
+    left,right=JavaArrays(read('pos_table.dat')).all(2)
+    matrix=array.array('h');matrix.frombytes(read('connectionId.dat.zip'))
+    if sys.byteorder=='little':matrix.byteswap()
+    n=math.isqrt(len(matrix))
+    if n*n!=len(matrix) or len(left)!=len(right) or any(v<0 or v>=n for v in left+right):raise ValueError('invalid POS/matrix')
+    output.parent.mkdir(parents=True,exist_ok=True)
+    with tempfile.TemporaryDirectory(dir=output.parent,prefix='.sumire-') as tmp:
+        dest=pathlib.Path(tmp);defaults=array.array('h');bits=array.array('Q');values=array.array('h');starts=array.array('I',[0]);ranks=array.array('H')
+        for row in range(n):
+            costs=matrix[row*n:(row+1)*n];default=collections.Counter(costs).most_common(1)[0][0];defaults.append(default);rank=0
+            for start in range(0,n,64):
+                ranks.append(rank);word=0
+                for j,v in enumerate(costs[start:start+64]):
+                    if v!=default:word|=1<<j;values.append(v);rank+=1
+                bits.append(word)
+            starts.append(len(values))
+        pack_file(dest/'connection.sud',2,n,[le(a) for a in [left,right,defaults,bits,values,starts,ranks]])
+        summary={}
+        for name,prefix in dictionary_sources.items():
+            if name=='english':
+                lbs,leaf,labels,terms=JavaArrays(read('english/reading.dat.zip')).all(4)
+                tlbs,tleaf,tlabels=JavaArrays(read('english/word.dat')).all(3)
+                cost,node,post=JavaArrays(read('english/token.dat.zip')).all(3)
+                # English has no Japanese POS. This placeholder is never used for
+                # connection scoring; English lookups use the stored word cost.
+                pos=array.array('h',[0])*len(cost)
+                if any(p < -1 for p in node):raise ValueError('invalid English surface sentinel')
+                node=array.array('i',(-2 if p==-1 else p for p in node))
+            else:
+                lbs,leaf,labels,terms=JavaArrays(read(prefix+'/yomi.dat.zip')).all(4)
+                tlbs,tleaf,tlabels=JavaArrays(read(prefix+'/tango.dat.zip')).all(3)
+                pos,cost,node,post=JavaArrays(read(prefix+'/token.dat.zip')).all(4)
+            if not len(pos)==len(cost)==len(node) or any(p<0 or p>=len(left) for p in pos):raise ValueError('invalid tokens')
+            tb=Bits(tlbs);parent=array.array('I',[0])*len(tlabels)
+            for index,p in enumerate(tb.ones(),1):
+                if index>=len(parent):raise ValueError('invalid surface trie')
+                parent[index]=p+1-index
+            cache={};surface_ids={};offsets=array.array('I',[0]);blob=bytearray();refs=array.array('I')
+            for p in node:
+                if p in (-1,-2):refs.append(p&0xffffffff);continue
+                if p<0 or tb.rank(p)==tb.rank(p-1):raise ValueError('invalid surface node')
+                if p not in cache:
+                    i=tb.rank(p);chars=[]
+                    while i>1:
+                        chars.append(tlabels[i]);previous=parent[i]
+                        if previous>=i:raise ValueError('surface cycle')
+                        i=previous
+                    a=array.array('H',reversed(chars));s=le(a).decode('utf-16-le').encode('utf-8')
+                    if s not in surface_ids:surface_ids[s]=len(offsets)-1;blob.extend(s);offsets.append(len(blob))
+                    cache[p]=surface_ids[s]
+                refs.append(cache[p])
+            # Term IDs are one-based indexes into zero-delimited postings.
+            pb=Bits(post);postings=array.array('I',[0]);ones=0
+            for p in range(len(post)*64):
+                if (pb.a[p//64]>>(p%64))&1:ones+=1
+                else:postings.append(ones)
+                if ones==len(pos):break
+            postings.append(ones)
+            if min(terms,default=1)<1 or max(terms,default=0)+1>=len(postings):raise ValueError('invalid term IDs')
+            if Bits(leaf).prefix[-1]!=len(terms) or Bits(lbs).prefix[-1]+1!=len(labels):raise ValueError('invalid reading trie')
+            pack_file(dest/(name+'.sud'),1,0,[le(a) for a in [lbs,labels,leaf,terms,postings,pos,cost,refs,offsets]]+[bytes(blob)])
+            summary[name]={'entries':len(pos),'readings':len(terms),'bytes':(dest/(name+'.sud')).stat().st_size}
+            print(name,summary[name],file=sys.stderr,flush=True)
+        shutil.copytree(assets/'licenses',dest/'licenses')
+        shutil.copy2(source/'LICENSE',dest/'SOURCE-LICENSE')
+        manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Lossless array and surface re-encoding; connection row defaults plus exact exceptions. See copied licenses for data terms.'}
+        manifest['output_sha256']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.glob('*.sud')}
+        (dest/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
+        # Rename a complete generation only; never replace an existing generation.
+        dest.rename(output)
+
+if __name__=='__main__':
+    ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--source',type=pathlib.Path,default=pathlib.Path(__file__).resolve().parents[1]/'.reference/JapaneseKeyboard');ap.add_argument('--output',type=pathlib.Path,required=True)
+    ap.add_argument('--english-reading',action='store_true',help='Include the optional kana-to-English dictionary (separate from the 30 categories)')
+    ap.add_argument('--english',action='store_true',help='Include the optional English word dictionary')
+    args=ap.parse_args()
+    try:build(args.source.resolve(),args.output.resolve(),args.english_reading,args.english)
+    except (ValueError,OSError,subprocess.CalledProcessError,zipfile.BadZipFile) as e:ap.exit(1,str(e)+'\n')
