@@ -21,6 +21,19 @@ final class ReferenceFlickMapsTests: XCTestCase {
         three.begin(at: .init(0, 0), configuration: config); three.move(to: .init(-40, 0)); three.move(to: .init(0, -60)); three.move(to: .init(-60, -100))
         XCTAssertEqual(three.end(), "きゅう")
     }
+    func testCircularSettingsRoundTripAndInvalidSaveKeepsPreviousData() throws {
+        let name = "CircularSettings-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let valid = [CircularSlotSetting(mode: 0, keyIdentifier: "か", slot: 4, action: .inputText, value: "こんにちは")]
+        XCTAssertTrue(CircularSlotSetting.save(valid, defaults: defaults))
+        XCTAssertEqual(CircularSlotSetting.load(defaults: defaults), valid)
+        XCTAssertFalse(CircularSlotSetting.save([.init(mode: 0, keyIdentifier: "か", slot: 7)], defaults: defaults))
+        XCTAssertEqual(CircularSlotSetting.load(defaults: defaults), valid)
+        let raw: [CircularFlickEvaluator.Map] = [[.tap: .text("か")]]
+        XCTAssertNil(CircularSlotSetting.apply(raw, settings: valid, mode: 1, keyIdentifier: "か", isSpecialKey: false)[0][.slot4])
+        XCTAssertNil(CircularSlotSetting.apply(raw, settings: valid, mode: 0, keyIdentifier: "あ", isSpecialKey: false)[0][.slot4])
+    }
     func testCircularPostProcessingAndMapSwitch() throws {
         let profile = try ReferenceFlickMaps(arrangement: .toggle, mode: .japanese, style: .donut)
         let key = try XCTUnwrap(profile.keys.first { $0.label == "か" })
