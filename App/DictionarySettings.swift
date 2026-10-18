@@ -4,7 +4,7 @@ struct DictionarySettings: View {
     @Binding var categoryMask: Int
     @Binding var englishReadingEnabled: Bool
     @Environment(\.dismiss) private var dismiss
-    private let names = ["address":"住所", "agreement":"条約・協定", "award":"賞", "character":"キャラクター",
+    static let names = ["address":"住所", "agreement":"条約・協定", "award":"賞", "character":"キャラクター",
                          "event":"出来事", "facility":"施設", "initiative":"事業・計画", "kampo":"漢方",
                          "lineage":"家系", "medical":"医学", "mythological_figure":"神話の人物", "organization":"組織",
                          "person":"人名", "place":"地名", "product":"製品", "station":"駅", "term":"用語",
@@ -28,7 +28,7 @@ struct DictionarySettings: View {
                 Section("分類辞書") {
                     ForEach(0..<Int(sumire_category_count()), id: \.self) { index in
                         let id = String(cString: sumire_category_name(index))
-                        Toggle(names[id] ?? id, isOn: Binding(
+                        Toggle(Self.names[id] ?? id, isOn: Binding(
                             get: { categoryMask & (1 << index) != 0 },
                             set: { enabled in
                                 if enabled { categoryMask |= 1 << index }

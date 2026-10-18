@@ -1,0 +1,168 @@
+import SwiftUI
+import Foundation
+
+/// The worker owns the native cursor on one queue; only one bounded page crosses
+/// onto the main queue. Generation changes cancel scans between native steps.
+private final class DictionaryBrowserWorker: @unchecked Sendable {
+    struct Row: Identifiable { let id: UInt32; let reading: String; let surface: String; let context: UInt16; let cost: Int16 }
+    struct Page { let rows: [Row]; let done: Bool; let total: Int; let bytes: Int }
+    private let queue = DispatchQueue(label: "sumire.dictionary-browser", qos: .userInitiated)
+    private let lock = NSLock()
+    private var generation: UInt64 = 0
+    private var cursor: OpaquePointer?
+    deinit { if let cursor { sumire_dictionary_browser_close(cursor) } }
+    @discardableResult func invalidate() -> UInt64 {
+        lock.lock(); defer { lock.unlock() }; generation &+= 1; return generation
+    }
+    func current(_ value: UInt64) -> Bool { lock.lock(); defer { lock.unlock() }; return generation == value }
+    func page(directory: URL?, name: String, query: String, mode: Int, restart: Bool,
+              generation: UInt64, completion: @escaping (Result<Page, Error>) -> Void) {
+        queue.async { [self] in
+            guard current(generation) else { return }
+            do {
+                if restart {
+                    if let cursor { sumire_dictionary_browser_close(cursor); self.cursor = nil }
+                    guard let directory else { throw Failure(message: "同梱辞書が見つかりません。") }
+                    var error = [CChar](repeating: 0, count: 512)
+                    let status = sumire_dictionary_browser_open(directory.path, name, query, UInt32(mode), &cursor, &error, error.count)
+                    guard status == 0 else { throw Failure(message: String(cString: error)) }
+                }
+                guard let cursor else { throw Failure(message: "辞書を開き直してください。") }
+                var rows: [Row] = []
+                while rows.count < 100 && sumire_dictionary_browser_done(cursor) == 0 {
+                    guard current(generation) else { return }
+                    var error = [CChar](repeating: 0, count: 512)
+                    guard sumire_dictionary_browser_step(cursor, 100 - rows.count, &error, error.count) == 0 else {
+                        throw Failure(message: String(cString: error))
+                    }
+                    for index in 0..<sumire_dictionary_browser_count(cursor) {
+                        var row = sumire_dictionary_row()
+                        guard sumire_dictionary_browser_row(cursor, index, &row) == 0 else { continue }
+                        rows.append(Row(id: row.token_id,
+                                        reading: String(decoding: UnsafeRawBufferPointer(start: row.reading, count: row.reading_bytes), as: UTF8.self),
+                                        surface: String(decoding: UnsafeRawBufferPointer(start: row.surface, count: row.surface_bytes), as: UTF8.self),
+                                        context: row.context_id, cost: row.word_cost))
+                    }
+                }
+                let result = Page(rows: rows, done: sumire_dictionary_browser_done(cursor) != 0,
+                                  total: sumire_dictionary_browser_token_count(cursor), bytes: sumire_dictionary_browser_mapped_bytes(cursor))
+                DispatchQueue.main.async { [self] in if current(generation) { completion(.success(result)) } }
+            } catch {
+                DispatchQueue.main.async { [self] in if current(generation) { completion(.failure(error)) } }
+            }
+        }
+    }
+    struct Failure: LocalizedError { let message: String; var errorDescription: String? { message } }
+}
+
+private final class DictionaryBrowserModel: ObservableObject {
+    @Published var rows: [DictionaryBrowserWorker.Row] = []
+    @Published var loading = false
+    @Published var done = true
+    @Published var error: String?
+    @Published var pageNumber = 1
+    @Published var total = 0
+    @Published var bytes = 0
+    private let worker = DictionaryBrowserWorker()
+    private var pending: DispatchWorkItem?
+    private var generation: UInt64 = 0
+    private var name = "system", query = ""
+    private var mode = 0
+    func reload(name: String, query: String, mode: Int, debounce: Bool = false) {
+        pending?.cancel(); generation = worker.invalidate()
+        self.name = name; self.query = query; self.mode = mode
+        rows = []; error = nil; done = true; loading = true; pageNumber = 1
+        let task = DispatchWorkItem { [weak self] in self?.load(restart: true) }
+        pending = task
+        DispatchQueue.main.asyncAfter(deadline: .now() + (debounce ? 0.3 : 0), execute: task)
+    }
+    func next() { guard !loading && !done else { return }; pageNumber += 1; load(restart: false) }
+    func cancel() { pending?.cancel(); worker.invalidate(); loading = false }
+    private func load(restart: Bool) {
+        loading = true; error = nil
+        worker.page(directory: ConversionService.bundledDictionary, name: name, query: query, mode: mode,
+                    restart: restart, generation: generation) { [weak self] result in
+            guard let self else { return }
+            loading = false
+            switch result {
+            case .success(let page): rows = page.rows; done = page.done; total = page.total; bytes = page.bytes
+            case .failure(let failure): error = failure.localizedDescription; done = true
+            }
+        }
+    }
+}
+
+struct DictionaryBrowserView: View {
+    @StateObject private var model = DictionaryBrowserModel()
+    @State private var dictionary = "system"
+    @State private var query = ""
+    @State private var mode = 0
+    private var dictionaries: [(id: String, title: String)] {
+        [("system", "システム"), ("english", "英単語"), ("english_reading", "かなから英単語")] +
+        (0..<sumire_category_count()).map { index in
+            let name = String(cString: sumire_category_name(index))
+            return (name, DictionarySettings.names[name] ?? name)
+        }
+    }
+    var body: some View {
+        List {
+            Section {
+                Picker("閲覧する辞書", selection: $dictionary) {
+                    ForEach(dictionaries, id: \.id) { item in Text(item.title).tag(item.id) }
+                }.accessibilityIdentifier("dictionary-browser-choice")
+                Picker("検索方法", selection: $mode) {
+                    Text("読みの先頭").tag(0); Text("表記に含む").tag(1)
+                }.pickerStyle(.segmented).accessibilityIdentifier("dictionary-browser-search-mode")
+                TextField(mode == 0 ? "読みを入力" : "探したい表記を入力", text: $query)
+                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    .accessibilityIdentifier("dictionary-browser-query")
+            } footer: {
+                Text("同梱辞書の内容を見る画面です。無効にしている分類も閲覧できます。学習やユーザー辞書は含みません。検索は入力した文字のまま照合します。")
+            }
+            Section {
+                if model.loading {
+                    HStack { ProgressView(); Text(mode == 1 ? "表記を検索中…" : "読み込み中…") }
+                }
+                if let error = model.error {
+                    Text(error).foregroundStyle(.secondary)
+                    Button("再試行") { reload() }
+                }
+                if !model.loading && model.rows.isEmpty && model.error == nil {
+                    Text("該当する単語はありません").foregroundStyle(.secondary)
+                }
+                ForEach(model.rows) { row in
+                    VStack(alignment: .leading, spacing: 5) {
+                        Text(row.surface).font(.headline).textSelection(.enabled)
+                        Text(row.reading).foregroundStyle(.secondary).textSelection(.enabled)
+                        Text("品詞・接続ID \(row.context) · 単語コスト \(row.cost)").font(.caption).foregroundStyle(.secondary)
+                    }.frame(minHeight: 44).accessibilityElement(children: .combine)
+                        .accessibilityIdentifier("dictionary-browser-row-\(row.id)")
+                }
+            } header: { Text("\(model.pageNumber)ページ · \(model.rows.count)件表示 / 辞書全体 \(model.total)件") }
+            Section {
+                Button("次の100件") { model.next() }.disabled(model.loading || model.done)
+                    .accessibilityIdentifier("dictionary-browser-next")
+                Button("先頭に戻る") { reload() }.disabled(model.loading)
+            } footer: { Text("表示は1ページずつ切り替わります。表記検索は辞書全体を調べるため時間がかかる場合があります。品詞・接続IDは配布辞書の数値で、品詞名ではありません。") }
+            Section("配布データ") {
+                Text("\(dictionary).sud · \(model.bytes) bytes").font(.caption).textSelection(.enabled)
+                Text(provenance).font(.caption).textSelection(.enabled)
+            }
+        }
+        .navigationTitle("辞書の単語を見る")
+        .onAppear { reload() }
+        .onDisappear { model.cancel() }
+        .onChange(of: dictionary) { _, _ in reload() }
+        .onChange(of: mode) { _, _ in reload() }
+        .onChange(of: query) { _, _ in reload(debounce: true) }
+    }
+    private func reload(debounce: Bool = false) { model.reload(name: dictionary, query: query, mode: mode, debounce: debounce) }
+    private var provenance: String {
+        guard let url = ConversionService.bundledDictionary?.appendingPathComponent("manifest.json"),
+              let data = try? Data(contentsOf: url),
+              let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return "出典情報を読み込めません。" }
+        let revision = manifest["source_revision"] as? String ?? "未記載"
+        let hashes = manifest["output_sha256"] as? [String: String] ?? [:]
+        return "生成元: \(revision)\nmanifest記載 SHA-256: \(hashes[dictionary + ".sud"] ?? "未記載")"
+    }
+}
