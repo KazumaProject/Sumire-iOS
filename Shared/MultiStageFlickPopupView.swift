@@ -40,10 +40,10 @@ final class MultiStageFlickPopupView: UIView {
         let y = min(max(available.minY, proposedY), available.maxY - height)
         frame = CGRect(x: x, y: y, width: width, height: height)
     }
-    private func text(_ text: String, in rect: CGRect, selected: Bool) {
+    private func text(_ text: String, in rect: CGRect, selected: Bool, bold: Bool = false) {
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
         let fittedSize = min(fontSize, max(8, rect.width / CGFloat(max(1, text.count))))
-        let font = UIFont.systemFont(ofSize: fittedSize)
+        let font = UIFont.systemFont(ofSize: fittedSize, weight: bold ? .bold : .regular)
         let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: selected ? palette.functionForeground : palette.foreground, .paragraphStyle: paragraph]
         let height = (text as NSString).boundingRect(with: CGSize(width: rect.width, height: rect.height), options: .usesLineFragmentOrigin, attributes: attributes, context: nil).height
         (text as NSString).draw(in: CGRect(x: rect.minX, y: rect.midY - min(rect.height, height) / 2, width: rect.width, height: rect.height), withAttributes: attributes)
@@ -69,16 +69,17 @@ final class MultiStageFlickPopupView: UIView {
                 let path = UIBezierPath(arcCenter: center, radius: radius, startAngle: start, endAngle: end, clockwise: true)
                 path.addArc(withCenter: center, radius: inner, startAngle: end, endAngle: start, clockwise: false); path.close()
                 (slot == selected ? palette.function : palette.key).setFill(); path.fill()
-                palette.foreground.withAlphaComponent(0.25).setStroke(); path.lineWidth = 0.5; path.stroke()
+                palette.foreground.setStroke(); path.lineWidth = 2 / 2.625; path.stroke()
                 let angle = (start + end) / 2, distance = (radius + inner) / 2
                 let labelRect = CGRect(x: center.x + cos(angle) * distance - radius * 0.3,
                                        y: center.y + sin(angle) * distance - radius * 0.2,
                                        width: radius * 0.6, height: radius * 0.4)
-                text(label(values[slot]), in: labelRect, selected: slot == selected)
+                text(label(values[slot]), in: labelRect, selected: slot == selected, bold: true)
             }
             let central = CGRect(x: center.x - inner, y: center.y - inner, width: inner * 2, height: inner * 2)
             (selected == .tap ? palette.function : palette.key).setFill(); UIBezierPath(ovalIn: central).fill()
-            text(label(values[.tap]), in: central.insetBy(dx: 2, dy: 2), selected: selected == .tap)
+            let selectedLabel = label(values[selected])
+            text(selectedLabel.isEmpty ? label(values[.tap]) : selectedLabel, in: central.insetBy(dx: 2, dy: 2), selected: selected == .tap, bold: true)
         }
     }
     private func label(_ output: CircularFlickOutput?) -> String {
