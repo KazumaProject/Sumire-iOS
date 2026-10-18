@@ -13,6 +13,7 @@
 #include <numeric>
 #include <queue>
 #include <span>
+#include <string_view>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/stat.h>
@@ -31,6 +32,62 @@ constexpr uint16_t MOZC_UNKNOWN_POS_ID = 1841;
 constexpr int32_t MOZC_MAX_WORD_COST = 32767;
 constexpr bool is_ascii_alphabet(char16_t c) {
   return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z');
+}
+constexpr size_t ANDROID_FORWARD_BEAM_WIDTH = 20;
+constexpr int64_t ANDROID_DIGIT_OUTPUT_PENALTY = 2000;
+bool has_digit(std::u16string_view value) {
+  return std::any_of(value.begin(), value.end(), unicode_is_digit);
+}
+bool has_digit(std::string_view value) {
+  bool found = false;
+  for (size_t i = 0; i < value.size();) {
+    uint32_t scalar = static_cast<unsigned char>(value[i++]);
+    size_t continuation_count = 0;
+    uint32_t minimum = 0;
+    if (scalar < 0x80) {
+      if (scalar >= '0' && scalar <= '9') found = true;
+    } else if (scalar >= 0xc2 && scalar <= 0xdf) {
+      scalar &= 31;
+      continuation_count = 1;
+      minimum = 0x80;
+    } else if (scalar >= 0xe0 && scalar <= 0xef) {
+      scalar &= 15;
+      continuation_count = 2;
+      minimum = 0x800;
+    } else if (scalar >= 0xf0 && scalar <= 0xf4) {
+      scalar &= 7;
+      continuation_count = 3;
+      minimum = 0x10000;
+    } else {
+      throw std::runtime_error("invalid UTF-8 surface");
+    }
+    while (continuation_count--) {
+      require(i < value.size(), "truncated UTF-8 surface");
+      const auto byte = static_cast<unsigned char>(value[i++]);
+      require((byte & 0xc0) == 0x80, "invalid UTF-8 surface continuation");
+      scalar = (scalar << 6) | (byte & 63);
+    }
+    require(scalar >= minimum && scalar <= 0x10ffff &&
+                !(scalar >= 0xd800 && scalar <= 0xdfff),
+            "invalid Unicode surface scalar");
+    if (scalar <= 0xffff && unicode_is_digit(static_cast<char16_t>(scalar)))
+      found = true;
+  }
+  return found;
+}
+bool dictionary_surface_has_digit(const Dictionary &dictionary, uint32_t token,
+                                 const std::u16string &reading, size_t start,
+                                 size_t end, size_t corrected_node) {
+  const auto reference = dictionary.refs[token];
+  if (reference >= 0xfffffffeU) {
+    if (corrected_node)
+      return has_digit(dictionary.nodeReading(corrected_node));
+    return has_digit(std::u16string_view(reading).substr(start, end - start));
+  }
+  const auto *bytes = reinterpret_cast<const char *>(
+      dictionary.strings.data() + dictionary.offsets[reference]);
+  return has_digit(std::string_view(
+      bytes, dictionary.offsets[reference + 1] - dictionary.offsets[reference]));
 }
 struct Connection {
   File file;
@@ -438,6 +495,9 @@ struct Workspace::Impl {
     int64_t cost;
     size_t correctedNode = 0;
     int64_t tail = INF;
+    int64_t forward = INF;
+    bool beam_kept = true;
+    bool contains_digit = false;
     const PersonalEntry *personal = nullptr;
   };
   // Cache only immutable dictionary nodes. Overlay pointers and Viterbi tails
@@ -453,9 +513,11 @@ struct Workspace::Impl {
   bool cache_valid = false;
   std::vector<Node> nodes;
   std::vector<std::vector<size_t>> at;
+  std::vector<std::vector<size_t>> ending;
   struct State {
     size_t node, parent;
     int64_t cost; // The bound is cost + nodes[node].tail; only the heap stores it.
+    bool contains_digit = false;
   };
   std::vector<State> states;
   struct Item {
@@ -470,9 +532,11 @@ struct Workspace::Impl {
   std::vector<Dictionary::OmissionState> omission_pending;
   size_t bytes() const noexcept {
     size_t total = nodes.capacity() * sizeof(Node) + states.capacity() * sizeof(State) +
-        heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) + at.capacity() * sizeof(at[0]) +
+        heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) +
+        at.capacity() * sizeof(at[0]) + ending.capacity() * sizeof(ending[0]) +
         omission_pending.capacity() * sizeof(Dictionary::OmissionState);
     for (const auto &row : at) total += row.capacity() * sizeof(size_t);
+    for (const auto &row : ending) total += row.capacity() * sizeof(size_t);
     total += search_rows.capacity() * sizeof(SearchRow);
     // String small-buffer capacity is inline storage, not retained allocation.
     if (previous_reading.capacity() > std::u16string().capacity())
@@ -490,12 +554,14 @@ struct Workspace::Impl {
     std::vector<Item>().swap(heap);
     std::vector<size_t>().swap(path);
     std::vector<std::vector<size_t>>().swap(at);
+    std::vector<std::vector<size_t>>().swap(ending);
     std::vector<Dictionary::OmissionState>().swap(omission_pending);
   }
   void finish() noexcept {
     nodes.clear(); states.clear(); heap.clear(); path.clear();
     omission_pending.clear();
     for (auto &row : at) row.clear();
+    for (auto &row : ending) row.clear();
     if (bytes() > 4 * 1024 * 1024) purge();
   }
 };
@@ -591,6 +657,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   using Node = Workspace::Impl::Node;
   auto &nodes = work.nodes;
   auto &at = work.at;
+  auto &ending = work.ending;
   std::vector<size_t> exactCategoryNodes;
   at.resize(reading.size() + 1);
   const auto &conn = impl->connection;
@@ -618,6 +685,15 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     auto add = [&](Node node) {
       require(nodes.size() < 2000000,
               "lattice limit exceeded (input not truncated)");
+      if (node.personal) {
+        node.contains_digit = has_digit(node.personal->text);
+      } else if (!node.dict) {
+        node.contains_digit = has_digit(
+            std::u16string_view(reading).substr(node.start, node.end - node.start));
+      }
+      node.tail = INF;
+      node.forward = INF;
+      node.beam_kept = true;
       const size_t id = nodes.size();
       at[i].push_back(id);
       nodes.push_back(node);
@@ -640,6 +716,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           auto p = d->pos[token];
           Node node{i, end, d.get(), token, conn.left[p], conn.right[p],
                     d->costs[token] + (correctedNode ? 1900 : 0), correctedNode};
+          node.contains_digit = dictionary_surface_has_digit(
+              *d, token, reading, i, end, correctedNode);
           cached.nodes.push_back(node);
           add(node);
         };
@@ -700,7 +778,47 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     }
     add({i, end, nullptr, 0, unknownPos, unknownPos, unknownCost});
   }
-  // Backward Viterbi gives the exact best remaining cost for each token.
+  // Match Android's ordinary conversion path: forward-DP costs prune each
+  // reading end position to its 20 cheapest nodes before N-best search.
+  ending.resize(reading.size() + 1);
+  for (auto &row : ending) row.clear();
+  for (size_t id = 0; id < nodes.size(); ++id) {
+    auto &node = nodes[id];
+    node.forward = INF;
+    node.beam_kept = true;
+    require(node.end > 0 && node.end <= reading.size(),
+            "lattice node end outside input");
+    ending[node.end].push_back(id);
+  }
+  for (size_t position = 1; position <= reading.size(); ++position) {
+    auto &row = ending[position];
+    for (size_t id : row) {
+      auto &node = nodes[id];
+      if (node.start == 0) {
+        node.forward = int64_t(conn.cost(0, node.left)) + node.cost;
+      } else if (node.start < ending.size()) {
+        for (size_t previous_id : ending[node.start]) {
+          const auto &previous = nodes[previous_id];
+          if (previous.forward == INF) continue;
+          node.forward = std::min(
+              node.forward,
+              previous.forward + conn.cost(previous.right, node.left) + node.cost);
+        }
+      }
+    }
+    if (row.size() > ANDROID_FORWARD_BEAM_WIDTH) {
+      std::stable_sort(row.begin(), row.end(), [&](size_t left, size_t right) {
+        return nodes[left].forward < nodes[right].forward;
+      });
+      for (size_t i = ANDROID_FORWARD_BEAM_WIDTH; i < row.size(); ++i)
+        nodes[row[i]].beam_kept = false;
+      row.resize(ANDROID_FORWARD_BEAM_WIDTH);
+    }
+  }
+  for (auto &row : at)
+    std::erase_if(row, [&](size_t id) { return !nodes[id].beam_kept; });
+
+  // Backward Viterbi gives the exact best remaining cost for each retained token.
   // The lattice is acyclic, so negative word/connection costs are supported.
   for (size_t i = reading.size(); i-- > 0;)
     for (size_t id : at[i]) {
@@ -725,9 +843,13 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       result.complete = false;
       return;
     }
+    const bool containsDigit = nodes[id].contains_digit ||
+        (parent != none && states[parent].contains_digit);
     size_t index = states.size();
-    states.push_back({id, parent, cost});
-    heap.push_back({cost + nodes[id].tail, index});
+    states.push_back({id, parent, cost, containsDigit});
+    heap.push_back({cost + nodes[id].tail +
+                        (containsDigit ? ANDROID_DIGIT_OUTPUT_PENALTY : 0),
+                    index});
     std::push_heap(heap.begin(), heap.end(), std::greater<Workspace::Impl::Item>());
   };
   for (auto id : at[0])
@@ -753,7 +875,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     ++result.expanded_states;
     if (node.end == reading.size()) {
       Candidate c;
-      c.score = state.cost + node.tail;
+      c.score = state.cost + node.tail +
+          (state.contains_digit ? ANDROID_DIGIT_OUTPUT_PENALTY : 0);
       auto &path = work.path;
       path.clear();
       for (size_t p = index; p != none; p = states[p].parent)
@@ -777,6 +900,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
           c.classified_categories.push_back(n.dict->name);
       }
+      require(state.contains_digit == has_digit(c.text),
+              "candidate digit state differs from materialized surface");
       c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
       if (c.standalone_unigram_matched) {
         standaloneFound = true;

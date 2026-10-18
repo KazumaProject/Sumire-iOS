@@ -134,10 +134,15 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'system.sud',[('ごと','ごと',1,-100)])
         corrected=json.loads(self.run_cli('--omission','こと').stdout)['candidates']
         self.assertFalse(any(c['standalone_unigram_matched'] for c in corrected))
-        dictionary(self.data/'system.sud',[('しろ','しろ',1,0)]+[('しろ',f'Word{i}',1,i+1) for i in range(110)])
+        entries = [('し', f'First{i}', 1, i) for i in range(10)]
+        entries += [('ろ', f'Second{i}', 1, i + 20) for i in range(10)]
+        entries += [('しろ', 'しろ', 1, 1000)]
+        dictionary(self.data/'system.sud', entries)
+        standalone(self.data/'standalone.sud', ['しろ'])
         large=json.loads(self.run_cli('--nbest','100','しろ').stdout)['candidates']
         self.assertEqual(len(large),100)  # Safety lookahead must not cap N at64.
         self.assertEqual(large[0]['text'],'しろ')
+        self.assertTrue(large[0]['standalone_unigram_matched'])
     def test_oversampled_primary_top_k_preserves_utf16_tie_order(self):
         surfaces=['\ue000','𐀀','Ω','𐀁']
         entries=[('あ',surface,1,0) for surface in surfaces]+[('あ','あ',1,30000)]
@@ -197,6 +202,55 @@ class Tests(unittest.TestCase):
 
         self.assertEqual(texts[0],'あいう')
         self.assertIn('あいうえ',texts)
+
+    def test_digit_surface_penalty_matches_android_and_applies_once(self):
+        dictionary(self.data/'system.sud', [
+            ('あ','2',1,100), ('あ','A',1,100),
+            ('い','3',1,200), ('い','B',1,200),
+        ])
+        candidates = json.loads(self.run_cli('--nbest','10','あい').stdout)['candidates']
+        by_text = {candidate['text']: candidate['score'] for candidate in candidates}
+        self.assertEqual(by_text['AB'], 290)
+        self.assertEqual(by_text['23'], 2290)
+        self.assertEqual(by_text['2B'], 2290)
+        self.assertEqual(by_text['A3'], 2290)
+
+        dictionary(self.data/'system.sud', [('あ','５',1,100)])
+        fullwidth = json.loads(self.run_cli('あ').stdout)['candidates']
+        self.assertEqual(fullwidth[0]['text'], '５')
+        self.assertEqual(fullwidth[0]['score'], 2140)
+
+    def test_omission_digit_penalty_uses_emitted_surface(self):
+        dictionary(self.data/'system.sud', [
+            ('ご','2',1,100), ('ご','語',1,1100),
+        ])
+        candidates = json.loads(self.run_cli('--omission','こ').stdout)['candidates']
+        by_text = {candidate['text']: candidate['score'] for candidate in candidates}
+        self.assertEqual(by_text['語'], 3040)
+        self.assertEqual(by_text['2'], 4040)
+        self.assertLess(candidates.index(next(c for c in candidates if c['text']=='語')),
+                        candidates.index(next(c for c in candidates if c['text']=='2')))
+
+    def test_classified_exact_digit_uses_android_whole_input_score(self):
+        dictionary(self.data/'system.sud', [('あ','Base',1,1000)])
+        dictionary(self.data/'medical.sud', [('あ','2',1,100)])
+        candidates = json.loads(
+            self.run_cli('--categories','medical','あ').stdout
+        )['candidates']
+        exact = next(candidate for candidate in candidates if candidate['text']=='2')
+        # Android merges classified exact terms after A* and scores BOS -> word
+        # -> EOS directly, without the A* output-digit surcharge.
+        self.assertEqual(exact['score'], 140)
+        self.assertEqual(exact['categories'], ['medical'])
+
+    def test_forward_beam_prunes_nodes_after_twenty_per_reading_position(self):
+        entries = [('あ', f'候補{i:02}', 1, i) for i in range(21)]
+        dictionary(self.data/'system.sud', entries)
+        candidates = json.loads(self.run_cli('--nbest','100','あ').stdout)['candidates']
+        self.assertEqual(len(candidates), 20)
+        self.assertNotIn('候補20', [candidate['text'] for candidate in candidates])
+        self.assertEqual([candidate['score'] for candidate in candidates],
+                         sorted(candidate['score'] for candidate in candidates))
 
     def test_unknown_fallback_matches_reference_cost_and_dictionary_suppression(self):
         dictionary(self.data/'system.sud',[])
