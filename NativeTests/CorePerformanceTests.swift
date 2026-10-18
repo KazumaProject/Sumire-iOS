@@ -63,6 +63,7 @@ final class CorePerformanceTests: XCTestCase {
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
+        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
         var cycles: [[String: Any]] = []
         let baseline = try footprint()
         for cycle in 0..<10 {
@@ -102,7 +103,7 @@ final class CorePerformanceTests: XCTestCase {
         let report: [String: Any] = [
             "scope": "Release C ABI containing-app test host; sampled lifecycle memory, not extension memory",
             "baseline_mib": baseline, "cycles": cycles, "conversion_flags": 12,
-            "provenance": try ConversionBenchmarkProvenance.collect(directory: directory),
+            "provenance": provenance,
             "dictionary_configuration": "system + 30 categories + English words + English readings",
             "note": "Allocator retention and host activity may affect closed footprint; no OS peak or leak claim"
         ]
@@ -229,10 +230,10 @@ final class CorePerformanceTests: XCTestCase {
 /// never claims about OS cold pages, extension startup or touch-to-frame time.
 enum ConversionBenchmarkProvenance {
     static func collect(directory: URL) throws -> [String: Any] {
-        let revision = Bundle.main.object(forInfoDictionaryKey: "SumireBenchmarkRevision") as? String ?? ""
+        let revision = ProcessInfo.processInfo.environment["SUMIRE_BENCHMARK_REVISION"] ?? ""
         guard revision.count == 40 else {
             throw NSError(domain: "SumireBenchmark", code: 1,
-                userInfo: [NSLocalizedDescriptionKey: "Build with INFOPLIST_KEY_SumireBenchmarkRevision=<40-character source commit>"])
+                userInfo: [NSLocalizedDescriptionKey: "Set test runner SUMIRE_BENCHMARK_REVISION to the 40-character source commit"])
         }
         let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
