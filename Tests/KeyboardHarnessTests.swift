@@ -1157,6 +1157,25 @@ final class KeyboardHarnessTests: XCTestCase {
         add(attachment)
     }
 
+    func testJapanesePredictionCanBeSelectedFromExpandedCandidates() throws {
+        let app = XCUIApplication(); app.launchArguments = ["-learningEnabled", "NO"]; app.launch()
+        let editor = app.textViews["入力テスト"]
+        editor.tap(); selectKeyboard("50音", in: app)
+        for character in "こんに" { app.buttons[String(character)].tap() }
+        XCTAssertEqual(editor.value as? String, "こんに")
+        let expand = app.buttons["candidate-expand"]
+        XCTAssertTrue(expand.waitForExistence(timeout: 10)); expand.tap()
+        let prediction = app.collectionViews.staticTexts["こんにちは"].firstMatch
+        for _ in 0..<5 {
+            if prediction.isHittable { break }
+            app.collectionViews.firstMatch.swipeUp()
+        }
+        XCTAssertTrue(prediction.isHittable)
+        prediction.tap()
+        XCTAssertEqual(editor.value as? String, "こんにちは")
+        XCTAssertFalse(app.buttons["候補欄を閉じる"].exists)
+    }
+
     func testDirectInputAndStandardKeyboardReference() throws {
         let app = XCUIApplication()
         app.launch()
