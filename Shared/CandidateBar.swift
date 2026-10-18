@@ -5,7 +5,7 @@ import UniformTypeIdentifiers
 /// Horizontally scrolling, reusable candidate cells. No mock conversion candidates.
 final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     var onExpand: (() -> Void)?
-    var onDisplayedHeightChange: ((CGFloat) -> Void)?
+    var onSizingChange: (() -> Void)?
     private let expand = UIButton(type: .system)
     private var collectionTrailing: NSLayoutConstraint!
     private var expanded = false
@@ -126,9 +126,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         didSet {
             guard showsShortcuts != oldValue else { return }
             clipboardRequest = UUID()
-            let previousHeight = CGFloat(oldValue ? 1 : rowCount) * 44
             height.constant = displayedHeight
-            if previousHeight != displayedHeight { onDisplayedHeightChange?(displayedHeight) }
+            updateVerticalScrolling()
+            onSizingChange?()
             collection.isHidden = showsShortcuts
             resize.isHidden = !showsShortcuts
             symbols.isHidden = !showsShortcuts
@@ -168,19 +168,43 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         }
     }
     private var storedRowCount = 1
+    private var displayedHeightLimit: CGFloat?
     var rowCount: Int {
         get { storedRowCount }
         set {
             let count = min(3, max(1, newValue))
             guard storedRowCount != count else { return }
-            let previousHeight = displayedHeight
             storedRowCount = count
-            height.constant = displayedHeight
-            if previousHeight != displayedHeight { onDisplayedHeightChange?(displayedHeight) }
             (collection.collectionViewLayout as? CandidateRowsLayout)?.setRowCount(count)
+            height.constant = displayedHeight
+            updateVerticalScrolling()
+            collection.collectionViewLayout.invalidateLayout()
+            clampContentOffset()
+            onSizingChange?()
         }
     }
-    var displayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
+    var requestedDisplayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
+    var displayedHeight: CGFloat { height(forShortcutsVisible: showsShortcuts) }
+    func setDisplayedHeightLimit(_ limit: CGFloat) {
+        let normalized = max(44, limit.isFinite ? limit : 44)
+        guard displayedHeightLimit.map({ abs($0 - normalized) > 0.5 }) ?? true else { return }
+        displayedHeightLimit = normalized
+        height.constant = displayedHeight
+        updateVerticalScrolling()
+        collection.collectionViewLayout.invalidateLayout()
+        clampContentOffset()
+    }
+    private func height(forShortcutsVisible shortcutsVisible: Bool) -> CGFloat {
+        let requested = CGFloat(shortcutsVisible ? 1 : min(3, max(1, storedRowCount))) * 44
+        guard !shortcutsVisible, let displayedHeightLimit else { return requested }
+        let visibleRows = max(1, min(storedRowCount, Int(floor(displayedHeightLimit / 44))))
+        return CGFloat(visibleRows) * 44
+    }
+    private func updateVerticalScrolling() {
+        let canScrollRows = !showsShortcuts && displayedHeight < requestedDisplayedHeight
+        collection.alwaysBounceVertical = canScrollRows
+        collection.showsVerticalScrollIndicator = canScrollRows
+    }
     private let collection: UICollectionView
     private struct Item: Hashable {
         let text: String
@@ -303,13 +327,18 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         // cross-fades would make a fast list harder to follow, so apply atomically.
         UIView.performWithoutAnimation {
             dataSource.apply(snapshot, animatingDifferences: false)
-            collection.layoutIfNeeded()
-            let inset = collection.adjustedContentInset
-            let x = min(max(-inset.left, offset.x), max(-inset.left, collection.contentSize.width - collection.bounds.width + inset.right))
-            let y = min(max(-inset.top, offset.y), max(-inset.top, collection.contentSize.height - collection.bounds.height + inset.bottom))
-            collection.setContentOffset(CGPoint(x: x, y: y), animated: false)
+            collection.setContentOffset(offset, animated: false)
+            self.clampContentOffset()
             refreshVisibleCells()
         }
+    }
+    private func clampContentOffset() {
+        collection.layoutIfNeeded()
+        let inset = collection.adjustedContentInset
+        let offset = collection.contentOffset
+        let x = min(max(-inset.left, offset.x), max(-inset.left, collection.contentSize.width - collection.bounds.width + inset.right))
+        let y = min(max(-inset.top, offset.y), max(-inset.top, collection.contentSize.height - collection.bounds.height + inset.bottom))
+        collection.setContentOffset(CGPoint(x: x, y: y), animated: false)
     }
     private func refreshVisibleCells() {
         UIView.performWithoutAnimation {
@@ -392,7 +421,8 @@ private final class CandidateRowsLayout: UICollectionViewFlowLayout {
             packed.append(attributes)
             ends[row] = attributes.frame.maxX + minimumLineSpacing
         }
-        packedSize = CGSize(width: max(collectionView.bounds.width, (ends.max() ?? 0) - minimumLineSpacing), height: collectionView.bounds.height)
+        packedSize = CGSize(width: max(collectionView.bounds.width, (ends.max() ?? 0) - minimumLineSpacing),
+                            height: max(collectionView.bounds.height, CGFloat(rowCount) * 44))
     }
     override var collectionViewContentSize: CGSize {
         scrollDirection == .horizontal ? packedSize : super.collectionViewContentSize

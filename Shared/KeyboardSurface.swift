@@ -69,6 +69,7 @@ final class KeyboardSurface: UIInputView {
     private var sizeValue = KeyboardSize.standard(.portrait)
     private var dragSize = KeyboardSize.standard(.portrait)
     private var loadedSizing = false
+    private var sizedAvailableHeight: CGFloat?
     private var isAppearancePreview = false
     private var resizeOverlay: KeyboardResizeOverlay?
     private var stackLeading: NSLayoutConstraint!
@@ -82,11 +83,17 @@ final class KeyboardSurface: UIInputView {
     private func applySizing() {
         guard preferredHeight != nil else { return }
         let availableHeight = window?.bounds.height ?? 1000
-        // Shortcut mode occupies one row. When composition begins, grow the
-        // whole keyboard with the candidate bar instead of taking that space
-        // from the key grid.
-        let rows = candidateBar.displayedHeight
-        let height = min(sizeValue.height + rows + safeAreaInsets.bottom, max(210, availableHeight * 0.72))
+        sizedAvailableHeight = availableHeight
+        // Keep the configured key-area size stable as candidate rows are added.
+        // In constrained hosts, show only complete rows and let the candidate
+        // strip scroll vertically to reach the remaining configured rows.
+        let plan = KeyboardSurfaceSizingPlan.make(
+            keyAreaHeight: sizeValue.height,
+            candidateHeight: candidateBar.requestedDisplayedHeight,
+            bottomInset: safeAreaInsets.bottom,
+            availableHeight: availableHeight)
+        candidateBar.setDisplayedHeightLimit(plan.candidateHeight)
+        let height = plan.totalHeight
         if abs(preferredHeight.constant - height) > 0.5 {
             preferredHeight.constant = height
             invalidateIntrinsicContentSize()
@@ -107,6 +114,9 @@ final class KeyboardSurface: UIInputView {
             if resizeOverlay != nil { saveSize() }
             sizeOrientation = orientation
             reloadSizing()
+        } else if !isAppearancePreview,
+                  sizedAvailableHeight.map({ abs($0 - (window?.bounds.height ?? 1000)) > 0.5 }) ?? true {
+            applySizing()
         }
         let free = max(0, max(0, bounds.width - safeAreaInsets.left - safeAreaInsets.right) * (1 - sizeValue.width))
         stackLeading.constant = geometry.horizontalInset + free * sizeValue.alignment
@@ -376,7 +386,7 @@ final class KeyboardSurface: UIInputView {
         clipboardHistory.onNotice = { [weak self] text in self?.symbolPanel?.showNotice(text); self?.showDataNotice(text) }
         clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
         candidateBar.onClipboardCaptured = { [weak self] text, image in self?.clipboardHistory.capture(text: text, image: image) }
-        candidateBar.onDisplayedHeightChange = { [weak self] _ in self?.applySizing() }
+        candidateBar.onSizingChange = { [weak self] in self?.applySizing() }
         candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard() }
         candidateBar.onClipboardNotice = { [weak self] in self?.showDataNotice($0) }
         candidateBar.onResize = { [weak self] in self?.beginResize() }
