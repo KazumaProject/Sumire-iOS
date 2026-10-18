@@ -5,6 +5,17 @@ final class MultiStageFlickTests: XCTestCase {
     private let map: TwoStepFlickEvaluator.Map = [
         .tap: [.tap: "か"], .left: [.tap: "き", .left: "き", .upLeft: "ぎ", .downLeft: "きゃ"],
         .up: [.tap: "く", .up: "く", .upRight: "ぐ"]]
+    func testHierarchicalReleaseUsesLastMoveSelection() {
+        // Reference handleTouchUp updates only the guide finger, then commits currentHighlight.
+        // An UP coordinate is intentionally not an evaluator input for this controller.
+        var engine = HierarchicalFlickEvaluator(maps: [.normal: [.tap: .input("か"), .right: .input("け")]])
+        engine.begin(at: .init(0, 0), configuration: .init())
+        XCTAssertEqual(engine.end(), "か")
+        engine.begin(at: .init(0, 0), configuration: .init())
+        engine.move(to: .init(100, 0))
+        XCTAssertEqual(engine.end(), "け")
+        XCTAssertNil(engine.end())
+    }
     func testPopupOverridePreservesOldSettingsJSON() throws {
         let legacy = FlickStyleSettings()
         var object = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(legacy)) as? [String: Any])
