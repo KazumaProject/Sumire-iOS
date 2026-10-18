@@ -1,10 +1,19 @@
 #include "dictionary_browser.h"
 #include "dictionary_format.hpp"
+#include "unicode_case.hpp"
 #include <atomic>
 #include <cstdio>
 
 using sumire::detail::Dictionary;
 using sumire::detail::require;
+namespace {
+std::u16string normalizedSearch(const std::u16string &value) {
+    auto normalized = sumire::unicode_lower(sumire::unicode_nfkc(value));
+    for (auto &c : normalized) if (c >= 0x30a1 && c <= 0x30f6) c -= 0x60;
+    return normalized;
+}
+}
+
 struct sumire_dictionary_browser {
     Dictionary dictionary;
     std::atomic<bool> cancelled{false};
@@ -13,6 +22,7 @@ struct sumire_dictionary_browser {
     std::vector<Frame> stack;
     std::vector<Row> rows;
     std::string query;
+    std::u16string normalizedQuery;
     uint32_t mode, token = 0, tokenEnd = 0;
     size_t current = 0, entryCount = 0;
     bool first = true, done = false;
@@ -20,6 +30,7 @@ struct sumire_dictionary_browser {
         : dictionary(dir, name), query(q), mode(m) {
         for (auto term : dictionary.terms)
             entryCount += dictionary.postings[term + 1] - dictionary.postings[term];
+        if (mode == 2) normalizedQuery = normalizedSearch(sumire::utf16(query));
         size_t node = 0;
         if (!mode) for (auto c : sumire::utf16(query)) {
             auto child = dictionary.tree.select0(dictionary.tree.rank(node)) + 1;
@@ -78,7 +89,7 @@ extern "C" int sumire_dictionary_browser_open(const char *directory, const char 
  const char *query, uint32_t mode, sumire_dictionary_browser **out, char *error, size_t size) {
     if (out) *out = nullptr;
     try {
-        require(out && directory && name && query && mode <= 1, "invalid browser request");
+        require(out && directory && name && query && mode <= 2, "invalid browser request");
         require(std::strlen(query) <= 1024 && allowedName(name), "invalid dictionary name or query");
         (void)sumire::utf16(query);
         *out = new sumire_dictionary_browser(directory, name, query, mode);
@@ -103,7 +114,10 @@ extern "C" int sumire_dictionary_browser_step(sumire_dictionary_browser *b, size
                     require(b->dictionary.offsets[ref + 1] - b->dictionary.offsets[ref] <= 65536,
                             "dictionary surface exceeds browser 64 KiB limit");
                 auto surface = b->dictionary.surface(token, reading, 0, reading.size());
-                if (b->mode && surface.find(b->query) == std::string::npos) continue;
+                if (b->mode == 1 && surface.find(b->query) == std::string::npos) continue;
+                if (b->mode == 2 && !b->normalizedQuery.empty() &&
+                    normalizedSearch(reading).find(b->normalizedQuery) == std::u16string::npos &&
+                    normalizedSearch(sumire::utf16(surface)).find(b->normalizedQuery) == std::u16string::npos) continue;
                 b->rows.push_back({sumire::utf8(reading), std::move(surface), token,
                                   b->dictionary.pos[token], b->dictionary.costs[token]});
             } else {
