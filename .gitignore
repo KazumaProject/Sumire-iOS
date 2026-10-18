@@ -24,3 +24,4 @@ docs/validation/
 *.p12
 *.mobileprovision
 *.provisionprofile
+project.signing.local.yml

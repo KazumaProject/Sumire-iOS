@@ -1,0 +1,7 @@
+# Copy to project.signing.local.yml and replace YOUR_TEAM_ID with your team ID.
+# Keep the local file untracked. Do not override CODE_SIGN_ENTITLEMENTS.
+include:
+  - project.yml
+settings:
+  base:
+    DEVELOPMENT_TEAM: YOUR_TEAM_ID
