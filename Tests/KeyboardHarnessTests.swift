@@ -1099,6 +1099,68 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(editor.value as? String, "す")
     }
 
+    func testMaterialPresetPersistsAndKeyboardPixelsMatchJavaRoles() throws {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sumire.keyArrangement", "toggle"]
+        app.launch()
+        func openTheme() {
+            let button = app.buttons["キーボードの配色"]
+            for _ in 0..<8 {
+                if button.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            button.tap()
+            XCTAssertTrue(app.buttons["theme-preset-5"].waitForExistence(timeout: 5))
+        }
+        func checkColor(_ key: XCUIElement, _ expected: UInt32) throws {
+            XCTAssertTrue(key.waitForExistence(timeout: 5))
+            let screenshot = app.screenshot().image
+            let image = try XCTUnwrap(screenshot.cgImage)
+            let frame = key.frame
+            // Sample the key's flat fill away from its glyph, guides and corners.
+            let scale = CGFloat(image.width) / app.frame.width
+            let rect = CGRect(x: (frame.minX + frame.width * 0.2) * scale,
+                              y: (frame.minY + frame.height * 0.75) * scale, width: 1, height: 1)
+            let pixel = try XCTUnwrap(image.cropping(to: rect))
+            var bytes = [UInt8](repeating: 0, count: 4)
+            let space = try XCTUnwrap(CGColorSpace(name: CGColorSpace.sRGB))
+            let context = try XCTUnwrap(CGContext(data: &bytes, width: 1, height: 1, bitsPerComponent: 8,
+                                                 bytesPerRow: 4, space: space,
+                                                 bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+            context.draw(pixel, in: CGRect(x: 0, y: 0, width: 1, height: 1))
+            for (index, shift) in [16, 8, 0].enumerated() {
+                XCTAssertEqual(Int(bytes[index]), Int((expected >> shift) & 255), accuracy: 2,
+                               "Material key fill \(key.identifier), channel \(index)")
+            }
+        }
+        openTheme()
+        app.buttons["theme-preset-5"].tap() // 桜, seed #9A405A
+        let chosen = app.buttons["theme-seed-color"].value as? String
+        app.buttons["keyboardColorMode"].tap(); app.buttons["ライト"].tap()
+        app.buttons["完了"].tap()
+        app.textViews["入力テスト"].tap()
+        selectKeyboard("Sumire", in: app)
+        // Exact Java Material 1.13.0 SchemeContent(seed, false, 0) role values.
+        try checkColor(app.buttons["sumire-a"], 0xffff_f8f7)
+        try checkColor(app.buttons["sumire-delete_key"], 0xfffd_c2ce)
+        let light = XCTAttachment(screenshot: app.screenshot()); light.lifetime = .keepAlways; add(light)
+        openTheme()
+        app.buttons["keyboardColorMode"].tap(); app.buttons["ダーク"].tap()
+        app.buttons["完了"].tap()
+        try checkColor(app.buttons["sumire-a"], 0xff3c_3234)
+        try checkColor(app.buttons["sumire-delete_key"], 0xff67_3d47)
+        let dark = XCTAttachment(screenshot: app.screenshot()); dark.lifetime = .keepAlways; add(dark)
+        app.terminate(); app.launch()
+        app.textViews["入力テスト"].tap()
+        selectKeyboard("Sumire", in: app)
+        try checkColor(app.buttons["sumire-a"], 0xff3c_3234)
+        openTheme()
+        XCTAssertEqual(app.buttons["theme-seed-color"].value as? String, chosen)
+        app.buttons["標準の配色に戻す"].tap()
+        app.buttons["完了"].tap()
+        app.terminate()
+    }
+
     func testSeedColorPickerEditing() throws {
         let app = XCUIApplication(); app.launch()
         func openTheme() {
@@ -1117,11 +1179,11 @@ final class KeyboardHarnessTests: XCTestCase {
         color.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
         let panel = app.otherElements["UIColorPicker"]
         XCTAssertTrue(panel.buttons.firstMatch.waitForExistence(timeout: 10))
-        panel.buttons["スライダ"].tap()
+        panel.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "スライダ", "Sliders")).firstMatch.tap()
         panel.sliders["sliderRed"].adjust(toNormalizedSliderPosition: 0.1)
         panel.sliders["sliderGreen"].adjust(toNormalizedSliderPosition: 0.8)
         panel.sliders["sliderBlue"].adjust(toNormalizedSliderPosition: 0.2)
-        panel.buttons["閉じる"].tap()
+        panel.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "閉じる", "close")).firstMatch.tap()
         let selected = color.value as? String
         XCTAssertNotEqual(selected, original)
         let preview = XCTAttachment(screenshot: app.screenshot())
