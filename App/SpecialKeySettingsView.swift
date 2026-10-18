@@ -30,13 +30,17 @@ struct SpecialKeySettingsView: View {
                 }.disabled(!loaded)
                 Section("ジェスチャーごとの動作") {
                     ForEach(SumireSpecialKeyGesture.allCases, id: \.rawValue) { gesture in
-                        Picker(gesture.title, selection: actionBinding(gesture)) {
-                            Text("標準の動作").tag(Optional<SumireSpecialKeyAction>.none)
+                        Menu {
+                            Button("標準の動作") { setAction(nil, gesture: gesture) }
                             ForEach(SumireSpecialKeyAction.allCases, id: \.rawValue) { action in
-                                Text(action.title + (action.unavailabilityReason(for: selectedKey, gesture: gesture) == nil ? "" : "（iOS で未対応）"))
-                                    .tag(Optional(action))
+                                Button(action.title + (action.unavailabilityReason(for: selectedKey, gesture: gesture) == nil ? "" : "（iOS で未対応）")) {
+                                    setAction(action, gesture: gesture)
+                                }
                                     .disabled(action.unavailabilityReason(for: selectedKey, gesture: gesture) != nil)
                             }
+                        } label: {
+                            LabeledContent(gesture.title, value: settings.assignedAction(for: selectedKey, gesture: gesture,
+                                arrangement: arrangement, mode: mode)?.title ?? "標準の動作")
                         }.accessibilityIdentifier("special-key-gesture-" + gesture.rawValue)
                         let normal = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
                         let composing = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode, hasComposition: true)
@@ -79,16 +83,15 @@ struct SpecialKeySettingsView: View {
     private func ensureSelectedKey() {
         if !keys.contains(selectedKey), let first = keys.first { selectedKey = first }
     }
-    private func actionBinding(_ gesture: SumireSpecialKeyGesture) -> Binding<SumireSpecialKeyAction?> {
-        Binding(get: {
-            settings.assignedAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
-        }, set: { value in
-            do {
-                var next = settings
-                try next.set(value, for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
-                save(next)
-            } catch { notice = error.localizedDescription }
-        })
+    private func setAction(_ value: SumireSpecialKeyAction?, gesture: SumireSpecialKeyGesture) {
+        if let reason = value?.unavailabilityReason(for: selectedKey, gesture: gesture) {
+            notice = reason; return
+        }
+        do {
+            var next = settings
+            try next.set(value, for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
+            save(next)
+        } catch { notice = error.localizedDescription }
     }
     private func save(_ next: SumireSpecialKeySettings) {
         do { try next.save(defaults: defaults); settings = next; loaded = true; notice = nil }

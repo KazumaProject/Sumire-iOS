@@ -267,6 +267,19 @@ struct InputHarness: UIViewRepresentable {
         private var appearanceText: String?
         private var appearanceSelection: NSRange?
         private var preservingAppearance = false
+        private func updateSelectionTestState() {
+            #if DEBUG
+            guard ProcessInfo.processInfo.arguments.contains("--composition-selection-test-state"), let textView else { return }
+            let selected = textView.selectedRange
+            let marked: String
+            if let range = textView.markedTextRange {
+                marked = "\(textView.offset(from: textView.beginningOfDocument, to: range.start)),\(textView.offset(from: range.start, to: range.end))"
+            } else { marked = "nil" }
+            // Public XCTest identifier exposes ranges and state only when the
+            // focused regression test requests it. Never include input text.
+            textView.accessibilityIdentifier = "composition-state:selected=\(selected.location),\(selected.length) marked=\(marked) composing=\(surface.hasComposition)"
+            #endif
+        }
         func prepareAppearanceEditing(_ active: Bool) {
             if active && !preservingAppearance {
                 appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
@@ -289,32 +302,54 @@ struct InputHarness: UIViewRepresentable {
         private var expectedText = ""
         private var expectedSelection = NSRange(location: 0, length: 0)
         func perform(_ action: () -> Void) {
+            let wasChanging = changing
             changing = true
             action()
             expectedText = textView?.text ?? ""
             expectedSelection = textView?.selectedRange ?? NSRange(location: 0, length: 0)
-            changing = false
+            changing = wasChanging
+            updateSelectionTestState()
         }
         func validateContext() {
             guard !changing, let textView else { return }
-            if expectedText != textView.text || expectedSelection != textView.selectedRange {
+            let textUnchanged = expectedText.utf16.elementsEqual((textView.text ?? "").utf16)
+            if !textUnchanged || expectedSelection != textView.selectedRange {
+                if textUnchanged, textView.selectedRange.length == 0,
+                   let marked = textView.markedTextRange {
+                    let start = textView.offset(from: textView.beginningOfDocument, to: marked.start)
+                    let length = textView.offset(from: marked.start, to: marked.end)
+                    let total = (textView.text as NSString).length
+                    let caret = textView.selectedRange.location
+                    if start >= 0, start <= total, length >= 0, length <= total - start,
+                       caret >= start, caret <= start + length {
+                        let value = (textView.text as NSString).substring(with: NSRange(location: start, length: length))
+                        var accepted = false
+                        perform {
+                            accepted = surface.synchronizeCompositionSelection(markedText: value,
+                                selection: NSRange(location: caret - start, length: 0))
+                        }
+                        if accepted { return }
+                    }
+                }
                 appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
                 surface.invalidateComposition()
                 expectedText = textView.text
                 expectedSelection = textView.selectedRange
+                updateSelectionTestState()
             }
         }
         func textViewDidChange(_ textView: UITextView) { validateContext() }
         func textViewDidChangeSelection(_ textView: UITextView) { validateContext() }
         func textViewDidEndEditing(_ textView: UITextView) {
             if !preservingAppearance || appearanceMarkedRange == nil { surface.invalidateComposition() }
+            updateSelectionTestState()
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
             guard let range = appearanceMarkedRange, let original = appearanceText else { return }
             let savedSelection = appearanceSelection
             appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
             let originalLength = (original as NSString).length
-            guard textView.text == original, range.location >= 0, range.location <= originalLength,
+            guard (textView.text ?? "").utf16.elementsEqual(original.utf16), range.location >= 0, range.location <= originalLength,
                   range.length >= 0, range.length <= originalLength - range.location else {
                 surface.invalidateComposition(); return
             }

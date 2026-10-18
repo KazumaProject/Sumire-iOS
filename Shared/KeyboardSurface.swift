@@ -1281,6 +1281,15 @@ final class KeyboardSurface: UIInputView {
             updateMarkedSelection(composition.reading, NSRange(location: composition.cursorUTF16, length: 0))
         } else { updateMarkedText?(composition.reading) }
     }
+    /// Adopt a host caret in the unchanged reading, never in a converted
+    /// preview surface or an externally modified marked range.
+    func synchronizeCompositionSelection(markedText: String, selection: NSRange) -> Bool {
+        let generation = composition.generation
+        guard composition.synchronizeCursor(markedText: markedText, selection: selection) else { return false }
+        tapCycle.reset()
+        if composition.generation != generation { refreshConversion() }
+        return true
+    }
     private func refreshConversion() {
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }

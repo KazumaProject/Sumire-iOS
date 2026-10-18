@@ -72,6 +72,19 @@ public struct CompositionState {
         }
         return true
     }
+    /// Adopt a host caret only at an extended grapheme boundary. Rejected
+    /// UIKit UTF-16 offsets leave the cursor and generation unchanged.
+    @discardableResult public mutating func moveCursor(toUTF16 offset: Int) -> Bool {
+        guard !reading.isEmpty, offset >= 0, offset <= reading.utf16.count else { return false }
+        let unitIndex = reading.utf16.index(reading.utf16.startIndex, offsetBy: offset)
+        guard let index = String.Index(unitIndex, within: reading),
+              index == reading.endIndex || reading.indices.contains(index) else { return false }
+        return moveCursor(by: reading.distance(from: reading.startIndex, to: index) - cursor)
+    }
+    @discardableResult public mutating func synchronizeCursor(markedText: String, selection: NSRange) -> Bool {
+        guard markedText.utf16.elementsEqual(reading.utf16), selection.length == 0 else { return false }
+        return moveCursor(toUTF16: selection.location)
+    }
     public mutating func optionsChanged() {
         guard !reading.isEmpty else { return }
         generation += 1

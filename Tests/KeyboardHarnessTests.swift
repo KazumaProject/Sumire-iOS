@@ -2,6 +2,135 @@ import XCTest
 import UIKit
 
 final class KeyboardHarnessTests: XCTestCase {
+    func testSumireSpecialKeyDefaultsOverrideDispatchAndLongPress() throws {
+        let app = XCUIApplication()
+        let payload: [String: Any] = ["version": 1, "overrides": [
+            ["arrangement": "toggle", "inputMode": 0, "key": "delete_key", "gesture": "left", "action": "none"],
+            ["arrangement": "toggle", "inputMode": 0, "key": "delete_key", "gesture": "longPress", "action": "cursorRight"],
+            ["arrangement": "toggle", "inputMode": 0, "key": "paste_key", "gesture": "up", "action": "copy"]
+        ]]
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        // Foundation accepts a property-list Data value in the argument domain.
+        let argument = "<" + data.map { String(format: "%02x", $0) }.joined() + ">"
+        app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "-sumire.specialKeyActions", argument]
+        app.launch()
+        let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
+        for label in ["あ", "い", "う", "え", "お"] { app.buttons[label].tap() }
+        selectKeyboard("Sumire", in: app)
+        for _ in 0..<3 { app.buttons["sumire-cursor_left_key"].tap() }
+        // The delete key's hold moves right, and must not also delete on release.
+        app.buttons["sumire-delete_key"].press(forDuration: 0.9)
+        selectKeyboard("50音", in: app); app.buttons["か"].tap()
+        XCTAssertEqual(editor.value as? String, "あいうえおか")
+        selectKeyboard("Sumire", in: app)
+        let delete = app.buttons["sumire-delete_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        delete.press(forDuration: 0.05, thenDragTo: delete.withOffset(CGVector(dx: -45, dy: 0)))
+        XCTAssertEqual(editor.value as? String, "あいうえおか")
+        app.buttons["sumire-delete_key"].tap()
+        XCTAssertEqual(editor.value as? String, "あいうえお")
+        let paste = app.buttons["sumire-paste_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        paste.press(forDuration: 0.05, thenDragTo: paste.withOffset(CGVector(dx: 0, dy: -45)))
+        XCTAssertTrue(app.staticTexts["compositionReading"].label.contains("現在未対応"))
+        XCTAssertEqual(editor.value as? String, "あいうえお")
+        app.terminate()
+    }
+
+    func testSpecialKeyScreenOverridePersistsAndPreservesComposingCursor() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "--composition-selection-test-state"]
+        app.launch()
+        func reveal(_ element: XCUIElement) {
+            for _ in 0..<8 {
+                if element.isHittable { break }
+                app.swipeUp()
+            }
+            XCTAssertTrue(element.isHittable)
+        }
+        func openSettings() {
+            let button = app.buttons["Sumire の特殊キー操作"]
+            for _ in 0..<8 {
+                if button.isHittable { break }
+                app.scrollViews.firstMatch.swipeUp()
+            }
+            button.tap()
+            XCTAssertTrue(app.buttons["special-key-selection"].waitForExistence(timeout: 5))
+        }
+        func selectDeleteLeft(_ value: String) {
+            app.buttons["special-key-selection"].tap(); app.collectionViews.buttons["削除"].tap()
+            let left = app.buttons["special-key-gesture-left"]; reveal(left); left.tap()
+            let unavailable = app.buttons["カーソルを上へ（iOS で未対応）"]
+            XCTAssertTrue(unavailable.exists); XCTAssertFalse(unavailable.isEnabled)
+            app.buttons[value].tap()
+            app.buttons["完了"].tap()
+        }
+        openSettings()
+        let reset = app.buttons["すべての特殊キーを標準に戻す"]; reveal(reset); reset.tap()
+        app.buttons["標準に戻す"].tap(); app.buttons["完了"].tap()
+        let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        app.buttons["sumire-cursor_left_key"].tap()
+        openSettings(); selectDeleteLeft("何もしない")
+        XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
+        XCTAssertTrue(app.staticTexts["compositionReading"].label.hasPrefix("あい"))
+        let start = app.buttons["sumire-delete_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(CGVector(dx: -45, dy: 0)))
+        XCTAssertEqual(editor.value as? String, "あい")
+        app.buttons["sumire-delete_key"].tap()
+        XCTAssertEqual(editor.value as? String, "い")
+        XCTAssertEqual(app.staticTexts["compositionReading"].label, "い")
+        app.terminate(); app.launch(); editor.tap(); selectKeyboard("50音", in: app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        let restored = app.buttons["sumire-delete_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        restored.press(forDuration: 0.05, thenDragTo: restored.withOffset(CGVector(dx: -45, dy: 0)))
+        XCTAssertEqual(editor.value as? String, "あい")
+        openSettings(); selectDeleteLeft("標準の動作")
+        let standard = app.buttons["sumire-delete_key"].coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5))
+        standard.press(forDuration: 0.05, thenDragTo: standard.withOffset(CGVector(dx: -45, dy: 0)))
+        XCTAssertEqual(editor.value as? String, "")
+    }
+
+    func testSpecialKeyEditorRetapPreservesMarkedCaret() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sumire.keyArrangement", "toggle", "-liveConversion", "NO", "--composition-selection-test-state"]
+        app.launch()
+        let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        app.buttons["sumire-cursor_left_key"].tap()
+        XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
+        let button = app.buttons["Sumire の特殊キー操作"]
+        for _ in 0..<8 {
+            if button.isHittable { break }
+            app.scrollViews.firstMatch.swipeUp()
+        }
+        button.tap(); app.buttons["完了"].tap()
+        XCTAssertTrue(editor.identifier.contains("selected=1,0 marked=0,2 composing=true"))
+        XCTAssertEqual(editor.value as? String, "あい")
+        editor.tap()
+        XCTAssertTrue(editor.identifier.contains("marked=0,2 composing=true"))
+        app.buttons["sumire-delete_key"].tap()
+        XCTAssertEqual(editor.value as? String, "い")
+        XCTAssertTrue(editor.identifier.contains("marked=0,1 composing=true"))
+    }
+
+    func testSumireKatakanaDynamicKeyPreservesCompositionAndCursor() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-sumire.keyArrangement", "switch-mode-effective", "-liveConversion", "NO"]
+        app.launch()
+        let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
+        app.buttons["あ"].tap(); app.buttons["い"].tap(); selectKeyboard("Sumire", in: app)
+        let katakana = app.buttons["sumire-number_mode"]
+        XCTAssertEqual(katakana.label, "カタカナ切り替え")
+        for expected in ["アイ", "ｱｲ", "あい"] {
+            katakana.tap()
+            XCTAssertEqual(editor.value as? String, expected)
+            XCTAssertTrue(app.staticTexts["compositionReading"].label.hasPrefix(expected))
+        }
+        app.buttons["sumire-cursor_left_key"].tap()
+        katakana.tap()
+        selectKeyboard("50音", in: app); app.buttons["か"].tap()
+        XCTAssertEqual(editor.value as? String, "アかイ")
+    }
+
     func testLastKeyboardRestoresWithoutToggle() {
         let app = XCUIApplication(); app.launch()
         app.textViews["入力テスト"].tap(); selectKeyboard("Sumire", in: app)
@@ -811,10 +940,12 @@ final class KeyboardHarnessTests: XCTestCase {
     }
     func testKeyboardSwitchTapAndLongPressPreserveReading() {
         let app = XCUIApplication(); app.launch()
-        let editor = app.textViews["入力テスト"]; editor.tap()
+        let editor = app.textViews["入力テスト"]; editor.tap(); selectKeyboard("50音", in: app)
         app.buttons["あ"].tap()
         XCTAssertFalse(app.buttons["テンキー"].exists)
-        selectKeyboard("テンキー", in: app)
+        // TenKey's shared globe/modifier key modifies composing text on tap.
+        // Exercise the Sumire globe, whose tap actually advances the layout.
+        selectKeyboard("Sumire", in: app)
         XCTAssertEqual(editor.value as? String, "あ")
         app.buttons["keyboard-switch"].tap()
         XCTAssertTrue(app.buttons["q"].exists)
