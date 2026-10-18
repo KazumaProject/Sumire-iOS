@@ -224,6 +224,7 @@ struct InputHarness: UIViewRepresentable {
         let surface = coordinator.surface
         coordinator.textView = text
         surface.settingsDefaults = KeyboardSettings.appDefaults
+        surface.configureClipboard(accessAllowed: true, allowShared: true)
         surface.onHeightChange = { [weak text] _ in
             text?.inputView?.invalidateIntrinsicContentSize()
             text?.inputView?.superview?.setNeedsLayout()

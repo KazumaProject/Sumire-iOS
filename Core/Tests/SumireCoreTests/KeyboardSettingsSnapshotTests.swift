@@ -6,6 +6,11 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         let name = "SumireSettingsBackupTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
         defer { defaults.removePersistentDomain(forName: name) }
+        SymbolKeyboardMode.clipboard.saveAsInitialMode(defaults: defaults)
+        EmojiSkinTone.medium.save(defaults: defaults)
+        ClipboardHistorySettings.setEnabled(true, defaults: defaults)
+        defaults.set(true, forKey: "clipboard.expirationEnabled")
+        defaults.set(12, forKey: "clipboard.retentionHours")
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "englishReadingEnabled")
         defaults.set(0x3fff_ffff, forKey: "categoryMask")
@@ -36,6 +41,10 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set("must not export", forKey: "unrelated.account")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         XCTAssertNil(original.values["unrelated.account"])
+        XCTAssertEqual(original.values[SymbolKeyboardMode.initialModeKey], .text("clipboard"))
+        XCTAssertEqual(original.values[EmojiSkinTone.settingsKey], .text("1F3FD"))
+        XCTAssertEqual(original.values[ClipboardHistorySettings.enabledKey], .boolean(true))
+        XCTAssertEqual(original.values["clipboard.retentionHours"], .number(12))
         XCTAssertEqual(original.values["theme.saturation"], .number(0.35))
         XCTAssertEqual(original.values["theme.brightness"], .number(0.65))
         let restored = try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(original))
@@ -59,6 +68,8 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set(2, forKey: "candidateRowCount")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         let invalid: [(String, KeyboardSettingsSnapshot.Value)] = [
+            (SymbolKeyboardMode.initialModeKey, .text("unknown")), (EmojiSkinTone.settingsKey, .text("unknown")),
+            (ClipboardHistorySettings.enabledKey, .number(1)), ("clipboard.retentionHours", .number(73)),
             ("candidateRowCount", .number(1.5)), ("categoryMask", .number(-1)),
             ("theme.hue", .number(.nan)), ("theme.saturation", .number(1.1)), ("theme.brightness", .number(-0.1)), ("theme.mode", .text("invalid")),
             ("englishReadingEnabled", .number(0)), ("unknown.key", .boolean(true)),
