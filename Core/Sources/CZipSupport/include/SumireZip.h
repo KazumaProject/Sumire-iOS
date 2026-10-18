@@ -7,4 +7,6 @@
 int sumire_zip_extract(const uint8_t *input, size_t length, uint16_t method,
                        uint64_t expected_length, uint32_t expected_crc,
                        const char *destination);
+int sumire_zip_validate(const uint8_t *input, size_t length, uint16_t method,
+                        uint64_t expected_length, uint32_t expected_crc);
 #endif

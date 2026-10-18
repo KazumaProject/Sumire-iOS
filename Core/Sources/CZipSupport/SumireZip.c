@@ -5,6 +5,7 @@
 #include <zlib.h>
 
 static int write_all(int fd, const uint8_t *bytes, size_t count) {
+    if (fd < 0) return 1; // Validation-only path: no output is retained.
     while (count) {
         ssize_t n = write(fd, bytes, count);
         if (n < 0 && errno == EINTR) continue;
@@ -13,12 +14,9 @@ static int write_all(int fd, const uint8_t *bytes, size_t count) {
     }
     return 1;
 }
-int sumire_zip_extract(const uint8_t *input, size_t length, uint16_t method,
-                       uint64_t expected_length, uint32_t expected_crc,
-                       const char *destination) {
-    if ((!input && length) || !destination || (method != 0 && method != 8)) return 1;
-    int fd = open(destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
-    if (fd < 0) return 2;
+static int process(const uint8_t *input, size_t length, uint16_t method,
+                   uint64_t expected_length, uint32_t expected_crc, int fd) {
+    if ((!input && length) || (method != 0 && method != 8)) return 1;
     int result = 0;
     uLong crc = crc32(0, Z_NULL, 0);
     uint64_t written = 0;
@@ -60,6 +58,19 @@ int sumire_zip_extract(const uint8_t *input, size_t length, uint16_t method,
         }
     }
     if (!result && (written != expected_length || (uint32_t)crc != expected_crc)) result = 6;
+    return result;
+}
+int sumire_zip_validate(const uint8_t *input, size_t length, uint16_t method,
+                        uint64_t expected_length, uint32_t expected_crc) {
+    return process(input, length, method, expected_length, expected_crc, -1);
+}
+int sumire_zip_extract(const uint8_t *input, size_t length, uint16_t method,
+                       uint64_t expected_length, uint32_t expected_crc,
+                       const char *destination) {
+    if ((!input && length) || !destination || (method != 0 && method != 8)) return 1;
+    int fd = open(destination, O_WRONLY | O_CREAT | O_EXCL | O_NOFOLLOW, 0600);
+    if (fd < 0) return 2;
+    int result = process(input, length, method, expected_length, expected_crc, fd);
     if (!result && fsync(fd) != 0) result = 4;
     if (close(fd) != 0 && !result) result = 4;
     if (result) unlink(destination);

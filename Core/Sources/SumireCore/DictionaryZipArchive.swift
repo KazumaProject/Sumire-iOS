@@ -101,8 +101,15 @@ public struct DictionaryZipArchive {
                 else { throw bad() }
             }
             let directory = name.hasSuffix("/")
-            guard !directory || (unpacked == 0 && packed == 0 && method == 0),
+            guard !directory || (unpacked == 0 && crc == 0),
                   method != 0 || packed == unpacked else { throw bad() }
+            if directory {
+                let valid = data.withUnsafeBytes { raw in
+                    sumire_zip_validate(raw.bindMemory(to: UInt8.self).baseAddress?.advanced(by: start),
+                                        packed, method, 0, 0)
+                }
+                guard valid == 0 else { throw bad() }
+            }
             total += unpacked; ranges.append(local..<finish)
             result.append(Entry(name: name, uncompressedBytes: unpacked, isDirectory: directory,
                                 start: start, compressedBytes: packed, method: method, crc: crc))

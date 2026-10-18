@@ -44,6 +44,18 @@ final class DictionaryZipArchiveTests: XCTestCase {
             }
         }
     }
+    func testDeflatedEmptyDirectoryIsAcceptedButNeverExtractedAsFile() throws {
+        // Python zipfile ZIP_DEFLATED directory entry, compressed size 2.
+        let data = Data(base64Encoded: "UEsDBBQAAAAIAHMnUl0AAAAAAgAAAAAAAAAHAAAAc3lzdGVtLwMAUEsBAhQDFAAAAAgAcydSXQAAAAACAAAAAAAAAAcAAAAAAAAAAAAQAP1BAAAAAHN5c3RlbS9QSwUGAAAAAAEAAQA1AAAAJwAAAAAA")!
+        let zip = try DictionaryZipArchive(data: data)
+        XCTAssertTrue(zip.entries[0].isDirectory)
+        try withDestination { target in
+            XCTAssertThrowsError(try zip.extract(zip.entries[0], to: target))
+            XCTAssertFalse(FileManager.default.fileExists(atPath: target.path))
+        }
+        var corrupt = data; corrupt[37] = 0xff // First byte of the directory's raw DEFLATE stream.
+        XCTAssertThrowsError(try DictionaryZipArchive(data: corrupt))
+    }
     func testChecksumAndExpandedSizeFailureRemoveOnlyStagingFile() throws {
         for data in [archive(crc: 0), archive(expanded: 4), archive(expanded: 6)] {
             let zip = try DictionaryZipArchive(data: data)
