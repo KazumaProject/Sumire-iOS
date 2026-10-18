@@ -147,6 +147,18 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
                     isLongPress: held, direction: nil, secondDirection: nil, circularSlot: slot)
             }
         }
+        var defaultPopupTextSize: CGFloat {
+            switch self {
+            case .two, .hierarchy: return 20
+            case .circle: return 55 / 2.625
+            case .single(let e):
+                switch e.style {
+                case .petal, .crossAction: return e.longPress ? 18 : 28
+                case .standard: return 19
+                case .centerGuide, .directionalLongPress: return 20
+                }
+            }
+        }
         var preview: MultiStageFlickPopupView.Content {
             switch self {
             case .single(let e):
@@ -228,7 +240,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         guard gestureSettings.popupVisible, let host = popupHost, let engine else { return }
         if popup == nil { let view = MultiStageFlickPopupView(); host.addSubview(view); popup = view }
         let palette = popupPalette ?? KeyboardPalette(hue: 0.73, dark: traitCollection.userInterfaceStyle == .dark)
-        popup?.update(engine.preview, palette: palette, fontSize: CGFloat(gestureSettings.popupTextSize))
+        popup?.update(engine.preview, palette: palette, fontSize: gestureStyle.popupTextSize.map { CGFloat($0) } ?? engine.defaultPopupTextSize)
         popup?.place(keyRect: convert(bounds, to: host), host: host,
                      scale: CGFloat(gestureSettings.popupScalePercent / 100), above: gestureStyle.presentation == .guideAboveKey)
     }
