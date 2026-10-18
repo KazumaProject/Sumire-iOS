@@ -1,4 +1,5 @@
 import Foundation
+import SumireCore
 
 /// Both targets use the same suite only when the signed group container exists.
 /// The extension reads settings; basic input never requires a shared write.
@@ -15,6 +16,12 @@ enum KeyboardSettings {
         migrateSettings(from: .standard, to: shared)
         return shared
     }()
+
+    /// Unlike appDefaults, this never runs the containing-app migration. Reading
+    /// the shared container is allowed when the user keeps open access disabled.
+    static func extensionAccess(hasFullAccess: Bool) -> KeyboardSettingsAccess {
+        KeyboardSettingsAccess(shared: sharedDefaults, local: .standard, allowSharedWrites: hasFullAccess)
+    }
 
     static func migrateSettings(from source: UserDefaults, to shared: UserDefaults) {
         // Run once: a later restore may deliberately remove an override in the shared suite.

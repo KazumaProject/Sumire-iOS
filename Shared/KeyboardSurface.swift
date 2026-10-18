@@ -60,6 +60,9 @@ final class KeyboardSurface: UIInputView {
         }
     }
     var settingsDefaults: UserDefaults = .standard
+    var settingsWriteDefaults: UserDefaults?
+    var onSettingsWritten: (([String]) -> Void)?
+    private var writableSettings: UserDefaults { settingsWriteDefaults ?? settingsDefaults }
     var onHeightChange: ((CGFloat) -> Void)?
     private var sizeOrientation = KeyboardOrientation.portrait
     private var sizeValue = KeyboardSize.standard(.portrait)
@@ -112,7 +115,10 @@ final class KeyboardSurface: UIInputView {
         }
     }
     private func saveSize() {
-        do { try KeyboardSizingStore(defaults: settingsDefaults).save(sizeValue, for: sizeOrientation) }
+        do {
+            try KeyboardSizingStore(defaults: writableSettings).save(sizeValue, for: sizeOrientation)
+            onSettingsWritten?([KeyboardSizingStore.key(sizeOrientation)])
+        }
         catch { status.text = "サイズを保存できませんでした" }
     }
     private func beginResize() {
@@ -208,10 +214,12 @@ final class KeyboardSurface: UIInputView {
     private let converter = ConversionService()
     private var symbolPanel: SymbolKeyboardView?
     private let clipboardHistory = ClipboardHistoryController()
-    func configureClipboard(accessAllowed: Bool, allowShared: Bool) {
+    func configureClipboard(accessAllowed: Bool, allowShared: Bool, localReset: LocalDataReset? = nil) {
         candidateBar.clipboardAccessAllowed = accessAllowed
         candidateBar.captureClipboardHistory = ClipboardHistorySettings.isEnabled(defaults: settingsDefaults)
-        clipboardHistory.configure(defaults: settingsDefaults, url: PersonalDataLocation.clipboardURL(allowShared: allowShared), allowed: accessAllowed)
+        clipboardHistory.onSettingsWritten = { [weak self] keys in self?.onSettingsWritten?(keys) }
+        clipboardHistory.configure(defaults: settingsDefaults, writableDefaults: writableSettings,
+                                   url: PersonalDataLocation.clipboardURL(allowShared: allowShared), allowed: accessAllowed, localReset: localReset)
     }
     private func closeSymbolKeyboard() {
         symbolPanel?.removeFromSuperview(); symbolPanel = nil
@@ -220,7 +228,9 @@ final class KeyboardSurface: UIInputView {
     private func showSymbolKeyboard() {
         guard symbolPanel == nil else { return }
         do {
-            let panel = SymbolKeyboardView(defaults: settingsDefaults, catalog: try SymbolKeyboardCatalog.load())
+            let panel = SymbolKeyboardView(defaults: settingsDefaults, writableDefaults: writableSettings,
+                                           catalog: try SymbolKeyboardCatalog.load())
+            panel.onSettingsWritten = { [weak self] keys in self?.onSettingsWritten?(keys) }
             panel.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness))
             panel.onClose = { [weak self] in self?.closeSymbolKeyboard() }
             panel.onInsert = { [weak self] value in
@@ -241,10 +251,10 @@ final class KeyboardSurface: UIInputView {
     func reloadLearningResults() {
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
-    func configureLearning(url: URL?) {
-        guard learningURL != url else { return }
+    func configureLearning(url: URL?, localReset: LocalDataReset? = nil) {
+        guard learningURL != url || localReset != nil else { return }
         learningURL = url
-        converter.setLearning(url: url)
+        converter.setLearning(url: url, localReset: localReset)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
     private var composition = CompositionState()
@@ -1554,7 +1564,8 @@ final class KeyboardSurface: UIInputView {
     }
     private func rememberKeyboard() {
         guard !isAppearancePreview else { return }
-        settingsDefaults.set(selectionID(mode: inputMode, customID: activeCustomID), forKey: "keyboard.lastUsed")
+        writableSettings.set(selectionID(mode: inputMode, customID: activeCustomID), forKey: "keyboard.lastUsed")
+        onSettingsWritten?(["keyboard.lastUsed"])
     }
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()

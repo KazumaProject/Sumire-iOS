@@ -11,6 +11,8 @@ final class ClipboardHistoryController {
     var onNotice: ((String) -> Void)?
     private let queue = DispatchQueue(label: "sumire.clipboard.history", qos: .userInitiated)
     private var defaults: UserDefaults = .standard
+    private var writableDefaults: UserDefaults = .standard
+    var onSettingsWritten: (([String]) -> Void)?
     private var url: URL?
     private var allowed = false
     private weak var panel: SymbolKeyboardView?
@@ -24,16 +26,31 @@ final class ClipboardHistoryController {
     private var storeURL: URL?
     private var lastSavedDigest: String?
     private var lastSavedID: Int64?
+    private var failedResetURL: URL?
 
     init() { thumbnails.totalCostLimit = 512 * 1024; thumbnails.countLimit = 5 }
-    func configure(defaults: UserDefaults, url: URL, allowed: Bool) {
-        let changed = self.url != url || self.allowed != allowed || self.defaults !== defaults
+    func configure(defaults: UserDefaults, writableDefaults: UserDefaults? = nil, url: URL, allowed: Bool, localReset: LocalDataReset? = nil) {
+        let writer = writableDefaults ?? defaults
+        let changed = self.url != url || self.allowed != allowed || self.defaults !== defaults || self.writableDefaults !== writer
         self.defaults = defaults; self.url = url; self.allowed = allowed
+        self.writableDefaults = writer
         if changed {
             generation = UUID(); current = nil; currentThumbnail = nil; thumbnails.removeAllObjects(); pendingThumbnails.removeAll()
             panel?.clipboardAccessAllowed = allowed
-            reload()
         }
+        if let localReset {
+            let token = generation
+            queue.async { [weak self] in
+                guard let self else { return }
+                self.store = nil; self.storeURL = nil; self.lastSavedDigest = nil; self.lastSavedID = nil
+                do { try localReset.apply(); self.failedResetURL = nil }
+                catch {
+                    self.failedResetURL = localReset.url
+                    self.notice("履歴の削除を再試行します: " + error.localizedDescription, token: token)
+                }
+            }
+        }
+        if changed || localReset != nil { reload() }
     }
     func attach(_ panel: SymbolKeyboardView) {
         self.panel = panel; panel.clipboardAccessAllowed = allowed
@@ -50,7 +67,8 @@ final class ClipboardHistoryController {
         }
         panel.onClipboardHistoryChanged = { [weak self, weak panel] enabled in
             guard let self else { return }
-            ClipboardHistorySettings.setEnabled(enabled, defaults: self.defaults)
+            ClipboardHistorySettings.setEnabled(enabled, defaults: self.writableDefaults)
+            self.onSettingsWritten?([ClipboardHistorySettings.enabledKey])
             panel?.clipboardHistoryEnabled = enabled
             self.onHistoryEnabledChanged?(enabled)
         }
@@ -217,6 +235,7 @@ final class ClipboardHistoryController {
         }
     }
     private func open(_ url: URL) throws -> ClipboardHistoryStore {
+        guard failedResetURL != url else { throw PersonalDataError("履歴の削除が完了していません。次回表示時に再試行します") }
         if storeURL != url { store = nil; storeURL = nil; lastSavedDigest = nil }
         if let store { return store }
         let opened = try ClipboardHistoryStore(url: url); store = opened; storeURL = url
