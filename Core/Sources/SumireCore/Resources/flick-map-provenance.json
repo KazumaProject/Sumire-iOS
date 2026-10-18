@@ -3,7 +3,10 @@
   "revision": "9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93",
   "sourceFiles": [
     "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/KeyboardDefaultLayouts.kt",
-    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/data/TfbiFlickNode.kt"
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/data/TfbiFlickNode.kt",
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/HierarchicalKanaDefaultDefinitions.kt",
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/SumireFlickRotationMapper.kt",
+    "custom_keyboard/src/main/java/com/kazumaproject/custom_keyboard/layout/SumireFlickInputModeMapper.kt"
   ],
   "method": "KeyboardDefaultLayouts.createFinalLayout$default; dynamicKeyStates empty; default delete settings, DEFAULT rotation, ALL input; 3 arrangements x 3 modes x 6 styles. Map dictionary order retained in hierarchical directionOrders. Duplicate payloads identified by SHA-256.",
   "classpath": [
