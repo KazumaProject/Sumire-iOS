@@ -80,6 +80,26 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertTrue(FileManager.default.fileExists(atPath: generation.directory.appendingPathComponent("system.sud").path))
     }
 
+    func testLoadCandidatesReturnsCurrentThenPreviousWithoutDuplicates() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let base = root.appendingPathComponent("base", isDirectory: true)
+        let incoming = root.appendingPathComponent("incoming", isDirectory: true)
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        try Data("system v1".utf8).write(to: base.appendingPathComponent("system.sud"))
+        try Data("connection".utf8).write(to: base.appendingPathComponent("connection.sud"))
+        let first = try store.publish(importedFiles: [:], from: base)
+
+        let replacement = incoming.appendingPathComponent("system.sud")
+        try Data("system v2".utf8).write(to: replacement)
+        let second = try store.publish(importedFiles: ["system.sud": replacement], from: first.directory)
+
+        XCTAssertEqual(store.loadCandidates().map(\.generation), [second.generation, first.generation])
+        XCTAssertEqual(store.loadCandidates().filter(\.recoveredPrevious).count, 1)
+    }
+
     func testValidationFailureDoesNotPublishOrRemoveCurrentGeneration() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let base = root.appendingPathComponent("base", isDirectory: true)

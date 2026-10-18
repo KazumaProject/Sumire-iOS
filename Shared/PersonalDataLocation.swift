@@ -16,6 +16,10 @@ enum PersonalDataLocation {
         dictionaryGenerationStore(allowShared: true)?.loadCurrent()
     }
 
+    static func readableDictionaryGenerations() -> [DictionaryGenerationStore.Loaded] {
+        dictionaryGenerationStore(allowShared: true)?.loadCandidates() ?? []
+    }
+
     /// Loading immutable personal dictionary generations performs no writes,
     /// including when falling back to the previous valid generation.
     static func readableStore() -> PersonalLexiconStore { store(allowShared: true) }

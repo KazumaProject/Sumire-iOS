@@ -180,7 +180,16 @@ struct DictionarySettings: View {
             let report = try DictionarySourceArchiveConverter.convert(archiveAt: archive, into: staging)
             defer { try? FileManager.default.removeItem(at: report.outputDirectory) }
 
-            guard let base = store.loadCurrent()?.directory ?? ConversionService.bundledDictionary else {
+            var base: URL?
+            let baseCandidates = store.loadCandidates().map(\.directory) + [ConversionService.bundledDictionary].compactMap { $0 }
+            for candidate in baseCandidates {
+                do {
+                    try Self.validateNativeDictionaries(at: candidate)
+                    base = candidate
+                    break
+                } catch { continue }
+            }
+            guard let base else {
                 throw ImportError(message: "変換の基準となる辞書が見つかりません")
             }
             let files = Dictionary(uniqueKeysWithValues: report.convertedFiles.map {

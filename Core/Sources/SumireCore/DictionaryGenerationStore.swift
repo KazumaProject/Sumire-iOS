@@ -53,6 +53,21 @@ public struct DictionaryGenerationStore {
         return try? load(previousPointer, recoveredPrevious: true)
     }
 
+    /// Returns valid pointer targets in recovery order. The keyboard tries each
+    /// immutable generation with the native loader, which verifies every selected
+    /// dictionary section before it replaces an existing conversion session.
+    public func loadCandidates() -> [Loaded] {
+        var candidates: [Loaded] = []
+        if let current = try? load(currentPointer, recoveredPrevious: false) {
+            candidates.append(current)
+        }
+        if let previous = try? load(previousPointer, recoveredPrevious: true),
+           !candidates.contains(where: { $0.generation == previous.generation }) {
+            candidates.append(previous)
+        }
+        return candidates
+    }
+
     /// Copies a trusted base dictionary set, overlays the validated import
     /// outputs, and changes current.json only after the complete generation and
     /// its manifest have been written and synced.

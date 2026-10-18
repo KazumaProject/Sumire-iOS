@@ -3,6 +3,44 @@ import Darwin
 import os
 import SumireCore
 
+struct OpenedNativeDictionaryEngine {
+    let engine: OpaquePointer
+    let directory: URL
+}
+
+enum NativeDictionaryEngineOpener {
+    /// Opens the first usable immutable generation. A failed native load is
+    /// remembered for the process lifetime, then recovery tries the previous
+    /// generation and the bundled baseline in order.
+    static func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool,
+                     rejecting rejectedDirectories: inout Set<URL>) throws -> OpenedNativeDictionaryEngine {
+        let candidates = directories.map(\.standardizedFileURL)
+            .filter { !rejectedDirectories.contains($0) }
+        guard !candidates.isEmpty else {
+            throw NativeDictionaryOpenError(message: "変換辞書が見つかりません。読みは保持しています")
+        }
+
+        var lastOpenError: String?
+        for directory in candidates {
+            var engine: OpaquePointer?
+            var error = [CChar](repeating: 0, count: 1024)
+            let status = sumire_engine_open_with_dictionaries(directory.path, mask,
+                (english ? 1 : 0) | (englishReading ? 2 : 0), &engine, &error, error.count)
+            if status == 0, let engine {
+                return OpenedNativeDictionaryEngine(engine: engine, directory: directory)
+            }
+            rejectedDirectories.insert(directory)
+            lastOpenError = String(cString: error)
+        }
+        throw NativeDictionaryOpenError(message: lastOpenError ?? "有効な辞書世代がありません。読みは保持しています")
+    }
+}
+
+private struct NativeDictionaryOpenError: LocalizedError {
+    let message: String
+    var errorDescription: String? { message }
+}
+
 struct ConversionCandidate {
     let id: UInt64
     let text: String
@@ -38,7 +76,7 @@ final class ConversionService {
     private let state = NativeState()
     private let pending = PendingRequest()
     private let directoryOverride: URL?
-    private var cachedDictionaryDirectory: URL?
+    private var cachedDictionaryDirectories: [URL]?
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var categoryMask: UInt32
@@ -53,17 +91,21 @@ final class ConversionService {
         self.directoryOverride = directory
         self.categoryMask = categoryMask
     }
-    private static var activeDictionary: URL? {
-        PersonalDataLocation.readableDictionaryGeneration()?.directory ?? bundledDictionary
+    private static var activeDictionaries: [URL] {
+        var directories = PersonalDataLocation.readableDictionaryGenerations().map(\.directory)
+        if let bundledDictionary, !directories.contains(bundledDictionary) {
+            directories.append(bundledDictionary)
+        }
+        return directories
     }
     // Called only on the serial conversion queue. Avoid resolving App Group
     // metadata on the keyboard's main thread for every keystroke.
-    private func resolveActiveDictionary() -> URL? {
+    private func resolveActiveDictionaries() -> [URL] {
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastDictionaryRefresh < 0.5 { return cachedDictionaryDirectory }
+        if now - lastDictionaryRefresh < 0.5 { return cachedDictionaryDirectories ?? [] }
         lastDictionaryRefresh = now
-        cachedDictionaryDirectory = Self.activeDictionary
-        return cachedDictionaryDirectory
+        cachedDictionaryDirectories = Self.activeDictionaries
+        return cachedDictionaryDirectories ?? []
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
@@ -112,12 +154,12 @@ final class ConversionService {
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
-            let directory = directoryOverride ?? self.resolveActiveDictionary()
+            let directories = directoryOverride.map { [$0] } ?? self.resolveActiveDictionaries()
             ProcessMemory.record("conversion.begin")
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(directory: directory, mask: mask, english: english, englishReading: englishReading)
+                try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
                 let warning = try state.prepareLearning(reading: reading)
                 var error = [CChar](repeating: 0, count: 1024)
                 var result: OpaquePointer?
@@ -245,6 +287,9 @@ final class ConversionService {
         var lastReading = ""
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         private var openedDirectory: URL?
+        // Generations are immutable. Once a native open rejects one, skip it for
+        // this process and try the previous pointer or bundled baseline.
+        private var rejectedDirectories = Set<URL>()
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
         func prepareLearning(reading: String) throws -> String? {
@@ -281,23 +326,23 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
-        func open(directory: URL?, mask: UInt32, english: Bool, englishReading: Bool) throws {
-            let requestedDirectory = directory?.standardizedFileURL
+        func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool) throws {
+            let candidates = directories.map(\.standardizedFileURL).filter { !rejectedDirectories.contains($0) }
+            let requestedDirectory = candidates.first
             let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&
                 openedMask == mask && openedEnglishReading == englishReading
             if sameConfiguration && (!english || englishLoaded) { return }
             if session != nil { close() }
-            guard let directory else { throw NativeError("変換辞書が見つかりません。読みは保持しています") }
-            var engine: OpaquePointer?
+            let opened = try NativeDictionaryEngineOpener.open(directories: candidates, mask: mask,
+                english: english, englishReading: englishReading, rejecting: &rejectedDirectories)
+            defer { sumire_engine_close(opened.engine) }
             var error = [CChar](repeating: 0, count: 1024)
-            guard sumire_engine_open_with_dictionaries(directory.path, mask, (english ? 1 : 0) | (englishReading ? 2 : 0), &engine, &error, error.count) == 0, let engine else {
+            guard sumire_session_create(opened.engine, &session, &error, error.count) == 0 else {
                 throw NativeError(String(cString: error))
             }
-            defer { sumire_engine_close(engine) }
-            guard sumire_session_create(engine, &session, &error, error.count) == 0 else { throw NativeError(String(cString: error)) }
             do {
                 try installPersonal()
-                openedDirectory = requestedDirectory
+                openedDirectory = opened.directory
                 openedMask = mask
                 openedEnglishReading = englishReading
                 englishLoaded = english
