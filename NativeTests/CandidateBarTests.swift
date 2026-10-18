@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import UniformTypeIdentifiers
 
 final class CandidateBarTests: XCTestCase {
     func testSystemPasteControlRemainsAvailableWithoutFullAccess() {
@@ -40,6 +41,46 @@ final class CandidateBarTests: XCTestCase {
                 finished.fulfill()
             }
             let provider = NSItemProvider(object: "explicit paste text" as NSString)
+            bar.paste(itemProviders: [provider])
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
+    func testUserInitiatedImagePasteShowsPreviewWithoutSavingHistory() {
+        let finished = expectation(description: "User-selected image is previewed without clipboard history")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            bar.captureClipboardHistory = true
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+                UIColor.systemPink.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+            guard let data = image.pngData(), (try? data.write(to: url)) != nil,
+                  let provider = NSItemProvider(contentsOf: url) else {
+                XCTFail("Could not make an image item provider")
+                window.isHidden = true
+                finished.fulfill()
+                return
+            }
+            var capturedHistory = false
+            bar.onClipboardCaptured = { _, _ in capturedHistory = true }
+            bar.onClipboardNotice = { notice in
+                XCTAssertTrue(notice.contains("貼り付け"))
+                let preview = bar.subviews.first { $0.accessibilityIdentifier == "clipboard-description" }
+                XCTAssertFalse(preview?.isHidden ?? true)
+                XCTAssertNotNil((preview as? UIButton)?.image(for: .normal))
+                XCTAssertFalse(capturedHistory)
+                window.isHidden = true
+                try? FileManager.default.removeItem(at: url)
+                finished.fulfill()
+            }
             bar.paste(itemProviders: [provider])
         }
         wait(for: [finished], timeout: 10)
