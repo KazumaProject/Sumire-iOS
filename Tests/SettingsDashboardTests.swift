@@ -31,7 +31,7 @@ final class SettingsDashboardTests: XCTestCase {
         XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("Material")
         let theme = app.buttons["settings-destination-theme"]
         XCTAssertTrue(theme.waitForExistence(timeout: 3)); theme.tap()
-        XCTAssertTrue(app.otherElements["theme-settings"].waitForExistence(timeout: 3) || app.buttons["theme-seed-color"].exists)
+        XCTAssertTrue(app.buttons["theme-preset-0"].waitForExistence(timeout: 3))
         app.buttons["完了"].tap()
         app.terminate(); app.launch()
         let fresh = app.searchFields.firstMatch; fresh.tap(); fresh.typeText("zzzz-no-setting")
