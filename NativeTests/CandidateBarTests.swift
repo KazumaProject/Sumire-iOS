@@ -2,6 +2,49 @@ import XCTest
 import UIKit
 
 final class CandidateBarTests: XCTestCase {
+    func testSystemPasteControlRemainsAvailableWithoutFullAccess() {
+        let finished = expectation(description: "Paste control is available for user-mediated paste")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            bar.layoutIfNeeded()
+            let pasteControl = bar.subviews.first { $0.accessibilityIdentifier == "clipboard-preview" }
+            XCTAssertNotNil(pasteControl)
+            XCTAssertFalse(pasteControl?.isHidden ?? true)
+            bar.showsShortcuts = false
+            XCTAssertTrue(pasteControl?.isHidden ?? false)
+            window.isHidden = true
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
+    func testUserInitiatedTextPasteWorksWithoutFullAccess() {
+        let finished = expectation(description: "User-selected clipboard text reaches the editor")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            bar.onPasteText = { text in
+                XCTAssertEqual(text, "explicit paste text")
+                window.isHidden = true
+                finished.fulfill()
+            }
+            let provider = NSItemProvider(object: "explicit paste text" as NSString)
+            bar.paste(itemProviders: [provider])
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
     private func withBar(rows: Int = 1, _ body: @escaping (CandidateBar, UICollectionView) -> Void) {
         let finished = expectation(description: "Rendered candidate bar")
         DispatchQueue.main.async {

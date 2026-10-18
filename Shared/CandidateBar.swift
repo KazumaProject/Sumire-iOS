@@ -18,7 +18,14 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     var automaticallyPreviewClipboard = false {
         didSet { if automaticallyPreviewClipboard != oldValue { clipboardReadGeneration = -1; refreshClipboard() } }
     }
-    var clipboardAccessAllowed = true { didSet { refreshClipboard() } }
+    /// Controls passive clipboard discovery and history. User-initiated paste
+    /// through UIPasteControl remains available without open access.
+    var clipboardAccessAllowed = true {
+        didSet {
+            clipboardRequest = UUID()
+            refreshClipboard()
+        }
+    }
     private let clipboard = UIButton(type: .system)
     private let pasteControl: UIPasteControl = {
         let configuration = UIPasteControl.Configuration()
@@ -46,7 +53,19 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     deinit { clipboardObservers.forEach(NotificationCenter.default.removeObserver) }
 
     func refreshClipboard() {
-        guard window != nil, clipboardAccessAllowed else { clipboard.isHidden = true; pasteControl.isHidden = true; return }
+        guard window != nil, showsShortcuts else {
+            clipboard.isHidden = true
+            pasteControl.isHidden = true
+            return
+        }
+        guard clipboardAccessAllowed else {
+            // Do not inspect UIPasteboard in the restricted extension. The
+            // system paste control is explicit user intent and can supply the
+            // selected item through paste(itemProviders:).
+            clipboard.isHidden = true
+            pasteControl.isHidden = false
+            return
+        }
         let board = UIPasteboard.general
         let generation = board.changeCount
         if generation != clipboardGeneration {
@@ -66,11 +85,13 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         loadClipboard(itemProviders: itemProviders, insertText: true)
     }
     private func loadClipboard(itemProviders: [NSItemProvider], insertText: Bool) {
-        guard clipboardAccessAllowed, showsShortcuts, let provider = itemProviders.first else { return }
-        let generation = UIPasteboard.general.changeCount
+        guard showsShortcuts, (insertText || clipboardAccessAllowed), let provider = itemProviders.first else { return }
+        // A UIPasteControl callback already carries the user's selected item;
+        // never query UIPasteboard to validate that explicit paste request.
+        let generation = clipboardAccessAllowed ? UIPasteboard.general.changeCount : nil
         clipboardRequest = UUID()
         let request = clipboardRequest
-        let captureHistory = captureClipboardHistory
+        let captureHistory = clipboardAccessAllowed && captureClipboardHistory
         if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
             provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] url, error in
                 var thumbnail: CGImage?
@@ -89,13 +110,12 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                     ] as CFDictionary)
                 }
                 DispatchQueue.main.async {
-                    guard let self, self.window != nil, self.clipboardAccessAllowed, self.clipboardRequest == request,
-                          (insertText || self.automaticallyPreviewClipboard),
-                          UIPasteboard.general.changeCount == generation else { return }
+                    guard let self, self.acceptClipboardResult(request: request, insertText: insertText, generation: generation) else { return }
                     if self.captureClipboardHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
                     if let thumbnail {
                         self.clipboard.setImage(UIImage(cgImage: thumbnail).withRenderingMode(.alwaysOriginal), for: .normal)
                         self.clipboard.setTitle("入力欄で貼り付け", for: .normal)
+                        if insertText && !self.clipboardAccessAllowed { self.clipboard.isHidden = false }
                         if insertText { self.onClipboardNotice?("画像は入力先の貼り付けメニューから挿入してください") }
                     } else { self.onClipboardNotice?("この画像のプレビューを読み込めませんでした") }
                 }
@@ -103,23 +123,29 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         } else if provider.canLoadObject(ofClass: NSString.self) {
             provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
                 DispatchQueue.main.async {
-                    guard let self, self.window != nil, self.clipboardAccessAllowed, self.clipboardRequest == request,
-                          (insertText || self.automaticallyPreviewClipboard), self.showsShortcuts,
-                          UIPasteboard.general.changeCount == generation else { return }
+                    guard let self, self.acceptClipboardResult(request: request, insertText: insertText, generation: generation) else { return }
                     guard let text = object as? String, !text.isEmpty else {
                         self.onClipboardNotice?("クリップボードを読み込めませんでした"); return
                     }
                     if self.captureClipboardHistory { self.onClipboardCaptured?(text, nil) }
                     if insertText {
                         self.onPasteText?(text)
-                        self.dismissedGeneration = generation
-                        self.refreshClipboard()
+                        if let generation {
+                            self.dismissedGeneration = generation
+                            self.refreshClipboard()
+                        }
                     } else {
                         self.clipboard.setTitle(String(text.prefix(120)), for: .normal)
                     }
                 }
             }
         }
+    }
+    private func acceptClipboardResult(request: UUID, insertText: Bool, generation: Int?) -> Bool {
+        guard window != nil, showsShortcuts, clipboardRequest == request else { return false }
+        if insertText { return true }
+        guard clipboardAccessAllowed, automaticallyPreviewClipboard, let generation else { return false }
+        return UIPasteboard.general.changeCount == generation
     }
     var showsShortcuts = true {
         didSet {
@@ -238,6 +264,8 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.text.identifier, UTType.image.identifier])
         pasteControl.target = self
         pasteControl.accessibilityIdentifier = "clipboard-preview"
+        pasteControl.accessibilityLabel = "クリップボードから貼り付け"
+        pasteControl.accessibilityHint = "タップして選んだ内容だけをキーボードへ渡します"
         pasteControl.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pasteControl)
         NSLayoutConstraint.activate([
