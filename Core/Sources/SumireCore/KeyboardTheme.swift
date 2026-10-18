@@ -32,12 +32,27 @@ public struct KeyboardTheme: Equatable {
     }
 }
 
-/// HSV tones, independent of UIKit, shared by the keyboard and settings preview.
-/// This is a Sumire tonal palette, not the Material HCT algorithm.
+/// An opaque sRGB color from Material Color Utilities. HSV accessors remain for
+/// source compatibility; they describe the computed color, not a tonal shortcut.
 public struct KeyboardThemeTone: Equatable {
-    public let hue: Double
-    public let saturation: Double
-    public let brightness: Double
+    public let argb: UInt32
+    public var red: Double { Double((argb >> 16) & 255) / 255 }
+    public var green: Double { Double((argb >> 8) & 255) / 255 }
+    public var blue: Double { Double(argb & 255) / 255 }
+    public var brightness: Double { max(red, green, blue) }
+    public var saturation: Double {
+        brightness == 0 ? 0 : (brightness - min(red, green, blue)) / brightness
+    }
+    public var hue: Double {
+        let delta = brightness - min(red, green, blue)
+        guard delta != 0 else { return 0 }
+        let sector: Double
+        if brightness == red { sector = (green - blue) / delta }
+        else if brightness == green { sector = (blue - red) / delta + 2 }
+        else { sector = (red - green) / delta + 4 }
+        return (sector / 6 + 1).truncatingRemainder(dividingBy: 1)
+    }
+    public init(argb: UInt32) { self.argb = argb | 0xff00_0000 }
 }
 
 public struct KeyboardThemeTones: Equatable {
@@ -45,22 +60,50 @@ public struct KeyboardThemeTones: Equatable {
     public let key: KeyboardThemeTone
     public let function: KeyboardThemeTone
     public let accent: KeyboardThemeTone
+    public let foreground: KeyboardThemeTone
+    public let functionForeground: KeyboardThemeTone
+    public let accentForeground: KeyboardThemeTone
+    public let keyPressed: KeyboardThemeTone
+    public let functionPressed: KeyboardThemeTone
 }
 
 extension KeyboardTheme {
-    public func tones(dark: Bool) -> KeyboardThemeTones {
-        let base = Self(hue: hue, mode: mode, saturation: saturation, brightness: brightness)
-        func tone(_ saturation: Double, _ brightness: Double) -> KeyboardThemeTone {
-            KeyboardThemeTone(hue: base.hue,
-                              saturation: min(1, saturation * base.saturation / 0.5),
-                              brightness: min(1, max(0, brightness)))
+    /// Existing HSV preferences continue to represent the selected sRGB seed.
+    /// Material color generation starts from this quantized opaque ARGB value.
+    public var seedARGB: UInt32 {
+        let seed = Self(hue: hue, mode: mode, saturation: saturation, brightness: brightness)
+        let h = (seed.hue == 1 ? 0 : seed.hue) * 6
+        let chroma = seed.brightness * seed.saturation
+        let x = chroma * (1 - abs(h.truncatingRemainder(dividingBy: 2) - 1))
+        let m = seed.brightness - chroma
+        let rgb: (Double, Double, Double)
+        switch Int(h) {
+        case 0: rgb = (chroma, x, 0)
+        case 1: rgb = (x, chroma, 0)
+        case 2: rgb = (0, chroma, x)
+        case 3: rgb = (0, x, chroma)
+        case 4: rgb = (x, 0, chroma)
+        default: rgb = (chroma, 0, x)
         }
-        // Keep neutral surfaces readable while allowing the selected seed color to tint them.
-        let shift = (base.brightness - 0.7) * 0.06
+        func byte(_ value: Double) -> UInt32 { UInt32(((value + m) * 255).rounded()) }
+        return 0xff00_0000 | byte(rgb.0) << 16 | byte(rgb.1) << 8 | byte(rgb.2)
+    }
+
+    public func tones(dark: Bool) -> KeyboardThemeTones {
+        let roles = MaterialContentColors.resolve(seedARGB: seedARGB, dark: dark)
+        func tone(_ argb: UInt32) -> KeyboardThemeTone { KeyboardThemeTone(argb: argb) }
+        // Android Sumire 9506: keyboard_root_material and ten_keys_{center,side}_bg_material.
         return KeyboardThemeTones(
-            background: tone(dark ? 0.20 : 0.08, (dark ? 0.14 : 0.94) + shift),
-            key: tone(dark ? 0.15 : 0.025, (dark ? 0.27 : 1) + shift),
-            function: tone(dark ? 0.28 : 0.14, (dark ? 0.36 : 0.86) + shift),
-            accent: tone(0.5, base.brightness + (dark ? 0.05 : 0)))
+            background: tone(roles.surfaceContainer),
+            key: tone(dark ? roles.surfaceContainerHighest : roles.surface),
+            function: tone(roles.secondaryContainer),
+            accent: tone(roles.primary),
+            foreground: tone(roles.onSurface),
+            functionForeground: tone(roles.onSecondaryContainer),
+            accentForeground: tone(roles.onPrimary),
+            keyPressed: tone(dark ? roles.surfaceContainerHigh : roles.surfaceVariant),
+            // The dark drawable uses colorSecondaryVariant, explicitly set to
+            // main_text_color (#D1D1D1) by the reference theme, not a dynamic role.
+            functionPressed: tone(dark ? 0xffd1_d1d1 : roles.surfaceContainerHigh))
     }
 }

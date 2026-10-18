@@ -1,0 +1,84 @@
+{
+  "repository": "https://github.com/material-foundation/material-color-utilities",
+  "revision": "dd62982dfdefdfc9232ce8d76e122fb1c6d188ae",
+  "license": "Apache-2.0",
+  "modifications": [],
+  "files": [
+    {
+      "path": "Hct/Cam16.swift",
+      "sha256": "b25e2a1e0b5b3e02034bc8ebc2cba62d956bbc5e5379146c8b742056e4db9758"
+    },
+    {
+      "path": "Hct/HctSolver.swift",
+      "sha256": "e7c7a70ec7d7e2ed9b37fec49a732a7d13e1910fc1a4d0de94efa9c37bf726ee"
+    },
+    {
+      "path": "Hct/Hct.swift",
+      "sha256": "85298632a01964429ea68a26ab8a91e6216bf81dd5305a860271a43ac33be525"
+    },
+    {
+      "path": "Hct/ViewingConditions.swift",
+      "sha256": "fcd11e7b3951695507083a95c263f7e826fb01ed65b5415bc3b30860c3a8f829"
+    },
+    {
+      "path": "DynamicColor/MaterialDynamicColors.swift",
+      "sha256": "cd3b91882478185766e9fd6ba54e7d32de1ee74a71aafcc90d1ab419cc072a6f"
+    },
+    {
+      "path": "DynamicColor/DynamicScheme.swift",
+      "sha256": "03a7a806ec5493e8ccd0e1e2bdcb45316d1070f830448af60b5790ed14d8ce86"
+    },
+    {
+      "path": "DynamicColor/DynamicColor.swift",
+      "sha256": "e0860fd93ec06c7e6c6cee3ffb8c68ab9565debcaff632e3138624276ee8b2f0"
+    },
+    {
+      "path": "DynamicColor/ToneDeltaPair.swift",
+      "sha256": "1e5a3e8ca7884f6300d0814a4d658ed4327e9850900b592e97cc00aee93b0df2"
+    },
+    {
+      "path": "DynamicColor/DynamicSchemeProvider.swift",
+      "sha256": "adbc654f8d2992546f3416ad9a49f3ab93fabc374289f319f4e6240cecad9cc8"
+    },
+    {
+      "path": "DynamicColor/Variant.swift",
+      "sha256": "55d5fbda3c4dd47783c1d0224c81cbdeae46a21151937d60b4f7267552946174"
+    },
+    {
+      "path": "DynamicColor/ContrastCurve.swift",
+      "sha256": "d7072490775ac86c3b2198ded1a35d2a027875bf88c42e9b1fe1575421417d0a"
+    },
+    {
+      "path": "Contrast/Contrast.swift",
+      "sha256": "e8fe97df9dcb0784e663030d577658593200cd2ba0ea5b28827ed753f6de63dc"
+    },
+    {
+      "path": "Dislike/DislikeAnalyzer.swift",
+      "sha256": "e6d0b5a8736bcd5aa29135beba319d98103ba288e8ecc19ccb4470b0df746a04"
+    },
+    {
+      "path": "Palettes/TonalPalette.swift",
+      "sha256": "c44677ad71a1b5c18a1f56cde5ce37eb8f04a3aefa8f54de04258a6c88e93f41"
+    },
+    {
+      "path": "Palettes/CorePalettes.swift",
+      "sha256": "37ee0b8f50cd237471c7769fc2d40b4b67d4ac8e944ae938ea5377d793b460c5"
+    },
+    {
+      "path": "Temperature/TemperatureCache.swift",
+      "sha256": "85d7c59a55248a21247f35cec85ad32b9c45cd48b6e2c6655e268ae6d71a167c"
+    },
+    {
+      "path": "Utils/ColorUtils.swift",
+      "sha256": "6b8791c2ec443edc34f867fcb70e01e208a1a142d753e339da97628f64b3c64a"
+    },
+    {
+      "path": "Utils/MathUtils.swift",
+      "sha256": "3d196b618f964ab99f02db802415bb5461e84b424747dd3b133f5386b70133c1"
+    },
+    {
+      "path": "Scheme/SchemeContent.swift",
+      "sha256": "9e7c61fa86da2606ddfb13a5c03bbd583c203b5526fafebea368601e8c68ad45"
+    }
+  ]
+}
