@@ -99,7 +99,7 @@ final class ConversionService {
                     var request = sumire_request(generation: generation, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,
                                                  edit_start_utf16: UInt32(max(0, editStart)),
-                                                 candidate_count: 20, max_states: 200_000, flags: english ? 2 : (omission ? 1 : 0) | 4)
+                                                 candidate_count: 20, max_states: 200_000, flags: english ? 2 : (omission ? 1 : 0) | 12)
                     return sumire_session_update(state.session, &request, &result, &error, error.count)
                 }
                 guard status == 0, let result else { throw NativeError(String(cString: error)) }

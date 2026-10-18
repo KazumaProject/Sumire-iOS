@@ -58,6 +58,29 @@ final class BunsetsuServiceTests: XCTestCase {
         XCTAssertEqual(prefix.bunsetsu.first?.readingRange, NSRange(location: 0, length: 5))
     }
 
+    func testJapaneseCompletionConsumesTypedPrefixAndLearnsThatReading() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let service = ConversionService()
+        service.setLearning(url: database)
+        let response = try convert(service, "こんに", generation: 1)
+        let candidate = try XCTUnwrap(response.candidates.first { $0.text == "こんにちは" })
+        XCTAssertEqual(candidate.range, NSRange(location: 0, length: 3))
+        XCTAssertEqual(candidate.bunsetsu.map(\.text), ["こんにちは"])
+        XCTAssertEqual(candidate.bunsetsu.map(\.reading), ["こんに"])
+        XCTAssertEqual(candidate.bunsetsu.first?.readingRange, NSRange(location: 0, length: 3))
+        let committed = expectation(description: "Prediction learned under typed prefix")
+        service.commit(generation: 1, candidate: candidate.id, learn: true) {
+            XCTAssertEqual($0, "学習しました")
+            committed.fulfill()
+        }
+        wait(for: [committed], timeout: 10)
+        let store = try LearningStore(url: database)
+        XCTAssertTrue(try store.candidates(reading: "こんに").contains { $0.text == "こんにちは" })
+        XCTAssertFalse(try store.candidates(reading: "こんにちは").contains { $0.text == "こんにちは" })
+    }
+
     func testEnglishCompletionIsOneSegmentConsumingTypedInput() throws {
         let response = try convert(ConversionService(), "iph", generation: 1, english: true)
         let candidate = try XCTUnwrap(response.candidates.first { $0.text == "iPhone" })
