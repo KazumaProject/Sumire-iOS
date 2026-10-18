@@ -9,6 +9,18 @@ final class DictionarySourceValidationTests: XCTestCase {
         let assetSHA256: [String: String]
     }
 
+    private struct ReferenceNativeManifest: Decodable {
+        let sourceRevision: String
+        let assetSHA256: [String: String]
+        let outputSHA256: [String: String]
+
+        enum CodingKeys: String, CodingKey {
+            case sourceRevision = "source_revision"
+            case assetSHA256 = "asset_sha256"
+            case outputSHA256 = "output_sha256"
+        }
+    }
+
     private struct SerializedArray {
         let kind: DictionaryPrimitiveKind
         let values: [UInt64]
@@ -110,6 +122,48 @@ final class DictionarySourceValidationTests: XCTestCase {
         XCTAssertEqual(try value.nativeSurfaceReference(at: 0), 2)
     }
 
+    func testConnectionSourceConversionPreservesDefaultsAndExactExceptions() throws {
+        let posTable = try parse([
+            .init(kind: .shorts, values: [0, 1, 2]),
+            .init(kind: .shorts, values: [2, 1, 0])
+        ])
+        let matrixValues: [Int16] = [5, 5, 1, 3, 4, 3, 7, -8, 9]
+        var matrix = Data()
+        for value in matrixValues {
+            append(UInt64(bitPattern: Int64(value)), width: 2, to: &matrix)
+        }
+
+        let source = try ConnectionSourceValidation.validate(posTable: posTable, matrix: matrix)
+        let sections = try SumireConnectionSourceConverter.sections(for: source)
+        XCTAssertEqual(sections.count, 7)
+        XCTAssertEqual(sections[0], Data([0, 0, 1, 0, 2, 0]))
+        XCTAssertEqual(sections[1], Data([2, 0, 1, 0, 0, 0]))
+        XCTAssertEqual(sections[2], Data([5, 0, 3, 0, 7, 0]))
+        XCTAssertEqual(sections[3], Data([4, 0, 0, 0, 0, 0, 0, 0,
+                                          2, 0, 0, 0, 0, 0, 0, 0,
+                                          6, 0, 0, 0, 0, 0, 0, 0]))
+        XCTAssertEqual(sections[4], Data([1, 0, 4, 0, 0xf8, 0xff, 9, 0]))
+        XCTAssertEqual(sections[5], Data([0, 0, 0, 0, 1, 0, 0, 0,
+                                          2, 0, 0, 0, 4, 0, 0, 0]))
+        XCTAssertEqual(sections[6], Data(repeating: 0, count: 6))
+    }
+
+    func testConnectionSourceValidationRejectsBadShapeAndPOSReferences() throws {
+        let posTable = try parse([
+            .init(kind: .shorts, values: [0, 1, 2]),
+            .init(kind: .shorts, values: [2, 1, 0])
+        ])
+        XCTAssertThrowsError(try ConnectionSourceValidation.validate(posTable: posTable, matrix: Data([0, 1])))
+
+        let invalidPOS = try parse([
+            .init(kind: .shorts, values: [0, 1, 3]),
+            .init(kind: .shorts, values: [2, 1, 0])
+        ])
+        XCTAssertThrowsError(try ConnectionSourceValidation.validate(
+            posTable: invalidPOS, matrix: Data(repeating: 0, count: 18)
+        ))
+    }
+
     func testEnglishSentinelConversionAndUnreferencedTokensAreLegal() throws {
         let englishReading = try trie(label: 0x61)
         let englishSurface = try surfaceTrie(label: 0x41)
@@ -190,6 +244,64 @@ final class DictionarySourceValidationTests: XCTestCase {
         ))
     }
 
+    func testJapaneseConversionCreatesNativeSectionsAndDeduplicatesSurfaceText() throws {
+        let reading = try trie()
+        let repeatedSiblings = try parse([
+            .init(kind: .longs, values: [0b1101]),
+            .init(kind: .longs, values: [0b1100]),
+            .init(kind: .characters, values: [0, 0x20, 0x61, 0x61])
+        ])
+        let tokens = try japaneseTokens(nodes: [2, 3], postings: [0b110])
+        let source = try DictionarySourceValidation.validate(
+            reading: reading, surface: repeatedSiblings, tokens: tokens, posTableCount: 1
+        )
+
+        let sections = try SumireDictionarySourceConverter.sections(for: source)
+
+        XCTAssertEqual(sections.count, 10)
+        XCTAssertEqual(Array(sections[0]), [5, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(Array(sections[1]), [0, 0, 0x20, 0, 0x42, 0x30])
+        XCTAssertEqual(Array(sections[2]), [4, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(Array(sections[3]), [1, 0, 0, 0])
+        XCTAssertEqual(Array(sections[4]), [0, 0, 0, 0, 0, 0, 0, 0, 2, 0, 0, 0])
+        XCTAssertEqual(Array(sections[5]), [0, 0, 0, 0])
+        XCTAssertEqual(Array(sections[6]), [100, 0, 100, 0])
+        XCTAssertEqual(Array(sections[7]), [0, 0, 0, 0, 0, 0, 0, 0])
+        XCTAssertEqual(Array(sections[8]), [0, 0, 0, 0, 1, 0, 0, 0])
+        XCTAssertEqual(Array(sections[9]), [0x61])
+    }
+
+    func testEnglishConversionUsesZeroPOSAndPreservesEnglishSentinel() throws {
+        let source = try DictionarySourceValidation.validate(
+            reading: trie(label: 0x61),
+            surface: surfaceTrie(label: 0x41),
+            tokens: englishTokens(nodes: [2, UInt64(bitPattern: -1)], postings: [0b110]),
+            isEnglish: true,
+            posTableCount: 0
+        )
+
+        let sections = try SumireDictionarySourceConverter.sections(for: source)
+
+        XCTAssertEqual(Array(sections[5]), [0, 0, 0, 0])
+        XCTAssertEqual(Array(sections[6]), [100, 0, 100, 0])
+        XCTAssertEqual(Array(sections[7]), [0, 0, 0, 0, 0xfe, 0xff, 0xff, 0xff])
+        XCTAssertEqual(Array(sections[8]), [0, 0, 0, 0, 1, 0, 0, 0])
+        XCTAssertEqual(Array(sections[9]), [0x41])
+    }
+
+    func testConversionRejectsUnpairedUTF16InsteadOfReplacingIt() throws {
+        let invalidSurface = try parse([
+            .init(kind: .longs, values: [0b101]),
+            .init(kind: .longs, values: [0b100]),
+            .init(kind: .characters, values: [0, 0x20, 0xd83d])
+        ])
+        let source = try DictionarySourceValidation.validate(
+            reading: trie(), surface: invalidSurface, tokens: japaneseTokens(), posTableCount: 1
+        )
+
+        XCTAssertThrowsError(try SumireDictionarySourceConverter.sections(for: source))
+    }
+
     func testRejectsMalformedColumnsTriesPostingsAndReferences() throws {
         let reading = try trie()
         let surface = try surfaceTrie()
@@ -246,6 +358,16 @@ final class DictionarySourceValidationTests: XCTestCase {
         XCTAssertEqual(pinned.sourceRevision, "df1f38315bf56d860d32919a3eaed6a75499e91e")
         XCTAssertEqual(pinned.assetSHA256.count, 101)
         try verifyPinnedAssets(pinned.assetSHA256, under: base)
+        let referenceDirectory = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_NATIVE_DICTIONARIES"]
+            .map { URL(fileURLWithPath: $0, isDirectory: true) }
+        var referenceManifest: ReferenceNativeManifest?
+        if let referenceDirectory {
+            let manifestURL = referenceDirectory.appendingPathComponent("manifest.json")
+            let manifest = try JSONDecoder().decode(ReferenceNativeManifest.self, from: Data(contentsOf: manifestURL))
+            XCTAssertEqual(manifest.sourceRevision, pinned.sourceRevision)
+            XCTAssertEqual(manifest.assetSHA256, pinned.assetSHA256)
+            referenceManifest = manifest
+        }
         let staging = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: staging, withIntermediateDirectories: false)
         defer { try? FileManager.default.removeItem(at: staging) }
@@ -275,6 +397,17 @@ final class DictionarySourceValidationTests: XCTestCase {
         let posTable = try decode("pos_table.dat", kinds: [.shorts, .shorts])
         XCTAssertEqual(posTable[0].count, posTable[1].count)
         XCTAssertGreaterThan(posTable[0].count, 0)
+        let connection = try ConnectionSourceValidation.validate(
+            posTable: posTable, matrix: payload(at: "connectionId.dat.zip")
+        )
+        if let referenceManifest {
+            let output = staging.appendingPathComponent("connection.sud")
+            try SumireConnectionSourceConverter.write(connection, to: output)
+            let expected = try XCTUnwrap(referenceManifest.outputSHA256["connection.sud"])
+            let actual = SHA256.hash(data: try Data(contentsOf: output, options: .mappedIfSafe))
+                .map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(actual, expected, "Native binary differs for connection")
+        }
         let posCount = posTable[0].count
         var validatedSets = 0
 
@@ -286,6 +419,15 @@ final class DictionarySourceValidationTests: XCTestCase {
             let result = try DictionarySourceValidation.validate(reading: reading, surface: surface, tokens: tokens,
                                                                  posTableCount: posCount)
             XCTAssertGreaterThan(result.tokenCount, 0, root)
+            if let referenceManifest {
+                let name = try XCTUnwrap(root.split(separator: "/").last.map(String.init))
+                let output = staging.appendingPathComponent(name + ".sud")
+                try SumireDictionarySourceConverter.write(result, to: output)
+                let expected = try XCTUnwrap(referenceManifest.outputSHA256[name + ".sud"], name)
+                let actual = SHA256.hash(data: try Data(contentsOf: output, options: .mappedIfSafe))
+                    .map { String(format: "%02x", $0) }.joined()
+                XCTAssertEqual(actual, expected, "Native binary differs for \(name)")
+            }
             validatedSets += 1
         }
 
@@ -297,10 +439,21 @@ final class DictionarySourceValidationTests: XCTestCase {
         XCTAssertEqual(english.tokenCount, 102_050)
         XCTAssertEqual(english.unreferencedTokenCount, 946)
         XCTAssertEqual(englishReading[3].count, 101_104)
+        if let referenceManifest {
+            let output = staging.appendingPathComponent("english.sud")
+            try SumireDictionarySourceConverter.write(english, to: output)
+            let expected = try XCTUnwrap(referenceManifest.outputSHA256["english.sud"])
+            let actual = SHA256.hash(data: try Data(contentsOf: output, options: .mappedIfSafe))
+                .map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(actual, expected, "Native binary differs for english")
+        }
         validatedSets += 1
 
         XCTAssertEqual(validatedSets, 33)
-        XCTAssertEqual(validatedSets + 1, 34, "The remaining archive-plan group is common POS/connection data")
+        XCTAssertEqual(validatedSets + 1, 34, "The remaining native binary is common connection data")
+        if referenceManifest != nil {
+            print("Converted all 33 dictionary groups and the connection matrix byte-for-byte to the pinned native binaries")
+        }
         print("Validated \(validatedSets) trie/token source sets and the common POS table against pinned Android asset hashes from df1f38315bf56d860d32919a3eaed6a75499e91e")
     }
 }

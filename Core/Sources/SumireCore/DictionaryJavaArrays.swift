@@ -24,6 +24,22 @@ public struct DictionaryPrimitiveArray {
         let value = try unsigned(at: index), shift = 64 - kind.width * 8
         return Int64(bitPattern: value << shift) >> shift
     }
+
+    func littleEndianData() throws -> Data {
+        let (byteCount, overflow) = count.multipliedReportingOverflow(by: kind.width)
+        guard !overflow, byteCount <= data.count - start else {
+            throw PersonalDataError("辞書配列のサイズが不正です")
+        }
+        var result = Data()
+        result.reserveCapacity(byteCount)
+        for index in 0..<count {
+            let element = start + index * kind.width
+            for byte in (0..<kind.width).reversed() {
+                result.append(data[element + byte])
+            }
+        }
+        return result
+    }
 }
 
 /// A deliberately limited Java serialization reader. It accepts only the
