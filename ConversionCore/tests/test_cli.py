@@ -93,6 +93,19 @@ class Tests(unittest.TestCase):
             value=json.loads(self.run_cli('--predict-japanese',reading).stdout)
             self.assertEqual('Completion' in [c['text'] for c in value['candidates']], len(reading)==16)
 
+    def test_japanese_completion_postings_consume_budget(self):
+        # One terminal, many tokens: traversing just two nodes cannot allow an
+        # unbounded posting scan. The cheapest token occurs after the budget.
+        dictionary(self.data/'system.sud', [('かきくけ',f'Word{i}',1,-i) for i in range(100)])
+        limited=json.loads(self.run_cli('--nbest','1','--max-states','10','--predict-japanese','かきく').stdout)
+        self.assertFalse(limited['complete'])
+        self.assertNotIn('Word99',[c['text'] for c in limited['candidates']])
+        complete=json.loads(self.run_cli('--nbest','1','--predict-japanese','かきく').stdout)
+        self.assertTrue(complete['complete'])
+        self.assertIn('Word99',[c['text'] for c in complete['candidates']])
+        baseline=json.loads(self.run_cli('--nbest','1','--max-states','10','かきく').stdout)
+        self.assertTrue(baseline['complete'])
+
     def test_bunsetsu_boundaries_follow_selected_path(self):
         # Context IDs 1 and 2 map to independent POS 12/13. Every connection
         # cost is zero: boundaries must come from POS, not matrix values.
@@ -226,6 +239,7 @@ class Tests(unittest.TestCase):
     def test_c_api_ownership_and_generations(self):
         if C_API is None:self.skipTest("C ABI executable not supplied")
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
+        dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         result=subprocess.run([C_API,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
     def test_exhaustive_nbest(self):

@@ -200,6 +200,31 @@ int main(int argc, char **argv) {
   }
   CHECK(found_prefix);
   sumire_result_destroy(personal);
+  req = (sumire_request){8, "かきく", strlen("かきく"), 0, 1, 200000, 8};
+  CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
+  int found_prediction = 0;
+  uint64_t prediction_id = 0;
+  for (size_t i = 0; i < sumire_result_count(personal); ++i) {
+    CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    if (candidate.text.size == strlen("PredictionABI") &&
+        memcmp(candidate.text.data, "PredictionABI", candidate.text.size) == 0) {
+      CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == 3);
+      CHECK(candidate.score == -2000);
+      CHECK(sumire_result_bunsetsu_count(personal, i) == 0);
+      CHECK(sumire_result_segment(personal, i, 0, &segment) == 0);
+      CHECK(segment.start_utf16 == 0 && segment.length_utf16 == 3);
+      prediction_id = candidate.candidate_id;
+      found_prediction = 1;
+    }
+  }
+  CHECK(found_prediction);
+  CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) < 0);
+  sumire_result_destroy(personal);
+  req.generation = 9;
+  CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) < 0);
+  sumire_result_destroy(personal);
   sumire_session_destroy(session);
   CHECK(sumire_result_candidate(first, 0, &candidate) == 0 && candidate.text.size == 5);
   sumire_result_destroy(first); sumire_result_destroy(second);

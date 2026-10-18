@@ -230,7 +230,7 @@ struct Dictionary {
     }
   }
   // Depth-bounded DFS in reference trie order. Keep no dictionary subtree
-  // strings; callback sees terminals only. False reports node-budget exhaustion.
+  // strings; callback sees terminals only. False reports node/token-budget exhaustion.
   template <class F>
   bool completion(const std::u16string &prefix, size_t lookahead,
                   size_t budget, F callback) const {
@@ -248,12 +248,16 @@ struct Dictionary {
     while (!stack.empty()) {
       auto &frame = stack.back();
       if (!frame.visited) {
-        if (visited++ == budget) return false;
+        if (visited == budget) return false;
+        ++visited;
         frame.visited = true;
         if (frame.depth && leaf.at(frame.node)) {
           auto term = terms[leaf.rank(frame.node) - 1];
-          for (uint32_t token = postings[term]; token < postings[term + 1]; ++token)
+          for (uint32_t token = postings[term]; token < postings[term + 1]; ++token) {
+            if (visited == budget) return false;
+            ++visited;
             callback(frame.node, token, frame.depth);
+          }
         }
         frame.next = tree.select0(tree.rank(frame.node)) + 1;
       }
