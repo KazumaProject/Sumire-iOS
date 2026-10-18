@@ -99,6 +99,50 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
+    func testConfiguredThreeRowsSurviveFractionalCollectionHeight() {
+        withBar(rows: 3) { bar, list in
+            bar.candidates = (0..<6).map { "候補\($0)" }
+            XCTAssertEqual(list.numberOfItems(inSection: 0), 6)
+
+            // The keyboard host can report a fractional point after layout even
+            // though the saved candidate setting still requests three 44pt rows.
+            list.bounds.size.height = 131.5
+            list.collectionViewLayout.invalidateLayout()
+            list.collectionViewLayout.prepare()
+
+            let rowOrigins = (0..<6).compactMap { index -> CGFloat? in
+                list.collectionViewLayout.layoutAttributesForItem(
+                    at: IndexPath(item: index, section: 0))?.frame.minY
+            }
+            XCTAssertEqual(rowOrigins, [0, 44, 88, 0, 44, 88])
+            XCTAssertEqual(bar.rowCount, 3)
+        }
+    }
+
+    func testConstrainedThreeRowViewportScrollsToHiddenRows() {
+        withBar(rows: 3) { bar, list in
+            bar.candidates = (0..<9).map { "候補\($0)" }
+            bar.setDisplayedHeightLimit(44)
+            bar.frame.size.height = bar.displayedHeight
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+
+            XCTAssertEqual(bar.rowCount, 3)
+            XCTAssertEqual(bar.requestedDisplayedHeight, 132)
+            XCTAssertEqual(bar.displayedHeight, 44)
+            XCTAssertTrue(list.alwaysBounceVertical)
+            XCTAssertEqual(list.contentSize.height, 132)
+
+            list.setContentOffset(CGPoint(x: 0, y: 88), animated: false)
+            list.layoutIfNeeded()
+            XCTAssertTrue(list.indexPathsForVisibleItems.contains(IndexPath(item: 2, section: 0)))
+            XCTAssertFalse(list.indexPathsForVisibleItems.contains(IndexPath(item: 0, section: 0)))
+
+            bar.rowCount = 1
+            XCTAssertEqual(bar.rowCount, 1)
+            XCTAssertEqual(list.contentOffset.y, 0)
+        }
+    }
+
     func testPendingUpdateKeepsFrameAndRejectsOldCandidateSelection() {
         withBar { bar, list in
             bar.candidates = ["東京", "東京都", "東京駅"]

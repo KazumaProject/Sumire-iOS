@@ -27,6 +27,23 @@ struct LicenseSettingsView: View {
                 notice("辞書データのライセンス原文", url: SymbolKeyboardCatalog.dataLicenseURL)
                 notice("肌色の対応データ・出典", url: EmojiSkinToneVariants.noticeURL)
             }
+            Section("英語辞書") {
+                Text("英単語辞書は収録しています。固定Android参照のリビジョン、`english/word.dat`のパスとSHA-256は特定済みです。一方、`word.dat`の収録語の元データとその版、各語の帰属、適用ライセンスは未確認です。旧WikiText通知は現在の`word.dat`への適用が確認できるまで、参考情報として区別して表示します。英語読み辞書は別の通知を確認してください。")
+                    .font(.footnote)
+                    .accessibilityIdentifier("english-dictionary-license-status")
+                if let url = catalog.englishWordNotice {
+                    notice("英単語辞書の配布通知", url: url, identifier: "english-word-dictionary-notice")
+                } else {
+                    Text("英単語辞書の配布通知を読み込めません。")
+                        .foregroundStyle(.red)
+                }
+                notice("旧WikiText通知（現行資産への適用範囲未確認）",
+                       url: Bundle.main.url(forResource: "EnglishDictionarySourceNotice", withExtension: "txt"),
+                       identifier: "english-legacy-wikitext-notice")
+                if let url = catalog.englishReadingNotice {
+                    notice("英語読み辞書の配布通知", url: url, identifier: "english-reading-dictionary-notice")
+                }
+            }
             Section("同梱辞書") {
                 if let root = catalog.dictionaryRoot {
                     notice("辞書の生成元・資産ハッシュ", url: root.appendingPathComponent("manifest.json"))
@@ -58,11 +75,21 @@ struct LicenseSettingsView: View {
         .accessibilityIdentifier("license-settings")
     }
 
-    private func notice(_ title: String, url: URL?) -> some View {
-        NavigationLink {
-            LicenseNoticeView(title: title, url: url)
-        } label: {
-            Text(title)
+    @ViewBuilder
+    private func notice(_ title: String, url: URL?, identifier: String? = nil) -> some View {
+        if let identifier {
+            NavigationLink {
+                LicenseNoticeView(title: title, url: url)
+            } label: {
+                Text(title)
+            }
+            .accessibilityIdentifier(identifier)
+        } else {
+            NavigationLink {
+                LicenseNoticeView(title: title, url: url)
+            } label: {
+                Text(title)
+            }
         }
     }
 }
@@ -78,6 +105,7 @@ private struct LicenseNoticeView: View {
                 .textSelection(.enabled)
                 .frame(maxWidth: .infinity, alignment: .leading)
                 .padding()
+                .accessibilityIdentifier("license-notice-text")
         }
         .navigationTitle(title)
         .navigationBarTitleDisplayMode(.inline)
@@ -96,16 +124,34 @@ private struct LicenseCatalog {
     let dictionaryRoot: URL?
 
     init(bundle: Bundle = .main) {
-        let candidates = [
-            bundle.bundleURL.appendingPathComponent("cli-english-v1", isDirectory: true),
-            bundle.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1", isDirectory: true)
+        let containers = [
+            bundle.bundleURL,
+            bundle.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex", isDirectory: true)
         ]
-        dictionaryRoot = candidates.first {
-            FileManager.default.fileExists(atPath: $0.appendingPathComponent("manifest.json").path)
+        let manager = FileManager.default
+        dictionaryRoot = containers.lazy.flatMap { container -> [URL] in
+            let children = (try? manager.contentsOfDirectory(
+                at: container,
+                includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles]
+            )) ?? []
+            let directories = children.filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == true }
+            return [container] + directories
+        }.first { directory in
+            let manifestURL = directory.appendingPathComponent("manifest.json")
+            guard let data = try? Data(contentsOf: manifestURL, options: .mappedIfSafe),
+                  let manifest = try? JSONSerialization.jsonObject(with: data) as? [String: Any] else { return false }
+            return manifest["source_revision"] is String && manifest["output_sha256"] is [String: String]
         }
     }
 
-    var dictionaryNotices: [URL] { files(in: "licenses", extension: "html") }
+    var dictionaryNotices: [URL] {
+        files(in: "licenses", extension: "html").filter {
+            !["english.html", "english-reading.html"].contains($0.lastPathComponent)
+        }
+    }
+    var englishWordNotice: URL? { dictionaryRoot?.appendingPathComponent("licenses/english.html") }
+    var englishReadingNotice: URL? { dictionaryRoot?.appendingPathComponent("licenses/english-reading.html") }
     var categoryNotices: [URL] { files(in: "licenses/classified", extension: "html") }
     var sourceNotices: [URL] { files(in: "licenses/sources", extension: "txt") }
 

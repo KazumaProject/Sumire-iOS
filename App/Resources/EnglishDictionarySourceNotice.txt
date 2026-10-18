@@ -1,0 +1,58 @@
+Sumire iOS — 英単語辞書の出典照合メモ
+
+確認した固定Android参照: JapaneseKeyboard revision df1f38315bf56d860d32919a3eaed6a75499e91e
+このファイルのSHA-256: a5eb246ac8b09a7b37a00138639a4d1071c98aca5515b4ebb1864beb64ddc0f5
+参照ファイル: ENGLISH_DICTIOANRY_LICENSE
+
+固定revisionのリポジトリ直下にある通知は、次の旧資産 `src/main/assets/english/english.dat` がSalesforce WikiText由来であり、CC BY-SA 4.0に従うと宣言しています。
+
+しかし、同じ固定revisionの資産一覧には `english.dat` はなく、`app/src/main/assets/english/word.dat`、`token.dat.zip`、`reading.dat.zip` があります。上流の `docs/licenses/DICTIONARIES.md` と `docs/licenses/README.md` も、旧WikiText宣言が現行独立英単語資産に適用されるか未確認としています。現行の英単語資産への適用は未確認です。したがって、この履歴通知を現在のSumire iOS同梱 `english.sud` のライセンス確定として扱いません。現行配布bundleの `licenses/english.html` も元データ・適用条件を未確認と記載しています。
+
+英語読み辞書は別データです。アプリ内の「英語読み辞書の配布通知」と各原文を参照してください。このメモは、未解決の対応関係を隠さず上流の旧通知を保存するものです。ライセンス判断や配布許可の確認完了を意味しません。
+
+----- 固定Android参照に含まれる上流通知（原文） -----
+
+English Dictionary License Notice
+
+The file `src/main/assets/english/english.dat` is derived from the Salesforce WikiText dataset.
+This dataset is licensed under:
+
+Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
+https://creativecommons.org/licenses/by-sa/4.0/
+
+You are free to:
+
+- Share — copy and redistribute the material in any medium or format
+- Adapt — remix, transform, and build upon the material for any purpose, even commercially.
+
+Under the following terms:
+
+- Attribution — You must give appropriate credit, provide a link to the license,
+  and indicate if changes were made.
+- ShareAlike — If you remix, transform, or build upon the material,
+  you must distribute your contributions under the same license as the original.
+
+---
+
+## Citation
+
+If you use this dictionary, please cite the original authors of WikiText:
+
+Merity, S., Xiong, C., Bradbury, J., & Socher, R. (2016).
+**Pointer Sentinel Mixture Models**
+*arXiv preprint arXiv:1609.07843*.
+https://arxiv.org/abs/1609.07843
+
+BibTeX:
+
+@misc{merity2016pointer,
+  title={Pointer Sentinel Mixture Models},
+  author={Stephen Merity and Caiming Xiong and James Bradbury and Richard Socher},
+  year={2016},
+  eprint={1609.07843},
+  archivePrefix={arXiv},
+  primaryClass={cs.CL}
+}
+
+Original dataset:
+https://huggingface.co/datasets/Salesforce/wikitext
