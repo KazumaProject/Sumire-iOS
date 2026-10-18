@@ -365,7 +365,12 @@ final class DictionarySourceValidationTests: XCTestCase {
             let manifestURL = referenceDirectory.appendingPathComponent("manifest.json")
             let manifest = try JSONDecoder().decode(ReferenceNativeManifest.self, from: Data(contentsOf: manifestURL))
             XCTAssertEqual(manifest.sourceRevision, pinned.sourceRevision)
-            XCTAssertEqual(manifest.assetSHA256, pinned.assetSHA256)
+            // The current app generation also carries the pinned auxiliary,
+            // GNKG, and Mozc assets; compare every source asset in the pinned
+            // system/category/English fixture without rejecting those extras.
+            for (path, expectedHash) in pinned.assetSHA256 {
+                XCTAssertEqual(manifest.assetSHA256[path], expectedHash, path)
+            }
             referenceManifest = manifest
         }
         let staging = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

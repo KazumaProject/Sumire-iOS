@@ -5,10 +5,12 @@ import SumireCore
 /// This tests owned metadata, not keyboard rendering or host marked text.
 final class BunsetsuServiceTests: XCTestCase {
     private func convert(_ service: ConversionService, _ reading: String,
-                         generation: UInt64, english: Bool = false, includeBunsetsu: Bool = true) throws -> ConversionResponse {
+                         generation: UInt64, english: Bool = false, includeBunsetsu: Bool = true,
+                         bunsetsuSearch: Bool = false) throws -> ConversionResponse {
         let completed = expectation(description: "Bunsetsu conversion")
         var response: Result<ConversionResponse, Error>?
-        service.convert(reading, generation: generation, editStart: 0, english: english, includeBunsetsu: includeBunsetsu) {
+        service.convert(reading, generation: generation, editStart: 0, english: english,
+                        includeBunsetsu: includeBunsetsu, bunsetsuSearch: bunsetsuSearch) {
             response = $0
             completed.fulfill()
         }
@@ -48,6 +50,23 @@ final class BunsetsuServiceTests: XCTestCase {
             XCTAssertEqual(value.bunsetsu.map(\.text).joined(), value.text)
             XCTAssertEqual(value.bunsetsu.reduce(0) { $0 + $1.readingRange.length }, value.range.length)
         }
+    }
+
+    func testBunsetsuSearchRouteSelectsTheFirstProjectedReadingPrefix() throws {
+        let reading = "きょうはとうきょうにいきます"
+        let response = try convert(ConversionService(), reading, generation: 1, bunsetsuSearch: true)
+        let candidate = try XCTUnwrap(response.candidates.first)
+        XCTAssertEqual(candidate.text, "今日は東京に行きます")
+        XCTAssertEqual(candidate.bunsetsu.map(\.text), ["今日は", "東京に", "行きます"])
+        XCTAssertEqual(BunsetsuProjection.firstReadingPrefix(in: candidate.bunsetsu, reading: reading), "きょうは")
+    }
+
+    func testBunsetsuSearchHandlesTheGojuonHarnessPhrase() throws {
+        let reading = "わたしはあるく"
+        let response = try convert(ConversionService(), reading, generation: 1, bunsetsuSearch: true)
+        let candidate = try XCTUnwrap(response.candidates.first)
+        XCTAssertEqual(candidate.text, "私は歩く")
+        XCTAssertEqual(BunsetsuProjection.firstReadingPrefix(in: candidate.bunsetsu, reading: reading), "わたしは")
     }
 
     func testPartialCandidateProjectsOnlyConsumedPrefix() throws {

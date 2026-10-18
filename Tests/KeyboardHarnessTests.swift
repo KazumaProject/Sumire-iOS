@@ -1631,6 +1631,35 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertFalse(app.collectionViews.staticTexts["愛"].firstMatch.exists)
     }
 
+    func testBunsetsuConversionCommitsTheLeadingSegmentAndKeepsTheRemainder() throws {
+        let app = XCUIApplication()
+        launchInputPreview(app)
+        app.buttons["入力オプション"].tap()
+        let setting = app.switches["文節ごとに変換"].switches.firstMatch
+        XCTAssertTrue(setting.waitForExistence(timeout: 5))
+        let wasEnabled = setting.value as? String == "1"
+        if !wasEnabled { setting.tap() }
+
+        let editor = app.textViews["入力テスト"]
+        editor.tap()
+        selectKeyboard("50音", in: app)
+        for character in "わたしはあるく" { app.buttons[String(character)].tap() }
+        XCTAssertEqual(editor.value as? String, "わたしはあるく")
+
+        app.buttons["gojuon-space"].tap()
+        let leading = app.collectionViews.staticTexts["私は"].firstMatch
+        XCTAssertTrue(leading.waitForExistence(timeout: 15))
+        leading.tap()
+        XCTAssertEqual(editor.value as? String, "私はあるく")
+
+        let remainder = app.collectionViews.staticTexts["歩く"].firstMatch
+        XCTAssertTrue(remainder.waitForExistence(timeout: 15))
+        remainder.tap()
+        XCTAssertEqual(editor.value as? String, "私は歩く")
+
+        if !wasEnabled { setting.tap() }
+    }
+
     func testGojuonDevFunctionRowsAcrossModesAndRotation() {
         XCUIDevice.shared.orientation = .portrait
         defer { XCUIDevice.shared.orientation = .portrait }

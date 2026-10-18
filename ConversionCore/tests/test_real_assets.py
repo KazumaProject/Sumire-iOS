@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Verify shipped-asset samples for system + all 30 categories and every matrix cell.
+"""Verify shipped assets for system + all 30 categories + auxiliary dictionaries and every matrix cell.
 Usage: test_real_assets.py CLI GENERATED_DIR ANDROID_REFERENCE
 This is data/CLI verification, not Android application candidate parity.
 """
@@ -15,6 +15,14 @@ source_files=['pos_table.dat','connectionId.dat.zip']+[f'{directory}/{filename}.
 for name in source_files:
     actual=hashlib.sha256((assets/name).read_bytes()).hexdigest()
     assert manifest['asset_sha256'].get(name)==actual, name
+for relative,expected in b.AUXILIARY_ASSET_SHA256.items():
+    actual=hashlib.sha256((assets/relative).read_bytes()).hexdigest()
+    assert actual==expected and manifest['asset_sha256'].get(relative)==expected, relative
+for name in b.AUXILIARY_DICTIONARIES:
+    output=data/(name+'.sud')
+    assert output.is_file(), name
+    digest=hashlib.sha256(output.read_bytes()).hexdigest()
+    assert manifest['output_sha256'].get(name+'.sud')==digest, name
 def raw(path):
     with zipfile.ZipFile(path) as z:return z.read(z.namelist()[0])
 def tree_parent(lbs,labels):
@@ -71,4 +79,4 @@ for row in range(n):
             bit=word&-word;column=block*64+bit.bit_length()-1
             assert column<n;decoded[column]=values[v];v+=1;word^=bit
     assert v==starts[row+1] and decoded==matrix[row*n:(row+1)*n],row
-print(json.dumps({'verified_dictionaries':31,'verified_matrix_cells':n*n,'samples':samples},ensure_ascii=False,indent=2))
+print(json.dumps({'verified_dictionaries':31,'verified_auxiliary_dictionaries':list(b.AUXILIARY_DICTIONARIES),'verified_auxiliary_asset_hashes':len(b.AUXILIARY_ASSET_SHA256),'verified_matrix_cells':n*n,'samples':samples},ensure_ascii=False,indent=2))

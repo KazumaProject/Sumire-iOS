@@ -6,6 +6,26 @@ import argparse, array, collections, hashlib, json, math, pathlib, shutil, struc
 
 REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
 CATEGORIES = 'address agreement award character event facility initiative kampo lineage medical mythological_figure organization person place product station term transport_route vehicle work_anime work_book work_film work_franchise work_game work_manga work_music work_other work_periodical work_program work_stage'.split()
+AUXILIARY_DICTIONARIES = {
+    'single_kanji': ('single_kanji', 'singleKanji'),
+    'emoji': ('emoji', 'emoji'),
+    'emoticon': ('emoticon', 'emoticon'),
+    'symbol': ('symbol', 'symbol'),
+}
+AUXILIARY_ASSET_SHA256 = {
+    'single_kanji/yomi_singleKanji.dat': 'a9d02f6e81ad2e48ec187bc5c03c57660de7178f34204149ba45482178e98f76',
+    'single_kanji/tango_singleKanji.dat': '30f5a78cea54d6359a3591b741896674002b3e2bac580bc59269eb8c593f929b',
+    'single_kanji/token_singleKanji.dat': '4d60dc524cfdffdb576102429a3a5a7c625f0c3581ba248a81fbc852eaa33166',
+    'emoji/yomi_emoji.dat': 'cdd5f223ccfcb63f22a317b5a9aa97e240a98b28571fbf4905758d5205162950',
+    'emoji/tango_emoji.dat': 'f05fcb3b56aaf683910847342a33e36009676ad9a5abc2d43d3620dbc07700a4',
+    'emoji/token_emoji.dat': '1c25ddcf25f61595915f3a37e1d76665a7eeff2110d2521322817618e0f535a5',
+    'emoticon/yomi_emoticon.dat': '15f32cda380dae4581abbeef1ae0a43f12d7980cf37b84408e1920b980e5318b',
+    'emoticon/tango_emoticon.dat': 'ec102a95f3a490587940d4035ebeedfad4438fa13eb1b37c54ac544059c6ff6a',
+    'emoticon/token_emoticon.dat': 'c4c88e2f84342aa4f13b295d37947fa4d222b019325d32346333b71989c069c5',
+    'symbol/yomi_symbol.dat': '7ac99f6184ba6c20b8bad0bcf1f2386d10b45ff60138f166731b091459a93482',
+    'symbol/tango_symbol.dat': '5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca',
+    'symbol/token_symbol.dat': '22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb',
+}
 
 class JavaArrays:
     def __init__(self, data):
@@ -68,6 +88,15 @@ def le(a):
     if sys.byteorder!='little':b.byteswap()
     return b.tobytes()
 
+def decode_surface_utf16(code_units):
+    """Return strict UTF-8, replacing lone UTF-16 surrogates with U+FFFD.
+
+    Some pinned single-kanji tokens reference a lone surrogate. Such a value
+    cannot be represented by the C ABI's UTF-8 strings; replacement keeps the
+    candidate well-formed instead of failing the whole dictionary generation.
+    """
+    return le(array.array('H',code_units)).decode('utf-16-le',errors='replace').encode('utf-8')
+
 def pack_file(path,kind,dimension,sections):
     header=struct.pack('<8sIIII',b'SUMIRE01',1,kind,len(sections),dimension)
     offset=24+24*len(sections);payload=bytearray();desc=[]
@@ -75,6 +104,85 @@ def pack_file(path,kind,dimension,sections):
         padding=(-offset)%8;payload.extend(bytes(padding));offset+=padding
         desc.append(struct.pack('<QQII',offset,len(s),zlib.crc32(s),0));payload.extend(s);offset+=len(s)
     path.write_bytes(header+b''.join(desc)+payload)
+
+def standalone_words(data):
+    """Validate/decode fixed GNKJ v5; no Java objects or runtime hash table.
+
+    Binary contract: Android PackedSystemNgramDictionary, fixed source revision.
+    Only the whole-input word signature is accepted. Values are not inferred
+    from stale tests or duplicated as hard-coded vocabulary.
+    """
+    if not 80 <= len(data) <= 1024*1024: raise ValueError('invalid standalone size')
+    h=struct.unpack_from('<20I',data)
+    magic,version,count,contexts,pos_count,signatures,max_key,block_size,sig_off,ctx_off,bucket_off,hash_off,block_off,record_off,total,crc,buckets,blocks,*_=h
+    if magic!=0x4a4b4e47 or version!=5 or total!=len(data) or crc!=zlib.crc32(data[80:]):raise ValueError('invalid standalone header/checksum')
+    if not (0<count<=100000 and 0<contexts<=100000 and 1<=pos_count<=255 and 1<=signatures<=count and 1<=max_key<=32768 and block_size==16):raise ValueError('invalid standalone dimensions')
+    if not (256<=buckets<=65536 and buckets&(buckets-1)==0 and blocks==(count+15)//16):raise ValueError('invalid standalone index dimensions')
+    expected_ctx=80+4*signatures;expected_bucket=(expected_ctx+contexts+3)&~3
+    if (sig_off,ctx_off,bucket_off,hash_off,block_off,record_off)!=(80,expected_ctx,expected_bucket,expected_bucket+4*(buckets+1),expected_bucket+4*(buckets+1)+10*count,expected_bucket+4*(buckets+1)+10*count+4*(blocks+1)) or record_off>len(data):raise ValueError('invalid standalone sections')
+    sigs=struct.unpack_from('<'+'I'*signatures,data,sig_off)
+    if any(s!=9 for s in sigs) or len(set(sigs))!=len(sigs):raise ValueError('unsupported standalone signature')
+    if any(not 1<=p<=pos_count for p in data[ctx_off:ctx_off+contexts]):raise ValueError('invalid standalone POS')
+    starts=struct.unpack_from('<'+'I'*(buckets+1),data,bucket_off)
+    offsets=struct.unpack_from('<'+'I'*(blocks+1),data,block_off)
+    if starts[0]!=0 or starts[-1]!=count or any(a>b for a,b in zip(starts,starts[1:])):raise ValueError('invalid standalone buckets')
+    if offsets[0]!=0 or offsets[-1]!=len(data)-record_off or any(a>b for a,b in zip(offsets,offsets[1:])):raise ValueError('invalid standalone blocks')
+    def var(position,end):
+        value=0
+        for shift in range(0,35,7):
+            if position>=end:raise ValueError('truncated standalone varint')
+            byte=data[position];position+=1;value|=(byte&127)<<shift
+            if not byte&128:
+                if shift==28 and byte>15:raise ValueError('standalone varint overflow')
+                return value,position
+        raise ValueError('standalone varint overflow')
+    records=[];words=[];decoded_bytes=0
+    for block in range(blocks):
+        at=record_off+offsets[block];end=record_off+offsets[block+1];previous=b''
+        for i in range(min(16,count-16*block)):
+            if i==0:prefix=0
+            else:prefix,at=var(at,end)
+            size,at=var(at,end)
+            if prefix>len(previous) or not 1<=prefix+size<=max_key or size>end-at:raise ValueError('invalid standalone record')
+            record=previous[:prefix]+data[at:at+size];at+=size;previous=record
+            decoded_bytes+=len(record)
+            if decoded_bytes>4*1024*1024:raise ValueError('standalone decoded limit exceeded')
+            if record[:2]!=b'\x09\x00':raise ValueError('invalid standalone word signature')
+            # The key's word length is another unsigned varint.
+            value=shift=0;position=2
+            while position<len(record) and shift<=28:
+                byte=record[position];position+=1;value|=(byte&127)<<shift
+                if not byte&128:break
+                shift+=7
+            else:raise ValueError('invalid standalone word length')
+            if position>3 and record[position-1]==0:raise ValueError('noncanonical standalone word length')
+            word=record[position:]
+            if value!=len(word) or not word:raise ValueError('invalid standalone word length')
+            word.decode('utf-8')
+            records.append(record);words.append(word)
+        if at!=end:raise ValueError('trailing standalone block data')
+    # Check every decoded record is reachable through the original hash index.
+    mask=(1<<64)-1;entries=set()
+    for bucket in range(buckets):
+        previous=(-1,-1)
+        for entry in range(starts[bucket],starts[bucket+1]):
+            at=hash_off+10*entry;remainder=int.from_bytes(data[at:at+6],'little');record_id=struct.unpack_from('<I',data,at+6)[0]
+            if record_id>=count or (remainder,record_id)<=previous:raise ValueError('invalid standalone hash entry')
+            previous=(remainder,record_id);entries.add((bucket,remainder,record_id))
+    for record_id,record in enumerate(records):
+        value=(-3750763034362895579)&mask
+        for byte in record:value=((value^byte)*1099511628211)&mask
+        value=((value^(value>>33))*(-49064778989728563))&mask
+        value=((value^(value>>33))*(-4265267296055464877))&mask;value^=value>>33
+        if (value>>(64-(buckets.bit_length()-1)),value&((1<<48)-1),record_id) not in entries:raise ValueError('unreachable standalone record')
+    if len(set(words))!=count:raise ValueError('duplicate standalone words')
+    return sorted(words)
+
+def pack_standalone(path,data):
+    words=standalone_words(data);offsets=array.array('I',[0]);text=bytearray()
+    for word in words:text.extend(word);offsets.append(len(text))
+    pack_file(path,3,len(words),[le(offsets),bytes(text)])
+    return len(words)
 
 class Bits:
     def __init__(self,a):
@@ -95,9 +203,14 @@ def build(source,output,english_reading=False,english=False):
     assets=source/'app/src/main/assets'
     revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
     if revision!=REVISION:raise ValueError('reference revision differs from pinned revision')
-    dictionary_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
-    if english_reading:dictionary_sources['english_reading']='english_reading'
-    paths=['pos_table.dat','connectionId.dat.zip']+[f'{d}/{f}.dat.zip' for d in dictionary_sources.values() for f in ['yomi','tango','token']]
+    archive_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
+    dictionary_sources=dict(archive_sources)
+    dictionary_sources.update({name: directory for name, (directory, _) in AUXILIARY_DICTIONARIES.items()})
+    if english_reading:
+        archive_sources['english_reading']='english_reading'
+        dictionary_sources['english_reading']='english_reading'
+    paths=['pos_table.dat','connectionId.dat.zip','ngram/system_ngram.dat','ngram/system_ngram_unigram.dat','ngram/system_ngram_standalone_unigram.dat','mozc/segmenter.dat','mozc/node_attribute_by_lid.dat']+[f'{d}/{f}.dat.zip' for d in archive_sources.values() for f in ['yomi','tango','token']]
+    paths += list(AUXILIARY_ASSET_SHA256)
     if english:
         dictionary_sources['english']='english'
         paths += ['english/reading.dat.zip','english/word.dat','english/token.dat.zip']
@@ -106,6 +219,8 @@ def build(source,output,english_reading=False,english=False):
     hashes={}
     def read(name):
         raw=(assets/name).read_bytes();hashes[name]=hashlib.sha256(raw).hexdigest()
+        expected=AUXILIARY_ASSET_SHA256.get(name)
+        if expected is not None and hashes[name]!=expected:raise ValueError('pinned auxiliary asset hash mismatch: '+name)
         if not name.endswith('.zip'):return raw
         with zipfile.ZipFile(assets/name) as z:
             files=z.infolist()
@@ -144,6 +259,11 @@ def build(source,output,english_reading=False,english=False):
                 pos=array.array('h',[0])*len(cost)
                 if any(p < -1 for p in node):raise ValueError('invalid English surface sentinel')
                 node=array.array('i',(-2 if p==-1 else p for p in node))
+            elif name in AUXILIARY_DICTIONARIES:
+                directory,stem=AUXILIARY_DICTIONARIES[name]
+                lbs,leaf,labels,terms=JavaArrays(read(f'{directory}/yomi_{stem}.dat')).all(4)
+                tlbs,tleaf,tlabels=JavaArrays(read(f'{directory}/tango_{stem}.dat')).all(3)
+                pos,cost,node,post=JavaArrays(read(f'{directory}/token_{stem}.dat')).all(4)
             else:
                 lbs,leaf,labels,terms=JavaArrays(read(prefix+'/yomi.dat.zip')).all(4)
                 tlbs,tleaf,tlabels=JavaArrays(read(prefix+'/tango.dat.zip')).all(3)
@@ -163,7 +283,7 @@ def build(source,output,english_reading=False,english=False):
                         chars.append(tlabels[i]);previous=parent[i]
                         if previous>=i:raise ValueError('surface cycle')
                         i=previous
-                    a=array.array('H',reversed(chars));s=le(a).decode('utf-16-le').encode('utf-8')
+                    s=decode_surface_utf16(reversed(chars))
                     if s not in surface_ids:surface_ids[s]=len(offsets)-1;blob.extend(s);offsets.append(len(blob))
                     cache[p]=surface_ids[s]
                 refs.append(cache[p])
@@ -179,10 +299,27 @@ def build(source,output,english_reading=False,english=False):
             pack_file(dest/(name+'.sud'),1,0,[le(a) for a in [lbs,labels,leaf,terms,postings,pos,cost,refs,offsets]]+[bytes(blob)])
             summary[name]={'entries':len(pos),'readings':len(terms),'bytes':(dest/(name+'.sud')).stat().st_size}
             print(name,summary[name],file=sys.stderr,flush=True)
+        standalone_count=pack_standalone(dest/'standalone.sud',read('ngram/system_ngram_standalone_unigram.dat'))
+        summary['standalone']={'rules':standalone_count,'bytes':(dest/'standalone.sud').stat().st_size}
+        ngram_summary={}
+        for asset in ('ngram/system_ngram.dat','ngram/system_ngram_unigram.dat'):
+            payload=read(asset)
+            name=pathlib.PurePosixPath(asset).name
+            (dest/name).write_bytes(payload)
+            ngram_summary[name]={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+        summary['system_ngram_assets']=ngram_summary
+        mozc_summary={}
+        for asset in ('mozc/segmenter.dat','mozc/node_attribute_by_lid.dat'):
+            payload=read(asset)
+            target=dest/asset
+            target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(payload)
+            mozc_summary[pathlib.PurePosixPath(asset).name]={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+        summary['mozc_assets']=mozc_summary
         shutil.copytree(assets/'licenses',dest/'licenses')
         shutil.copy2(source/'LICENSE',dest/'SOURCE-LICENSE')
-        manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Lossless array and surface re-encoding; connection row defaults plus exact exceptions. See copied licenses for data terms.'}
-        manifest['output_sha256']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.glob('*.sud')}
+        manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Array encoding and connection costs are preserved. Surface paths are re-encoded as UTF-8; lone UTF-16 surrogates in pinned source tokens are replaced with U+FFFD so returned strings are valid Unicode. See copied licenses for data terms.'}
+        manifest['output_sha256']={p.relative_to(dest).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.rglob('*') if p.is_file() and (p.suffix=='.sud' or p.name.startswith('system_ngram') or p.parent==dest/'mozc')}
         (dest/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
         # Rename a complete generation only; never replace an existing generation.
         dest.rename(output)

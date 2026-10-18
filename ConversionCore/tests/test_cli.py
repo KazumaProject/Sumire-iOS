@@ -8,6 +8,14 @@ CLI=sys.argv.pop(1)
 C_API=sys.argv.pop(1) if len(sys.argv)>1 else None
 INCREMENTAL=sys.argv.pop(1) if len(sys.argv)>1 else None
 
+def test_helper(filename,name):
+    helper_spec=importlib.util.spec_from_file_location(name,pathlib.Path(__file__).resolve().with_name(filename))
+    helper=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helper)
+    return helper
+
+SYSTEM_NGRAM_FIXTURE=test_helper('test_system_ngram.py','system_ngram_fixture')
+MOZC_SCORING_FIXTURE=test_helper('test_mozc_scoring_data.py','mozc_scoring_fixture')
+
 def bits(values):
     words=[0]*((len(values)+63)//64)
     for i,v in enumerate(values):
@@ -15,6 +23,10 @@ def bits(values):
     return array.array('Q',words)
 
 def dictionary(path,entries):
+    def units(value):
+        data=value.encode('utf-16-le','surrogatepass')
+        return ''.join(chr(v) for v in struct.unpack('<'+'H'*(len(data)//2),data))
+    entries=[(units(reading),*rest) for reading,*rest in entries]
     root={}
     for reading,*_ in entries:
         node=root
@@ -38,17 +50,47 @@ def dictionary(path,entries):
     b.pack_file(path,1,0,[b.le(a) for a in sections]+[blob])
 
 MATRIX=[[0,10,20],[30,-50,70],[40,-80,90]]
+MOZC_MAX_WORD_COST=32767
 ENTRIES=[('あ','A',1,100),('あ','B',2,200),('あ','A',2,150),('い','I',2,50),('あい','Whole',1,500)]
 
-def connection(path):
-    sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0,0,0]),array.array('Q',[6,7,7]),array.array('h',[10,20,30,-50,70,40,-80,90]),array.array('I',[0,2,5,8]),array.array('H',[0,0,0])]
-    b.pack_file(path,2,3,[b.le(a) for a in sections])
+def connection(path,dimension=3,overrides=None):
+    if dimension == 3 and overrides is None:
+        sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0,0,0]),array.array('Q',[6,7,7]),array.array('h',[10,20,30,-50,70,40,-80,90]),array.array('I',[0,2,5,8]),array.array('H',[0,0,0])]
+    else:
+        blocks=(dimension+63)//64
+        overrides=overrides or {}
+        bit_words=[0]*(dimension*blocks);rank_starts=[0]*(dimension*blocks)
+        values=[];starts=[0]
+        for row in range(dimension):
+            cells=overrides.get(row,{})
+            rank=0
+            for block in range(blocks):
+                offset=row*blocks+block
+                rank_starts[offset]=rank
+                word=0
+                for column,cost in sorted(cells.items()):
+                    if column//64==block:
+                        word|=1<<(column%64);values.append(cost)
+                bit_words[offset]=word
+                rank+=word.bit_count()
+            starts.append(len(values))
+        sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0]*dimension),
+                  array.array('Q',bit_words),array.array('h',values),array.array('I',starts),array.array('H',rank_starts)]
+    b.pack_file(path,2,dimension,[b.le(a) for a in sections])
+
+def standalone(path,words):
+    offsets=array.array('I',[0]);text=bytearray()
+    for word in sorted(w.encode() for w in words):text.extend(word);offsets.append(len(text))
+    b.pack_file(path,3,len(words),[b.le(offsets),bytes(text)])
 
 def brute(reading,entries):
     paths=[]
     def visit(i,rid,cost,text):
         if i==len(reading):paths.append((cost+MATRIX[rid][0],text));return
-        for word,surface,pos,c in entries+[(reading[i],reading[i],0,16000)]:
+        matches=[entry for entry in entries if reading.startswith(entry[0],i)]
+        if not matches:
+            matches=[(reading[i],reading[i],0,10000)]
+        for word,surface,pos,c in matches:
             if reading.startswith(word,i):visit(i+len(word),pos,cost+MATRIX[rid][pos]+c,text+surface)
     visit(0,0,0,'');unique={}
     for cost,text in sorted(paths):unique.setdefault(text,cost)
@@ -58,6 +100,97 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def install_auxiliary_dictionary_fixture(self):
+        dictionary(self.data/'emoji.sud',[
+            ('あいう','EMOJI',0,6000),('あいうえ','EMOJI-PREDICT',0,6000),
+            ('あいうえおかき','EMOJI-TOO-FAR',0,6000),
+        ])
+        dictionary(self.data/'emoticon.sud',[
+            ('あいう','EMOTICON',0,4000),('あいうえ','EMOTICON-PREDICT',0,4000),
+        ])
+        dictionary(self.data/'symbol.sud',[
+            ('あいう','SYMBOL',0,3000),('あいうえ','SYMBOL-PREDICT',0,2000),
+        ])
+        dictionary(self.data/'single_kanji.sud',[('あいう','SINGLE-KANJI',0,1900)])
+    def test_pinned_surface_utf16_conversion_keeps_pairs_and_replaces_lone_surrogates(self):
+        self.assertEqual(b.decode_surface_utf16([0xd842,0xdc00]).decode('utf-8'),'\U00020800')
+        self.assertEqual(b.decode_surface_utf16([0xd842]).decode('utf-8'),'\ufffd')
+        self.assertEqual(b.decode_surface_utf16([0xdc00]).decode('utf-8'),'\ufffd')
+    def test_classified_exact_candidates_ignore_nbest_count_and_use_utf16_ties(self):
+        dictionary(self.data/'system.sud',[('あい','Primary',1,-1000)])
+        surfaces=['甲','乙','丙','\U00010000','\ue000']+[f'Word{i}' for i in range(12)]
+        dictionary(self.data/'medical.sud',[('あい',s,1,10) for s in surfaces])
+        result=json.loads(self.run_cli('--categories','medical','--nbest','1','あい').stdout)
+        candidates=result['candidates']
+        self.assertEqual(len(candidates),len(surfaces)+1)
+        self.assertEqual(candidates[0]['text'],'Primary')
+        self.assertEqual([c['text'] for c in candidates[1:]],sorted(surfaces,key=lambda s:s.encode('utf-16-be')))
+        self.assertTrue(all(c['categories']==['medical'] for c in candidates[1:]))
+        self.assertLessEqual(result['workspace_cache_bytes'],4*1024*1024)
+    def test_exact_origins_union_without_replacing_lower_cost_selected_path(self):
+        dictionary(self.data/'system.sud',[('あい','Same',1,-1000)])
+        dictionary(self.data/'medical.sud',[('あい','Same',1,10)])
+        dictionary(self.data/'person.sud',[('あい','Same',2,20)])
+        candidates=json.loads(self.run_cli('--categories','medical,person','--nbest','1','あい').stdout)['candidates']
+        self.assertEqual(len(candidates),1)
+        self.assertEqual(candidates[0]['score'],-960)
+        self.assertEqual(candidates[0]['categories'],['medical','person'])
+        self.assertEqual(candidates[0]['segments'][0]['dictionary'],'system')
+    def test_standalone_later_duplicate_promotes_without_lowering_score(self):
+        entries=[('し','し',1,-100),('ろ','ろ',1,-100),('しろ','城',1,-500),('しろ','しろ',1,100)]
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['しろ','ごと'])
+        for n in [1,4,10,20,100]:
+            enabled=json.loads(self.run_cli('--nbest',str(n),'しろ').stdout)['candidates']
+            self.assertEqual(enabled[0]['text'],'しろ')
+            self.assertEqual(enabled[0]['score'],-210)
+            self.assertTrue(enabled[0]['standalone_unigram_matched'])
+            self.assertEqual(len(enabled[0]['segments']),2)
+        disabled=json.loads(self.run_cli('--no-standalone-priority','--nbest','1','しろ').stdout)['candidates']
+        self.assertEqual(disabled[0]['text'],'城')
+        self.assertFalse(disabled[0]['standalone_unigram_matched'])
+        compound=json.loads(self.run_cli('--nbest','10','しろあ').stdout)['candidates']
+        self.assertFalse(any(c['standalone_unigram_matched'] for c in compound))
+        dictionary(self.data/'system.sud',entries[:3])  # Literal output exists only as two nodes.
+        multi=json.loads(self.run_cli('--nbest','1','しろ').stdout)['candidates']
+        self.assertEqual(multi[0]['text'],'城')
+        self.assertFalse(multi[0]['standalone_unigram_matched'])
+        dictionary(self.data/'system.sud',[('ごと','ごと',1,-100)])
+        corrected=json.loads(self.run_cli('--omission','こと').stdout)['candidates']
+        self.assertFalse(any(c['standalone_unigram_matched'] for c in corrected))
+        entries = [('し', f'First{i}', 1, i) for i in range(10)]
+        entries += [('ろ', f'Second{i}', 1, i + 20) for i in range(10)]
+        entries += [('しろ', 'しろ', 1, 1000)]
+        dictionary(self.data/'system.sud', entries)
+        standalone(self.data/'standalone.sud', ['しろ'])
+        large=json.loads(self.run_cli('--nbest','100','しろ').stdout)['candidates']
+        self.assertEqual(len(large),100)  # Safety lookahead must not cap N at64.
+        self.assertEqual(large[0]['text'],'しろ')
+        self.assertTrue(large[0]['standalone_unigram_matched'])
+    def test_oversampled_primary_top_k_preserves_utf16_tie_order(self):
+        surfaces=['\ue000','𐀀','Ω','𐀁']
+        entries=[('あ',surface,1,0) for surface in surfaces]+[('あ','あ',1,30000)]
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['あ'])
+
+        candidates=json.loads(self.run_cli('--nbest','4','あ').stdout)['candidates']
+
+        # The old stable full sort orders by UTF-16 (Kotlin String order):
+        # supplementary U+10000/U+10001 precede BMP private-use U+E000.
+        self.assertEqual([candidate['text'] for candidate in candidates],['あ','Ω','𐀀','𐀁'])
+        self.assertTrue(candidates[0]['standalone_unigram_matched'])
+        self.assertTrue(all(not candidate['standalone_unigram_matched'] for candidate in candidates[1:]))
+    def test_corrupt_standalone_fails_closed_but_disabled_table_is_not_opened(self):
+        standalone(self.data/'standalone.sud',['しろ'])
+        path=self.data/'standalone.sud';good=path.read_bytes()
+        for damaged in [good[:-1],good[:70],good[:-1]+bytes([good[-1]^1])]:
+            path.write_bytes(damaged);self.run_cli('しろ',ok=False)
+            self.run_cli('--no-standalone-priority','しろ')
+        # Structurally valid CRC is insufficient: reject unordered words/UTF8.
+        b.pack_file(path,3,2,[b.le(array.array('I',[0,1,2])),b'ba'])
+        self.run_cli('しろ',ok=False)
+        b.pack_file(path,3,1,[b.le(array.array('I',[0,1])),b'\xff'])
+        self.run_cli('しろ',ok=False)
     def test_japanese_completion_defaults_and_preserved_full_candidates(self):
         entries=[('あいう','Exact',1,100), ('あいうえ','Next',1,-9000),
                  ('あいうえお','Long',1,-9000), ('あいうえおか','Longest',1,-9000),
@@ -80,6 +213,96 @@ class Tests(unittest.TestCase):
                 self.assertEqual(c['bunsetsu_boundaries_utf16'],[])
         short=json.loads(self.run_cli('--predict-japanese','あい').stdout)
         self.assertNotIn('Next',[c['text'] for c in short['candidates']])
+
+    def test_japanese_prediction_deduplicates_against_final_primary_list(self):
+        entries=[('あいう','あいうえ',1,-25000)]
+        entries.extend(('あいう',f'候補{i:02}',1,-24000+i*100) for i in range(15))
+        entries.extend([('あいう','あいう',1,30000), ('あいうえ','あいうえ',1,10)])
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['あいう'])
+
+        result=json.loads(self.run_cli('--nbest','1','--predict-japanese','あいう').stdout)
+        texts=[candidate['text'] for candidate in result['candidates']]
+
+        self.assertEqual(texts[0],'あいう')
+        self.assertIn('あいうえ',texts)
+
+    def test_digit_surface_penalty_matches_android_and_applies_once(self):
+        dictionary(self.data/'system.sud', [
+            ('あ','2',1,100), ('あ','A',1,100),
+            ('い','3',1,200), ('い','B',1,200),
+        ])
+        candidates = json.loads(self.run_cli('--nbest','10','あい').stdout)['candidates']
+        by_text = {candidate['text']: candidate['score'] for candidate in candidates}
+        self.assertEqual(by_text['AB'], 290)
+        self.assertEqual(by_text['23'], 2290)
+        self.assertEqual(by_text['2B'], 2290)
+        self.assertEqual(by_text['A3'], 2290)
+
+        dictionary(self.data/'system.sud', [('あ','５',1,100)])
+        fullwidth = json.loads(self.run_cli('あ').stdout)['candidates']
+        self.assertEqual(fullwidth[0]['text'], '５')
+        self.assertEqual(fullwidth[0]['score'], 2140)
+
+    def test_omission_digit_penalty_uses_emitted_surface(self):
+        dictionary(self.data/'system.sud', [
+            ('ご','2',1,100), ('ご','語',1,1100),
+        ])
+        candidates = json.loads(self.run_cli('--omission','こ').stdout)['candidates']
+        by_text = {candidate['text']: candidate['score'] for candidate in candidates}
+        self.assertEqual(by_text['語'], 3040)
+        self.assertEqual(by_text['2'], 4040)
+        self.assertLess(candidates.index(next(c for c in candidates if c['text']=='語')),
+                        candidates.index(next(c for c in candidates if c['text']=='2')))
+
+    def test_classified_exact_digit_uses_android_whole_input_score(self):
+        dictionary(self.data/'system.sud', [('あ','Base',1,1000)])
+        dictionary(self.data/'medical.sud', [('あ','2',1,100)])
+        candidates = json.loads(
+            self.run_cli('--categories','medical','あ').stdout
+        )['candidates']
+        exact = next(candidate for candidate in candidates if candidate['text']=='2')
+        # Android merges classified exact terms after A* and scores BOS -> word
+        # -> EOS directly, without the A* output-digit surcharge.
+        self.assertEqual(exact['score'], 140)
+        self.assertEqual(exact['categories'], ['medical'])
+
+    def test_forward_beam_prunes_nodes_after_twenty_per_reading_position(self):
+        entries = [('あ', f'候補{i:02}', 1, i) for i in range(21)]
+        dictionary(self.data/'system.sud', entries)
+        candidates = json.loads(self.run_cli('--nbest','100','あ').stdout)['candidates']
+        self.assertEqual(len(candidates), 20)
+        self.assertNotIn('候補20', [candidate['text'] for candidate in candidates])
+        self.assertEqual([candidate['score'] for candidate in candidates],
+                         sorted(candidate['score'] for candidate in candidates))
+
+    def test_unknown_fallback_matches_reference_cost_and_dictionary_suppression(self):
+        dictionary(self.data/'system.sud',[])
+        connection(self.data/'connection.sud',1842,{0:{1841:13},1841:{0:-9}})
+
+        multi=json.loads(self.run_cli('abc').stdout)['candidates']
+        self.assertEqual(multi[0]['text'],'abc')
+        self.assertEqual(multi[0]['score'],MOZC_MAX_WORD_COST//2+13-9)
+        self.assertEqual(multi[0]['segments'][0]['length_utf16'],3)
+
+        single=json.loads(self.run_cli('A').stdout)['candidates']
+        self.assertEqual(single[0]['text'],'A')
+        self.assertEqual(single[0]['score'],MOZC_MAX_WORD_COST+13-9)
+
+        dictionary(self.data/'system.sud',[('猫','KNOWN',1,100)])
+        connection(self.data/'connection.sud')
+        known=json.loads(self.run_cli('--nbest','10','猫').stdout)['candidates']
+        self.assertEqual([candidate['text'] for candidate in known],['KNOWN'])
+
+        dictionary(self.data/'system.sud',[])
+        fallback=json.loads(self.run_cli('猫').stdout)['candidates']
+        self.assertEqual(fallback[0]['text'],'猫')
+        self.assertEqual(fallback[0]['score'],10000)
+
+        emoji=json.loads(self.run_cli('💩').stdout)['candidates']
+        self.assertEqual(emoji[0]['text'],'💩')
+        self.assertEqual(emoji[0]['score'],10000)
+        self.assertEqual(emoji[0]['segments'][0]['length_utf16'],2)
 
     def test_japanese_completion_utf16_surface_penalty_and_budget(self):
         dictionary(self.data/'system.sud', [('あいうえおかき',-2,1,100), ('あいうえおかく',-1,1,200)])
@@ -122,11 +345,102 @@ class Tests(unittest.TestCase):
         emoji=json.loads(subprocess.check_output([CLI,'--data',str(self.data),'😀あ'],text=True))
         self.assertEqual(emoji['candidates'][0]['bunsetsu_boundaries_utf16'],[2])
 
+    def test_bunsetsu_split_map_keeps_paths_outside_nbest_and_clears_exact_categories(self):
+        # More than the visible N-best paths share the same input. Android
+        # keeps their per-surface split map before truncating candidates.
+        system=[]
+        for i in range(12): system.append(('あ',f'A{i:02}',1,100+i))
+        for i in range(12): system.append(('い',f'I{i:02}',2,200+i))
+        system.append(('あい','ExactPath',1,50))
+        dictionary(self.data/'system.sud',system)
+        dictionary(self.data/'medical.sud',[('あい','A00I00',1,500)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A11'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        plain=json.loads(self.run_cli('--bunsetsu','--nbest','1','あい').stdout)
+        patterns=plain['split_pattern_by_candidate']
+        self.assertGreater(len(patterns),1)
+        self.assertIn('A00I00',patterns)
+        self.assertTrue(any(surface not in {c['text'] for c in plain['candidates']} for surface in patterns))
+
+        classified=json.loads(self.run_cli('--bunsetsu','--categories','medical','--nbest','1','あい').stdout)
+        self.assertEqual(classified['split_pattern_by_candidate']['A00I00'],[])
+        selected=next(c for c in classified['candidates'] if c['text']=='A00I00')
+        self.assertEqual(selected['bunsetsu_boundaries_utf16'],[])
+
     def test_reading_prefix_candidates_keep_consumed_range(self):
         result=json.loads(self.run_cli('--prefix-candidates','--nbest','1','あい').stdout)['candidates']
         self.assertEqual([c['text'] for c in result],['AI','Whole','A','B'])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[1:]],[2,1,1])
         self.assertEqual([c['score'] for c in result[1:]],[500,100,200])
+
+    def test_bunsetsu_includes_raw_reading_prefix_and_english_candidates(self):
+        dictionary(self.data/'system.sud',[
+            ('あ','A',1,100),('あ','A',2,150),('あい','Whole',1,500),
+        ])
+        dictionary(self.data/'english_reading.sud',[('あい','eye',0,12500)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','Whole'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Whole'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        result=json.loads(self.run_cli('--bunsetsu','--english-reading','--nbest','1','あい').stdout)['candidates']
+
+        self.assertEqual([(c['text'],c['score']) for c in result[1:4]],
+                         [('eye',12500),('Eye',14000),('EYE',15500)])
+        self.assertEqual([(c['text'],c['score']) for c in result[4:7]],
+                         [('あい',6000),('アイ',6000),('ｱｲ',6000)])
+        self.assertEqual([(c['text'],c['score']) for c in result[7:]],
+                         [('Whole',500),('A',100),('A',150)])
+        self.assertEqual([c['segments'][0]['length_utf16'] for c in result[7:]],
+                         [2,1,1])
+
+    def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
+        self.install_auxiliary_dictionary_fixture()
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Primary','Secondary'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Primary'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        row=json.loads(self.run_cli('--bunsetsu','あいう').stdout)
+        candidates={(c['segments'][0]['dictionary'],c['text']):c for c in row['candidates'] if c['segments']}
+        expected={
+            ('emoji','EMOJI'):6000,
+            ('emoticon','EMOTICON'):4000,
+            ('symbol','SYMBOL'):3000,
+            ('single_kanji','SINGLE-KANJI'):1900,
+        }
+        for key,score in expected.items():
+            self.assertIn(key,candidates)
+            self.assertEqual(candidates[key]['score'],score)
+        self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in row['candidates']))
+        self.assertFalse(any(c['text'].endswith('-PREDICT') for c in row['candidates']))
+        self.assertTrue(row['complete'])
+
+        (self.data/'symbol.sud').unlink()
+        self.run_cli('--bunsetsu','あいう',ok=False)
+
+    def test_japanese_prediction_enables_auxiliary_reading_completion(self):
+        self.install_auxiliary_dictionary_fixture()
+        baseline=json.loads(self.run_cli('あいう').stdout)
+        predicted=json.loads(self.run_cli('--predict-japanese','あいう').stdout)
+        baseline_texts={c['text'] for c in baseline['candidates']}
+        predicted_candidates={(c['segments'][0]['dictionary'],c['text']):c for c in predicted['candidates'] if c['segments']}
+        for key,score in {
+            ('emoji','EMOJI-PREDICT'):7000,
+            ('emoticon','EMOTICON-PREDICT'):5000,
+            ('symbol','SYMBOL-PREDICT'):3000,
+        }.items():
+            self.assertNotIn(key[1],baseline_texts)
+            self.assertIn(key,predicted_candidates)
+            self.assertEqual(predicted_candidates[key]['score'],score)
+        self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
+
+    def test_bunsetsu_marks_legacy_generation_without_auxiliary_dictionaries_incomplete(self):
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','B'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        row=json.loads(self.run_cli('--bunsetsu','あ').stdout)
+        self.assertFalse(row['complete'])
 
     def test_kana_english_entries_append_after_primary_candidates(self):
         dictionary(self.data/'english_reading.sud',[('あい','eye',0,12500)])
@@ -239,6 +553,8 @@ class Tests(unittest.TestCase):
 
     def test_incremental_search_rows_match_fresh_conversion(self):
         if INCREMENTAL is None:self.skipTest("Incremental executable not supplied")
+        dictionary(self.data/'system.sud',ENTRIES+[('しろ','しろ',1,100),('しろ','城',1,-500)])
+        standalone(self.data/'standalone.sud',['しろ'])
         result=subprocess.run([INCREMENTAL,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
         self.assertIn(b'reused_search_rows=',result.stdout)
@@ -247,6 +563,11 @@ class Tests(unittest.TestCase):
         if C_API is None:self.skipTest("C ABI executable not supplied")
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
+        dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
+        standalone(self.data/'standalone.sud',['しろ'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
         result=subprocess.run([C_API,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
     def test_exhaustive_nbest(self):
@@ -266,6 +587,7 @@ class Tests(unittest.TestCase):
         # Inactive broken categories must never be opened.
         (self.data/'medical.sud').write_bytes(b'broken');self.run_cli('あ');self.run_cli('--categories','medical','あ',ok=False)
     def test_unicode_stdin_and_limits(self):
+        connection(self.data/'connection.sud',1842)
         r=self.run_cli('--stdin','--nbest','1',input='👩\u200d💻e\u0301\n\nあ\n'.encode())
         lines=[json.loads(x) for x in r.stdout.splitlines()]
         self.assertEqual(len(lines),3);self.assertEqual(lines[0]['candidates'][0]['text'],'👩\u200d💻e\u0301')

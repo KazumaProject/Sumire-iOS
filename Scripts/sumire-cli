@@ -7,7 +7,7 @@
 set -eu
 sumire_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
 sumire_build=${SUMIRE_CLI_BUILD_DIR:-"$HOME/sumire-build/cli-release"}
-sumire_data=${SUMIRE_CLI_DATA_DIR:-"$HOME/sumire-data/cli-english-v1"}
+sumire_data=${SUMIRE_CLI_DATA_DIR:-"$HOME/sumire-data/cli-priority-v1"}
 mkdir -p "$sumire_build"
 sumire_log="$sumire_build/build.log"
 if ! cmake -S "$sumire_root/ConversionCore" -B "$sumire_build" -DCMAKE_BUILD_TYPE=Release > "$sumire_log" 2>&1; then

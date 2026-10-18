@@ -135,7 +135,7 @@ int sumire_engine_open_with_dictionaries(const char *directory, uint32_t mask,
   if (out) *out = nullptr;
   return guarded(error, size, [&] {
     check(out && directory, "null engine argument");
-    check((flags & ~uint32_t(3)) == 0, "unknown dictionary flags");
+    check((flags & ~uint32_t(7)) == 0, "unknown dictionary flags");
     check((mask >> 30) == 0, "unknown category mask");
     std::vector<std::string> categories;
     auto names = sumire::category_names();
@@ -143,11 +143,14 @@ int sumire_engine_open_with_dictionaries(const char *directory, uint32_t mask,
       if (mask & (uint32_t(1) << i))
         categories.push_back(names[i]);
     auto e = std::make_unique<sumire_engine>();
-    e->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0, (flags & 1) != 0);
+    e->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0, (flags & 1) != 0, (flags & 4) == 0);
     *out = e.release();
   });
 }
 void sumire_engine_close(sumire_engine *engine) { delete engine; }
+int sumire_engine_has_standalone_priority(const sumire_engine *engine) {
+  return engine && engine->value->standalone_priority_available() ? 1 : 0;
+}
 int sumire_session_create(sumire_engine *engine, sumire_session **out,
                           char *error, size_t size) {
   if (out)
@@ -168,7 +171,8 @@ int sumire_session_update(sumire_session *session,
   return guarded(error, size, [&] {
     check(out && session && request, "null update argument");
     check(request->reading || request->reading_bytes == 0, "null reading");
-    check((request->flags & ~uint32_t(15)) == 0 &&
+    check((request->flags & ~uint32_t(31)) == 0 &&
+          ((request->flags & 16) == 0 || (request->flags & 8) == 0) &&
           ((request->flags & 2) == 0 || request->flags == 2), "unsupported or incompatible conversion flags");
     check(!session->has_generation || request->generation > session->generation,
           "stale generation");
@@ -189,7 +193,7 @@ int sumire_session_update(sumire_session *session,
         ? session->engine->predict_english(reading, request->candidate_count, true, session->personal.get(), session->learned.get())
         : session->engine->convert(
         reading, request->candidate_count, request->max_states,
-        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0);
+        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0);
     snapshot->generation = request->generation;
     snapshot->length = uint32_t(units.size());
     auto result = std::make_unique<sumire_result>();
@@ -225,6 +229,16 @@ int sumire_result_segment(const sumire_result *result, size_t candidate,
     return -1;
   const auto &s = segments[index];
   *out = {string(s.text), string(s.dictionary), s.start, s.length};
+  return 0;
+}
+size_t sumire_result_category_count(const sumire_result *result, size_t candidate) {
+  return result && candidate < sumire_result_count(result)
+      ? result->snapshot->value.candidates[candidate].classified_categories.size() : 0;
+}
+int sumire_result_category(const sumire_result *result, size_t candidate,
+                           size_t index, sumire_string *out) {
+  if (!out || index >= sumire_result_category_count(result, candidate)) return -1;
+  *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
   return 0;
 }
 size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidate) {

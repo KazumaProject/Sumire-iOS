@@ -14,9 +14,25 @@ struct Candidate {
   std::vector<Segment> segments;
   // Interior reading offsets (UTF-16), from the selected complete path.
   std::vector<uint32_t> bunsetsu_boundaries{};
+  bool standalone_unigram_matched = false;
+  // Origin labels do not replace the selected path's segment boundaries.
+  std::vector<std::string> classified_categories{};
+  bool system_ngram_matched = false;
+};
+struct CandidateSplitPattern {
+  std::string surface;
+  std::vector<uint32_t> positions;
 };
 struct Result {
   std::vector<Candidate> candidates;
+  // Candidate surfaces promoted by the bunsetsu-only Android system n-gram route.
+  std::vector<std::string> system_ngram_matched_candidates;
+  // At most four distinct UTF-16 reading-boundary patterns from bunsetsu paths.
+  std::vector<std::vector<uint32_t>> bunsetsu_split_patterns;
+  std::vector<uint32_t> primary_bunsetsu_split_positions;
+  // Split positions for every primary path surface discovered by the
+  // bunsetsu search, including paths outside the visible N-best list.
+  std::vector<CandidateSplitPattern> split_pattern_by_candidate;
   double elapsed_ms = 0;
   size_t lattice_nodes = 0, expanded_states = 0;
   bool complete = true;
@@ -64,13 +80,15 @@ class Engine {
 
 public:
   Engine(const std::string &directory,
-         const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false);
+         const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false,
+         bool standalone_priority = true);
   ~Engine();
   Result convert(const std::string &reading, size_t count = 10,
                  size_t state_limit = 200000, bool omission = false,
                  const PersonalDictionary *personal = nullptr,
                  const PersonalDictionary *learned = nullptr,
-                 Workspace *workspace = nullptr, bool prefix_candidates = false, bool japanese_prediction = false) const;
+                 Workspace *workspace = nullptr, bool prefix_candidates = false,
+                 bool japanese_prediction = false, bool bunsetsu_search = false) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;
@@ -78,6 +96,7 @@ public:
                          const PersonalDictionary *personal = nullptr,
                          const PersonalDictionary *learned = nullptr) const;
   size_t mapped_bytes() const;
+  bool standalone_priority_available() const;
   std::shared_ptr<const PersonalDictionary>
       personal_dictionary(std::vector<PersonalEntry>) const;
 };

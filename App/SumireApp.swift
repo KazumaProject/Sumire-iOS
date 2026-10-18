@@ -28,6 +28,7 @@ struct HomeView: View {
     @AppStorage("clipboardAutomaticPreview", store: KeyboardSettings.appDefaults) private var clipboardAutomaticPreview = false
     @AppStorage("liveConversion", store: KeyboardSettings.appDefaults) private var liveConversion = false
     @AppStorage("omissionSearch", store: KeyboardSettings.appDefaults) private var omissionSearch = false
+    @AppStorage("bunsetsuSeparation", store: KeyboardSettings.appDefaults) private var bunsetsuSeparation = false
     @State private var destination: SettingsDestination?
     @State private var showPreview = false
     var body: some View {
@@ -53,12 +54,13 @@ struct HomeView: View {
                     DisclosureGroup("入力オプション") {
                         Toggle("ライブ変換", isOn: $liveConversion)
                         Toggle("修飾キー省略", isOn: $omissionSearch)
+                        Toggle("文節ごとに変換", isOn: $bunsetsuSeparation)
                     }
                 }
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -97,9 +99,12 @@ struct HomeView: View {
         case .licenses: detail(title: item.title) { LicenseSettingsView() }
         case .conversion: detail(title: item.title) {
             Form {
-                Section("変換") {
+                Section {
                     Toggle("ライブ変換", isOn: $liveConversion)
                     Toggle("修飾キー省略", isOn: $omissionSearch)
+                    Toggle("文節ごとに変換", isOn: $bunsetsuSeparation)
+                } header: { Text("変換") } footer: {
+                    Text("ONにすると、変換キーを押したときに文節を切り分けて先頭から候補を選べます。選んだ後も残りの読みは未確定のまま続きます。")
                 }
                 Section {
                     TextField("削除キー左フリックの区切り記号", text: $deleteBoundarySymbols)
@@ -206,6 +211,7 @@ struct InputHarness: UIViewRepresentable {
     let candidateRowCount: Int
     let liveConversion: Bool
     let omissionSearch: Bool
+    let bunsetsuSeparation: Bool
     let englishReadingEnabled: Bool
     let categoryMask: UInt32
     func makeCoordinator() -> Coordinator { Coordinator() }
@@ -311,6 +317,7 @@ struct InputHarness: UIViewRepresentable {
         surface.candidateBar.automaticallyPreviewClipboard = clipboardAutomaticPreview
         surface.liveConversion = liveConversion
         surface.omissionSearch = omissionSearch
+        surface.bunsetsuSeparation = bunsetsuSeparation
         surface.englishReadingEnabled = englishReadingEnabled
         surface.categoryMask = categoryMask
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }

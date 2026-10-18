@@ -41,8 +41,8 @@ static void test_edit_reuse(const char *directory) {
   sumire_session *reused = NULL;
   CHECK(sumire_engine_open_with_dictionaries(directory,0,1,&engine,error,sizeof error) == 0);
   CHECK(sumire_session_create(engine,&reused,error,sizeof error) == 0);
-  const char *readings[] = {"あいあい", "あいあいあ", "あいあい", "あいあい", "あいあい", "hel", "あいあい", "😀あい", "😁あい", "があい", "かあい"};
-  unsigned flags[] = {12,12,12,12,13,2,12,12,12,12,12};
+  const char *readings[] = {"あいあい", "あいあいあ", "あいあい", "あいあい", "あいあい", "hel", "あいあい", "😀あい", "😁あい", "があい", "かあい", "あいあい"};
+  unsigned flags[] = {12,12,12,12,13,2,12,12,12,12,12,16};
   size_t hits = 0;
   for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
     sumire_session *fresh = NULL;
@@ -56,6 +56,13 @@ static void test_edit_reuse(const char *directory) {
     CHECK(sumire_session_update(reused,&request,&a,error,sizeof error) == 0);
     CHECK(sumire_session_update(fresh,&request,&b,error,sizeof error) == 0);
     compare_results(a,b);
+    if (i == 11) {
+      sumire_metrics metrics;
+      CHECK(sumire_result_metrics(a, &metrics) == 0);
+      // Flag 16 selects the bunsetsu route; this fixture intentionally omits
+      // the four auxiliary dictionaries, so that route must report incomplete.
+      CHECK(metrics.complete == 0);
+    }
     size_t reused_rows, searched_rows;
     CHECK(sumire_result_search_rows(a,&reused_rows,&searched_rows) == 0);
     hits += reused_rows;
@@ -75,6 +82,27 @@ int main(int argc, char **argv) {
   sumire_result *first = NULL, *second = NULL, *failed = NULL;
   CHECK(sumire_abi_version() == 1 && sumire_category_count() == 30);
   CHECK(sumire_category_name(30) == NULL);
+  CHECK(sumire_engine_has_standalone_priority(NULL) == 0);
+  CHECK(sumire_engine_open_with_dictionaries(argv[1], 0, 4, &engine, error, sizeof error) == 0);
+  CHECK(sumire_engine_has_standalone_priority(engine) == 0);
+  sumire_engine_close(engine); engine = NULL;
+  // Exact origin labels remain owned by their result after the engine/session
+  // are gone, and never manufacture extra selected-path segments.
+  CHECK(sumire_engine_open(argv[1], (1u << 9) | (1u << 12), &engine, error, sizeof error) == 0);
+  CHECK(sumire_engine_has_standalone_priority(engine) == 1);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request origins_request = {1, "あい", strlen("あい"), 0, 1, 200000, 0};
+  sumire_result *origins = NULL;
+  CHECK(sumire_session_update(session, &origins_request, &origins, error, sizeof error) == 0);
+  CHECK(sumire_result_category_count(origins, 0) == 2);
+  CHECK(sumire_result_category_count(NULL, 0) == 0);
+  sumire_string origin;
+  CHECK(sumire_result_category(origins, 0, 2, &origin) < 0);
+  CHECK(sumire_result_category(origins, 0, 0, NULL) < 0);
+  CHECK(sumire_result_category(origins, 0, 0, &origin) == 0 && origin.size == 7 && memcmp(origin.data, "medical", 7) == 0);
+  sumire_session_destroy(session); sumire_engine_close(engine);
+  CHECK(sumire_result_category(origins, 0, 1, &origin) == 0 && origin.size == 6 && memcmp(origin.data, "person", 6) == 0);
+  sumire_result_destroy(origins); engine = NULL; session = NULL;
   CHECK(sumire_engine_open(argv[1], 0, &engine, error, sizeof error) == 0);
   CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
   sumire_engine_close(engine);
@@ -196,7 +224,7 @@ int main(int argc, char **argv) {
   sumire_result_destroy(first);
   sumire_result_destroy(second);
   engine = NULL;
-  CHECK(sumire_engine_open_with_dictionaries(argv[1], 0, 4, &engine, error, sizeof error) < 0 && engine == NULL);
+  CHECK(sumire_engine_open_with_dictionaries(argv[1], 0, 8, &engine, error, sizeof error) < 0 && engine == NULL);
   CHECK(sumire_engine_open_with_dictionaries(argv[1], 0, 2, &engine, error, sizeof error) < 0 && engine == NULL);
   CHECK(sumire_engine_open_with_dictionaries(argv[1], 0, 1, &engine, error, sizeof error) == 0);
   CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);

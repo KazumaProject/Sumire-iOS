@@ -58,7 +58,7 @@ targets:
       - Shared
       - path: ConversionCore/src
         excludes: [main.cpp]
-      - path: ../sumire-data/cli-english-v1
+      - path: ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english
         type: folder
         buildPhase: resources
     info:
