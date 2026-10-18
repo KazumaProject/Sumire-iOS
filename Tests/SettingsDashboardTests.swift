@@ -1,0 +1,57 @@
+import XCTest
+
+final class SettingsDashboardTests: XCTestCase {
+    func testCategoriesAndSharingDetailsUseVisibleNavigation() {
+        let app = XCUIApplication(); app.launch()
+        XCTAssertTrue(app.buttons["settings-preview"].waitForExistence(timeout: 5))
+        app.buttons["settings-sharing-status"].tap()
+        XCTAssertTrue(app.staticTexts["キーボードの準備と共有"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.staticTexts["sharing-status-detail"].exists)
+        app.buttons["完了"].tap()
+        app.buttons["settings-category-input"].tap()
+        XCTAssertTrue(app.buttons["settings-destination-keyboards"].waitForExistence(timeout: 3))
+        app.navigationBars.buttons.firstMatch.tap()
+        app.buttons["settings-category-appearance"].tap()
+        XCTAssertTrue(app.buttons["settings-destination-theme"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.buttons["settings-destination-candidates"].exists)
+    }
+
+    func testSearchOpensThemeAndReportsNoResults() {
+        let app = XCUIApplication(); app.launch()
+        let search = app.searchFields.firstMatch
+        XCTAssertTrue(search.waitForExistence(timeout: 5)); search.tap(); search.typeText("配色")
+        let theme = app.buttons["settings-destination-theme"]
+        XCTAssertTrue(theme.waitForExistence(timeout: 3)); theme.tap()
+        XCTAssertTrue(app.otherElements["theme-settings"].waitForExistence(timeout: 3) || app.buttons["theme-seed-color"].exists)
+        app.buttons["完了"].tap()
+        app.terminate(); app.launch()
+        let fresh = app.searchFields.firstMatch; fresh.tap(); fresh.typeText("zzzz-no-setting")
+        XCTAssertFalse(app.buttons["settings-destination-theme"].exists)
+        XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "zzzz-no-setting")).firstMatch.exists)
+    }
+
+    func testPreviewRowsAndThemeKeepUncommittedInput() {
+        let app = XCUIApplication(); app.launchArguments = ["-liveConversion", "NO"]
+        app.launch(); app.buttons["settings-preview"].tap()
+        let editor = app.textViews["入力テスト"]; XCTAssertTrue(editor.waitForExistence(timeout: 5)); editor.tap()
+        app.buttons["keyboard-switch"].press(forDuration: 0.8); app.buttons["50音"].tap()
+        app.buttons["あ"].tap(); app.buttons["い"].tap()
+        app.buttons["3段"].tap(); XCTAssertEqual(editor.value as? String, "あい")
+        app.buttons["preview-settings"].tap(); app.buttons["キーボードの配色"].tap()
+        XCTAssertTrue(app.buttons["完了"].waitForExistence(timeout: 3)); app.buttons["完了"].tap()
+        XCTAssertEqual(editor.value as? String, "あい")
+        app.buttons["う"].tap(); XCTAssertEqual(editor.value as? String, "あいう")
+    }
+
+    func testLargeTextKeepsPreviewAndCategoryReachable() {
+        let app = XCUIApplication()
+        app.launchArguments = ["-UIPreferredContentSizeCategoryName", "UICTContentSizeCategoryAccessibilityXXXL"]
+        app.launch()
+        let preview = app.buttons["settings-preview"]
+        XCTAssertTrue(preview.waitForExistence(timeout: 5)); XCTAssertGreaterThanOrEqual(preview.frame.height, 44)
+        let appearance = app.buttons["settings-category-appearance"]
+        for _ in 0..<5 where !appearance.isHittable { app.swipeUp() }
+        XCTAssertTrue(appearance.isHittable); appearance.tap()
+        XCTAssertTrue(app.buttons["settings-destination-theme"].waitForExistence(timeout: 3))
+    }
+}
