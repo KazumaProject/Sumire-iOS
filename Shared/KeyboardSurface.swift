@@ -222,6 +222,8 @@ final class KeyboardSurface: UIInputView {
     var hasComposition: Bool { !composition.reading.isEmpty }
 
     var hue: CGFloat = 0.73 { didSet { if hue != oldValue { rebuild() } } }
+    var saturation: CGFloat = 0.5 { didSet { if saturation != oldValue { rebuild() } } }
+    var brightness: CGFloat = 0.7 { didSet { if brightness != oldValue { rebuild() } } }
     var colorMode: KeyboardColorMode = .system {
         didSet {
             guard colorMode != oldValue else { return }
@@ -232,6 +234,8 @@ final class KeyboardSurface: UIInputView {
     func reloadTheme() {
         let theme = KeyboardTheme.load(defaults: settingsDefaults)
         hue = CGFloat(theme.hue)
+        saturation = CGFloat(theme.saturation)
+        brightness = CGFloat(theme.brightness)
         colorMode = theme.mode
     }
     let candidateBar = CandidateBar()
@@ -335,7 +339,7 @@ final class KeyboardSurface: UIInputView {
         appearance = .load(keyboardKind, defaults: settingsDefaults)
         stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
         keyRows = []
-        let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark)
+        let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
         backgroundColor = palette.background
         candidateBar.applyPalette(palette)
         layer.cornerRadius = geometry.surfaceCornerRadius
@@ -1138,7 +1142,7 @@ final class KeyboardSurface: UIInputView {
     }
     private func showExpandedCandidates() {
         guard !converted.isEmpty, expandedCandidates == nil else { return }
-        let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark)
+        let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
         let panel = UIView()
         panel.accessibilityIdentifier = "candidate-expanded-panel"
         panel.backgroundColor = palette.background
