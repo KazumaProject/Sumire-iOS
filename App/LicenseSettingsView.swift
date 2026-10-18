@@ -28,7 +28,7 @@ struct LicenseSettingsView: View {
                 notice("肌色の対応データ・出典", url: EmojiSkinToneVariants.noticeURL)
             }
             Section("英語辞書") {
-                Text("英単語辞書は収録していますが、固定Android資産の取得元・版・適用ライセンスは未確認です。旧WikiText通知は、現行の英単語資産への適用が確認できるまで参考情報として区別して表示します。英語読み辞書は別の通知を確認してください。")
+                Text("英単語辞書は収録しています。固定Android参照のリビジョン、`english/word.dat`のパスとSHA-256は特定済みです。一方、`word.dat`の収録語の元データとその版、各語の帰属、適用ライセンスは未確認です。旧WikiText通知は現在の`word.dat`への適用が確認できるまで、参考情報として区別して表示します。英語読み辞書は別の通知を確認してください。")
                     .font(.footnote)
                     .accessibilityIdentifier("english-dictionary-license-status")
                 if let url = catalog.englishWordNotice {
