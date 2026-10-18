@@ -22,6 +22,9 @@ struct HomeView: View {
     @AppStorage(DeletionBoundary.settingsKey, store: KeyboardSettings.appDefaults) private var deleteBoundarySymbols = DeletionBoundary.defaultSymbols
     @AppStorage("theme.hue", store: KeyboardSettings.appDefaults) private var hue = 0.73
     @AppStorage("theme.mode", store: KeyboardSettings.appDefaults) private var colorMode = KeyboardColorMode.system.rawValue
+    @AppStorage("theme.saturation", store: KeyboardSettings.appDefaults) private var saturation = 0.5
+    @AppStorage("theme.brightness", store: KeyboardSettings.appDefaults) private var brightness = 0.7
+    @State private var showTheme = false
     @State private var custom = true
     @State private var showDictionaries = false
     @State private var showKeyAppearance = false
@@ -76,14 +79,7 @@ struct HomeView: View {
                         Toggle("第1候補も学習", isOn: $learnFirstCandidate).disabled(!learningEnabled)
                         Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
                         if let learningNotice { Text(learningNotice).font(.caption) }
-                        Picker("キーボードの配色", selection: $colorMode) {
-                            ForEach(KeyboardColorMode.allCases, id: \.rawValue) { Text($0.title).tag($0.rawValue) }
-                        }.accessibilityIdentifier("keyboardColorMode")
-                        HStack {
-                            Text("テーマ色")
-                            Slider(value: $hue, in: 0...1)
-                                .accessibilityLabel("テーマの色相")
-                        }
+                        Button("キーボードの配色") { showTheme = true }
                         Text("OFF にすると標準キーボードを比較できます。配色は保存され、キーボードの次回表示にも反映します。")
                             .font(.caption).foregroundStyle(.secondary)
                         Text("キーボード拡張は、設定 → 一般 → キーボード → キーボード → 新しいキーボードを追加 → Sumire で有効化します。")
@@ -91,7 +87,7 @@ struct HomeView: View {
                     }
                 }
                 .frame(maxHeight: 310)
-                InputHarness(preserveCompositionForAppearance: showKeyAppearance, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
                     .frame(minHeight: 80, maxHeight: .infinity)
             }
             .padding()
@@ -118,6 +114,12 @@ struct HomeView: View {
             .sheet(isPresented: $showRomaji, onDismiss: { appearanceRevision += 1 }) { RomajiSettings() }
             .sheet(isPresented: $showPersonal) { PersonalDictionarySettings(library: personalLibrary) }
             .sheet(isPresented: $showKeyboardSelection, onDismiss: { appearanceRevision += 1 }) { KeyboardSelectionSettings() }
+            .sheet(isPresented: $showTheme, onDismiss: { appearanceRevision += 1 }) {
+                NavigationStack {
+                    ThemeSettingsView()
+                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { showTheme = false } } }
+                }
+            }
             .sheet(isPresented: $showKeyAppearance, onDismiss: { appearanceRevision += 1 }) { KeyAppearanceSettings() }
             .sheet(isPresented: $showDictionaries) { DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled) }
         }
@@ -132,6 +134,8 @@ struct InputHarness: UIViewRepresentable {
     let learnFirstCandidate: Bool
     let appearanceRevision: Int
     let hue: Double
+    let saturation: Double
+    let brightness: Double
     let colorMode: KeyboardColorMode
     let custom: Bool
     let candidateRowCount: Int
@@ -244,6 +248,8 @@ struct InputHarness: UIViewRepresentable {
         surface.englishReadingEnabled = englishReadingEnabled
         surface.categoryMask = categoryMask
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }
+        surface.saturation = CGFloat(saturation)
+        surface.brightness = CGFloat(brightness)
         surface.colorMode = colorMode
         if (text.inputView != nil) != custom {
             if !custom { context.coordinator.perform { text.unmarkText() }; surface.invalidateComposition() }
@@ -256,12 +262,23 @@ struct InputHarness: UIViewRepresentable {
         weak var textView: UITextView?
         private var appearanceMarkedRange: NSRange?
         private var appearanceText: String?
+        private var appearanceSelection: NSRange?
         private var preservingAppearance = false
         func prepareAppearanceEditing(_ active: Bool) {
-            if active && !preservingAppearance, let textView, let marked = textView.markedTextRange {
-                appearanceMarkedRange = NSRange(location: textView.offset(from: textView.beginningOfDocument, to: marked.start),
-                    length: textView.offset(from: marked.start, to: marked.end))
-                appearanceText = textView.text
+            if active && !preservingAppearance {
+                appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
+                if let textView, let marked = textView.markedTextRange {
+                    let length = max(0, textView.offset(from: marked.start, to: marked.end))
+                    appearanceMarkedRange = NSRange(location: textView.offset(from: textView.beginningOfDocument, to: marked.start), length: length)
+                    appearanceText = textView.text
+                    if let selected = textView.selectedTextRange {
+                        let start = min(length, max(0, textView.offset(from: marked.start, to: selected.start)))
+                        let end = min(length, max(start, textView.offset(from: marked.start, to: selected.end)))
+                        appearanceSelection = NSRange(location: start, length: end - start)
+                    } else {
+                        appearanceSelection = NSRange(location: length, length: 0)
+                    }
+                }
             }
             preservingAppearance = active
         }
@@ -278,7 +295,7 @@ struct InputHarness: UIViewRepresentable {
         func validateContext() {
             guard !changing, let textView else { return }
             if expectedText != textView.text || expectedSelection != textView.selectedRange {
-                appearanceMarkedRange = nil; appearanceText = nil
+                appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
                 surface.invalidateComposition()
                 expectedText = textView.text
                 expectedSelection = textView.selectedRange
@@ -291,14 +308,20 @@ struct InputHarness: UIViewRepresentable {
         }
         func textViewDidBeginEditing(_ textView: UITextView) {
             guard let range = appearanceMarkedRange, let original = appearanceText else { return }
-            appearanceMarkedRange = nil; appearanceText = nil
-            guard textView.text == original, NSMaxRange(range) <= (original as NSString).length else {
+            let savedSelection = appearanceSelection
+            appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
+            let originalLength = (original as NSString).length
+            guard textView.text == original, range.location >= 0, range.location <= originalLength,
+                  range.length >= 0, range.length <= originalLength - range.location else {
                 surface.invalidateComposition(); return
             }
             perform {
                 textView.selectedRange = range
                 let value = (original as NSString).substring(with: range)
-                textView.setMarkedText(value, selectedRange: NSRange(location: value.utf16.count, length: 0))
+                let count = value.utf16.count
+                let start = min(count, max(0, savedSelection?.location ?? count))
+                let length = min(count - start, max(0, savedSelection?.length ?? 0))
+                textView.setMarkedText(value, selectedRange: NSRange(location: start, length: length))
             }
         }
         let surface = KeyboardSurface(frame: CGRect(x: 0, y: 0, width: 390, height: 464))

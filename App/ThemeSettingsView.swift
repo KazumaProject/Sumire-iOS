@@ -16,6 +16,7 @@ struct ThemeSettingsView: View {
                         Text(mode.title).tag(mode)
                     }
                 }
+                .accessibilityIdentifier("keyboardColorMode")
                 Text("基準色から背景・通常キー・特殊キー・選択候補の色を生成します。")
                     .font(.footnote).foregroundStyle(.secondary)
             }
