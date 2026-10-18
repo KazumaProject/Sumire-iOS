@@ -1,0 +1,26 @@
+.reference/
+.build/
+DerivedData/
+*.xcuserstate
+xcuserdata/
+.DS_Store
+
+Core/.build/
+
+# XcodeGen output and local build/test products
+Sumire.xcodeproj/
+build/
+*.xcresult/
+*.trace/
+__pycache__/
+*.pyc
+
+# Local validation records are kept outside published source changes.
+docs/validation/
+
+# Signing material and local credentials
+.env
+.env.*
+*.p12
+*.mobileprovision
+*.provisionprofile
