@@ -96,8 +96,9 @@ void sumire_engine_close(sumire_engine *engine);
 int sumire_session_create(sumire_engine *engine, sumire_session **out,
                           char *error, size_t error_size);
 void sumire_session_destroy(sumire_session *session);
-/* Currently rebuilds the lattice; edit_start is validated but not an
- * incremental optimization. After the first request, generation must strictly
+/* Reuses bounded dictionary search rows when their inspected UTF-16 prefix
+ * is unchanged. Viterbi costs and A* are recalculated for the whole lattice.
+ * edit_start is validated; actual common prefix is verified from both readings. After the first request, generation must strictly
  * increase, including across resets. A failed request does not replace the
  * previous valid session result.
  */
@@ -118,6 +119,8 @@ size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidat
 /* Returns 0 on success, -1 for invalid arguments/index. Copies an offset. */
 int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidate_index,
                                    size_t boundary_index, uint32_t *out_utf16);
+/* Diagnostics: immutable dictionary-search rows only, not Viterbi/A* reuse. */
+int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched);
 int sumire_result_metrics(const sumire_result *result, sumire_metrics *out);
 /* Commit only the most recent successful generation. Result snapshots remain
  * valid. On success clears the session selection; committed text is in the

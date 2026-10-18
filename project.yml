@@ -92,6 +92,9 @@ targets:
       - Shared/ConversionService.swift
       - Shared/KeyboardSettings.swift
       - Shared/DocumentProxyIdentity.swift
+      - Shared/CandidateBar.swift
+      - Shared/KeyboardPalette.swift
+      - Shared/KeyboardIcon.swift
       - path: ConversionCore/src
         excludes: [main.cpp]
     settings:

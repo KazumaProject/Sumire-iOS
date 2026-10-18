@@ -6,6 +6,7 @@ spec=importlib.util.spec_from_file_location('builder',pathlib.Path(__file__).res
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 CLI=sys.argv.pop(1)
 C_API=sys.argv.pop(1) if len(sys.argv)>1 else None
+INCREMENTAL=sys.argv.pop(1) if len(sys.argv)>1 else None
 
 def bits(values):
     words=[0]*((len(values)+63)//64)
@@ -235,6 +236,12 @@ class Tests(unittest.TestCase):
             self.assertEqual(row['candidates'], fresh['candidates'])
             self.assertLessEqual(row['workspace_cache_bytes'], 4 * 1024 * 1024)
         self.run_cli('--lookup','--omission','かつこう',ok=False)
+
+    def test_incremental_search_rows_match_fresh_conversion(self):
+        if INCREMENTAL is None:self.skipTest("Incremental executable not supplied")
+        result=subprocess.run([INCREMENTAL,str(self.data)],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertIn(b'reused_search_rows=',result.stdout)
 
     def test_c_api_ownership_and_generations(self):
         if C_API is None:self.skipTest("C ABI executable not supplied")

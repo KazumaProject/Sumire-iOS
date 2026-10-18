@@ -20,6 +20,11 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
             result[key] = .boolean
         }
+        result[SymbolKeyboardMode.initialModeKey] = .text(Set(SymbolKeyboardMode.allCases.map(\.rawValue)))
+        result[EmojiSkinTone.settingsKey] = .text(Set(EmojiSkinTone.allCases.map(\.rawValue)))
+        result[ClipboardHistorySettings.enabledKey] = .boolean
+        result["clipboard.expirationEnabled"] = .boolean
+        result["clipboard.retentionHours"] = .number(1...72, integer: true)
         result["keyboard.lastUsed"] = .boundedText(256)
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)
@@ -42,7 +47,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             for suffix in ["flickUp", "flickDown"] { result["qwerty.\(kind).\(suffix)"] = .boolean }
         }
         for suffix in ["halfWidthNumbers", "halfWidthSymbols"] { result["qwerty.romaji.\(suffix)"] = .boolean }
-        for key in [SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
+        for key in [TouchFeedbackSettings.storageKey, SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
             result[key] = .data
         }
         return result
@@ -85,7 +90,11 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case (.boundedText(let limit), .text(let text)):
                 guard text.utf8.count <= limit else { throw Self.invalid(key) }
             case (.data, .data(let data)):
-                if key == SumireSpecialKeySettings.storageKey {
+                if key == TouchFeedbackSettings.storageKey {
+                    guard data.count <= 4096 else { throw Self.invalid(key) }
+                    let feedback = try JSONDecoder().decode(TouchFeedbackSettings.self, from: data)
+                    guard feedback == feedback.normalized() else { throw Self.invalid(key) }
+                } else if key == SumireSpecialKeySettings.storageKey {
                     _ = try SumireSpecialKeySettings.decode(data)
                 } else if key == KeyboardSelection.storageKey {
                     guard data.count <= 300_000 else { throw Self.invalid(key) }

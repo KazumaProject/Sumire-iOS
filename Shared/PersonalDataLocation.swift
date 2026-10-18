@@ -2,6 +2,9 @@ import Foundation
 import SumireCore
 
 enum PersonalDataLocation {
+    static func clipboardURL(allowShared: Bool) -> URL {
+        store(allowShared: allowShared).directory.deletingLastPathComponent().appendingPathComponent("clipboard.sqlite")
+    }
     static func learningURL(allowShared: Bool) -> URL {
         store(allowShared: allowShared).directory.deletingLastPathComponent().appendingPathComponent("learning.sqlite")
     }

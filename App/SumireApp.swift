@@ -10,26 +10,17 @@ struct SumireApp: App {
 
 struct HomeView: View {
     @ObservedObject var personalLibrary: PersonalLibrary
-    @State private var showPersonal = false
     @State private var confirmClearLearning = false
     @State private var learningNotice: String?
     @State private var clearingLearning = false
     @AppStorage("learningEnabled", store: KeyboardSettings.appDefaults) private var learningEnabled = true
     @AppStorage("learnFirstCandidate", store: KeyboardSettings.appDefaults) private var learnFirstCandidate = false
-    @State private var showRomaji = false
-    @State private var showCustomKeyboard = false
-    @State private var showBackup = false
     @AppStorage(DeletionBoundary.settingsKey, store: KeyboardSettings.appDefaults) private var deleteBoundarySymbols = DeletionBoundary.defaultSymbols
     @AppStorage("theme.hue", store: KeyboardSettings.appDefaults) private var hue = 0.73
     @AppStorage("theme.mode", store: KeyboardSettings.appDefaults) private var colorMode = KeyboardColorMode.system.rawValue
     @AppStorage("theme.saturation", store: KeyboardSettings.appDefaults) private var saturation = 0.5
     @AppStorage("theme.brightness", store: KeyboardSettings.appDefaults) private var brightness = 0.7
-    @State private var showTheme = false
     @State private var custom = true
-    @State private var showDictionaries = false
-    @State private var showKeyAppearance = false
-    @State private var showKeyboardSelection = false
-    @State private var showSpecialKeys = false
     @State private var appearanceRevision = 0
     @AppStorage("englishReadingEnabled", store: KeyboardSettings.appDefaults) private var englishReadingEnabled = true
     @AppStorage("categoryMask", store: KeyboardSettings.appDefaults) private var categoryMask = 0
@@ -37,94 +28,162 @@ struct HomeView: View {
     @AppStorage("clipboardAutomaticPreview", store: KeyboardSettings.appDefaults) private var clipboardAutomaticPreview = false
     @AppStorage("liveConversion", store: KeyboardSettings.appDefaults) private var liveConversion = false
     @AppStorage("omissionSearch", store: KeyboardSettings.appDefaults) private var omissionSearch = false
+    @State private var destination: SettingsDestination?
+    @State private var showPreview = false
     var body: some View {
         NavigationStack {
-            VStack(alignment: .leading, spacing: 16) {
-                Toggle("Sumire の入力面を試す", isOn: $custom)
-                Picker("候補欄の段数", selection: $candidateRowCount) {
-                    ForEach(1...3, id: \.self) { Text("\($0)段").tag($0) }
-                }.pickerStyle(.segmented)
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 16) {
-                        HStack(spacing: 12) {
-                            Image(uiImage: UIImage(named: "SumireLogo.png") ?? UIImage())
-                                .resizable().scaledToFit().frame(width: 48, height: 48)
-                                .accessibilityHidden(true)
-                            Text("入力基盤の実機検証").font(.title2.bold())
-                        }
-                        Text("C++辞書変換の検証版です。かなを入力して候補を選ぶか、改行キーで読みを確定します。")
-                            .font(.callout).foregroundStyle(.secondary)
-                        Text(KeyboardSettings.sharedDefaults == nil
-                             ? "共有領域を利用できません。入力設定はこのアプリ内に保存します。"
-                             : "入力設定は共有領域に保存します。拡張での反映にはフルアクセスが必要です。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        if let notice = personalLibrary.notice { Text(notice).font(.caption).foregroundStyle(.red) }
-                        Button("ユーザー辞書・定型文") { showPersonal = true }
-                        Button("辞書のバックアップ") { showBackup = true }
-                        Button("Custom Keyboard") { showCustomKeyboard = true }
-                        Button("カスタムローマ字") { showRomaji = true }
-                        Button("キーボードの選択・順序") { showKeyboardSelection = true }
-                        Button("キー・文字サイズ") { showKeyAppearance = true }
-                        Button("Sumire の特殊キー操作") { showSpecialKeys = true }
-                        NavigationLink("ライセンス・出典") { LicenseSettingsView() }
-                        Button("分類辞書（\(categoryMask.nonzeroBitCount)/30）") { showDictionaries = true }
-                        Toggle("コピー内容を変換欄に自動表示", isOn: $clipboardAutomaticPreview)
-                        Text("ONでは文字・画像の内容を読み取るため、iOSがペーストの許可を求めることがあります。OFFでも種類を検知し、貼り付けボタンを表示します。画像の挿入は入力先の貼り付けメニューを使用します。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        TextField("削除キー左フリックの区切り記号", text: $deleteBoundarySymbols)
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                        Text("空白・改行も区切りになります。直前が区切り記号なら、その1文字だけを削除します。")
-                            .font(.caption).foregroundStyle(.secondary)
+            SettingsDashboardView(sharingAvailable: KeyboardSettings.sharedDefaults != nil, hasDataNotice: personalLibrary.notice != nil,
+                                  openPreview: { showPreview = true }, open: { destination = $0 })
+                .navigationDestination(isPresented: $showPreview) { preview }
+        }
+        .tint(SettingsBrand.purple)
+        .sheet(item: $destination, onDismiss: { appearanceRevision += 1 }) { item in
+            destinationView(item)
+        }
+    }
+
+    private var preview: some View {
+        VStack(spacing: 12) {
+            ScrollView {
+                VStack(alignment: .leading, spacing: 12) {
+                    Toggle("Sumire の入力面を試す", isOn: $custom)
+                    Picker("候補欄の段数", selection: $candidateRowCount) {
+                        ForEach(1...3, id: \.self) { Text("\($0)段").tag($0) }
+                    }.pickerStyle(.segmented)
+                    DisclosureGroup("入力オプション") {
                         Toggle("ライブ変換", isOn: $liveConversion)
                         Toggle("修飾キー省略", isOn: $omissionSearch)
-                        Toggle("変換を学習", isOn: $learningEnabled)
-                        Toggle("第1候補も学習", isOn: $learnFirstCandidate).disabled(!learningEnabled)
-                        Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
-                        if let learningNotice { Text(learningNotice).font(.caption) }
-                        Button("キーボードの配色") { showTheme = true }
-                        Text("OFF にすると標準キーボードを比較できます。配色は保存され、キーボードの次回表示にも反映します。")
-                            .font(.caption).foregroundStyle(.secondary)
-                        Text("キーボード拡張は、設定 → 一般 → キーボード → キーボード → 新しいキーボードを追加 → Sumire で有効化します。")
-                            .font(.caption).foregroundStyle(.secondary)
                     }
                 }
-                .frame(maxHeight: 310)
-                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme || showSpecialKeys, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
-                    .frame(minHeight: 80, maxHeight: .infinity)
+                .padding(.horizontal, 20).padding(.vertical, 8)
             }
-            .padding()
-            .navigationTitle("Sumire")
-            .confirmationDialog("学習データをすべて削除しますか？", isPresented: $confirmClearLearning, titleVisibility: .visible) {
-                Button("削除する", role: .destructive) {
-                    clearingLearning = true
-                    learningNotice = nil
-                    let url = PersonalDataLocation.learningURL(allowShared: true)
-                    DispatchQueue.global(qos: .userInitiated).async {
-                        let message: String
-                        do {
-                            if FileManager.default.fileExists(atPath: url.path) { try LearningStore(url: url).clear() }
-                            message = "学習データを削除しました"
-                        } catch { message = error.localizedDescription }
-                        DispatchQueue.main.async {
-                            learningNotice = message; clearingLearning = false; appearanceRevision += 1
+            .frame(maxHeight: 165)
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+                .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
+        }
+        .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
+        .toolbar {
+            ToolbarItem(placement: .topBarTrailing) {
+                Menu {
+                    ForEach(SettingsCategory.allCases) { category in
+                        Section(category.title) {
+                            ForEach(SettingsDestination.allCases.filter { $0.category == category }) { item in
+                                Button(item.title, systemImage: item.icon) { destination = item }
+                                    .accessibilityLabel(item.title)
+                            }
                         }
                     }
+                } label: { Label("設定", systemImage: "slider.horizontal.3") }
+                .accessibilityIdentifier("preview-settings").accessibilityLabel("設定")
+            }
+        }
+    }
+
+    @ViewBuilder private func destinationView(_ item: SettingsDestination) -> some View {
+        switch item {
+        case .keyboards: KeyboardSelectionSettings()
+        case .customKeyboard: CustomKeyboardSettings()
+        case .romaji: RomajiSettings()
+        case .specialKeys: SpecialKeySettingsView()
+        case .touchFeedback: detail(title: item.title) { TouchFeedbackSettingsView() }
+        case .appearance: KeyAppearanceSettings()
+        case .theme: detail(title: item.title) { ThemeSettingsView() }
+        case .personalDictionary: PersonalDictionarySettings(library: personalLibrary)
+        case .dictionaries: DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled)
+        case .symbols: SymbolKeyboardSettings()
+        case .backup: PersonalBackupSettings(library: personalLibrary, onRestore: { appearanceRevision += 1 })
+        case .licenses: detail(title: item.title) { LicenseSettingsView() }
+        case .conversion: detail(title: item.title) {
+            Form {
+                Section("変換") {
+                    Toggle("ライブ変換", isOn: $liveConversion)
+                    Toggle("修飾キー省略", isOn: $omissionSearch)
+                }
+                Section {
+                    TextField("削除キー左フリックの区切り記号", text: $deleteBoundarySymbols)
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                } header: { Text("削除の区切り") } footer: {
+                    Text("空白・改行も区切りになります。直前が区切り記号なら、その1文字だけを削除します。")
                 }
             }
-            .sheet(isPresented: $showBackup) { PersonalBackupSettings(library: personalLibrary, onRestore: { appearanceRevision += 1 }) }
-            .sheet(isPresented: $showCustomKeyboard, onDismiss: { appearanceRevision += 1 }) { CustomKeyboardSettings() }
-            .sheet(isPresented: $showRomaji, onDismiss: { appearanceRevision += 1 }) { RomajiSettings() }
-            .sheet(isPresented: $showPersonal) { PersonalDictionarySettings(library: personalLibrary) }
-            .sheet(isPresented: $showKeyboardSelection, onDismiss: { appearanceRevision += 1 }) { KeyboardSelectionSettings() }
-            .sheet(isPresented: $showTheme, onDismiss: { appearanceRevision += 1 }) {
-                NavigationStack {
-                    ThemeSettingsView()
-                        .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { showTheme = false } } }
+        }
+        case .candidates: detail(title: item.title) {
+            Form {
+                Section {
+                    Picker("候補欄の段数", selection: $candidateRowCount) {
+                        ForEach(1...3, id: \.self) { Text("\($0)段").tag($0) }
+                    }.pickerStyle(.segmented)
+                } footer: { Text("段数を増やすと候補欄が高くなります。通常のキーの大きさは変わりません。狭い画面では使える高さに合わせて表示します。") }
+                Section { Button("試し書きで確かめる") { destination = nil; showPreview = true } }
+            }
+        }
+        case .learning: detail(title: item.title) {
+            Form {
+                Section {
+                    Toggle("変換を学習", isOn: $learningEnabled)
+                    Toggle("第1候補も学習", isOn: $learnFirstCandidate).disabled(!learningEnabled)
+                } footer: { Text("学習データは端末内に保存します。入力文字をネットワークへ送信しません。") }
+                Section {
+                    Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
+                    if let learningNotice { Text(learningNotice).font(.footnote) }
                 }
             }
-            .sheet(isPresented: $showKeyAppearance, onDismiss: { appearanceRevision += 1 }) { KeyAppearanceSettings() }
-            .sheet(isPresented: $showSpecialKeys, onDismiss: { appearanceRevision += 1 }) { SpecialKeySettingsView() }
-            .sheet(isPresented: $showDictionaries) { DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled) }
+            .confirmationDialog("学習データをすべて削除しますか？", isPresented: $confirmClearLearning, titleVisibility: .visible) {
+                Button("削除する", role: .destructive, action: clearLearning)
+            }
+        }
+        case .clipboard: detail(title: item.title) {
+            Form {
+                Section {
+                    Toggle("コピー内容を変換欄に自動表示", isOn: $clipboardAutomaticPreview)
+                } footer: { Text("ONでは文字・画像の内容を読み取るため、iOSがペーストの許可を求めることがあります。OFFでも種類を検知し、貼り付けボタンを表示します。画像の挿入は入力先の貼り付けメニューを使用します。") }
+                Section { Text("履歴の保存と削除は「記号・クリップボード」で設定できます。") }
+            }
+        }
+        case .setup: detail(title: item.title) {
+            Form {
+                Section("設定の保存先") {
+                    Text(KeyboardSettings.sharedDefaults == nil
+                         ? "共有領域にアクセスできません。設定はこのアプリ内に保存しています。キーボード拡張への設定共有はまだ成立していません。"
+                         : "本体アプリから共有領域にアクセスできます。この表示だけではキーボード拡張での読み込みを確認できません。入力先で設定の反映を確認してください。")
+                        .accessibilityIdentifier("sharing-status-detail")
+                    if KeyboardSettings.sharedDefaults == nil {
+                        Text("開発用ビルドではApp Groupsの権限と署名プロファイルの設定が必要です。このアプリから署名の設定を変更することはできません。")
+                            .font(.footnote).foregroundStyle(.secondary)
+                    }
+                }
+                Section("キーボードを有効にする") {
+                    Text("iOSの「設定」→「一般」→「キーボード」→「キーボード」→「新しいキーボードを追加」からSumireを選びます。")
+                    Text("入力中は地球儀キーからSumireへ切り替えます。")
+                }
+                Section("オフラインで使えます") {
+                    Text("入力文字をネットワークに送信する機能はありません。フルアクセスをOFFのまま基本入力を利用できます。設定共有の署名状態は上の項目で確認できます。")
+                }
+                if let notice = personalLibrary.notice { Section("データの状態") { Text(notice).foregroundStyle(.secondary) } }
+            }
+        }
+        }
+    }
+
+    private func detail<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
+        NavigationStack {
+            content().navigationTitle(title).navigationBarTitleDisplayMode(.inline)
+                .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { destination = nil } } }
+        }
+    }
+
+    private func clearLearning() {
+        clearingLearning = true; learningNotice = nil
+        let url = PersonalDataLocation.learningURL(allowShared: true)
+        DispatchQueue.global(qos: .userInitiated).async {
+            let message: String
+            do {
+                if FileManager.default.fileExists(atPath: url.path) { try LearningStore(url: url).clear() }
+                message = "学習データを削除しました"
+            } catch { message = error.localizedDescription }
+            DispatchQueue.main.async {
+                learningNotice = message; clearingLearning = false; appearanceRevision += 1
+            }
         }
     }
 }
@@ -171,6 +230,7 @@ struct InputHarness: UIViewRepresentable {
         let surface = coordinator.surface
         coordinator.textView = text
         surface.settingsDefaults = KeyboardSettings.appDefaults
+        surface.configureClipboard(accessAllowed: true, allowShared: true)
         surface.onHeightChange = { [weak text] _ in
             text?.inputView?.invalidateIntrinsicContentSize()
             text?.inputView?.superview?.setNeedsLayout()

@@ -20,6 +20,7 @@ struct Result {
   double elapsed_ms = 0;
   size_t lattice_nodes = 0, expanded_states = 0;
   bool complete = true;
+  size_t reused_search_rows = 0, searched_rows = 0;
 };
 std::u16string utf16(const std::string &);
 std::string utf8(const std::u16string &);
@@ -39,10 +40,12 @@ class PersonalDictionary {
   };
   std::vector<Stored> entries;
   size_t context_count;
+  std::shared_ptr<int> identity = std::make_shared<int>(0);
   PersonalDictionary(std::vector<PersonalEntry>, size_t contexts);
 
 public:
   ~PersonalDictionary() = default;
+  bool equivalent(const PersonalDictionary &) const;
 };
 // One workspace per serial conversion session. Returned results own their data.
 class Workspace {

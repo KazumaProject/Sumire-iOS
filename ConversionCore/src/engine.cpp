@@ -179,7 +179,7 @@ struct Dictionary {
             "invalid LOUDS shape");
   }
   template <class F>
-  void prefixes(const std::u16string &reading, size_t start, F callback) const {
+  size_t prefixes(const std::u16string &reading, size_t start, F callback) const {
     size_t node = 0;
     for (size_t j = start; j < reading.size(); ++j) {
       size_t child = tree.select0(tree.rank(node)) + 1;
@@ -194,13 +194,14 @@ struct Dictionary {
         }
       }
       if (!found)
-        return;
+        return j + 1;
       if (leaf.at(node)) {
         auto term = terms[leaf.rank(node) - 1];
         for (uint32_t t = postings[term]; t < postings[term + 1]; ++t)
           callback(j + 1, t);
       }
     }
+    return reading.size() + 1; // EOF is a dependency on the input length.
   }
   template <class F>
   void predictive(const std::u16string &prefix, size_t limit, F callback) const {
@@ -292,16 +293,17 @@ struct Dictionary {
     bool changed;
   };
   template <class F>
-  void omissionPrefixes(const std::u16string &reading, size_t start,
+  size_t omissionPrefixes(const std::u16string &reading, size_t start,
                         std::vector<OmissionState> &pending, F callback) const {
     pending.clear();
     pending.push_back({0, start, false});
-    size_t visited = 0;
+    size_t visited = 0, horizon = start;
     while (!pending.empty()) {
       auto state = pending.back();
       pending.pop_back();
       require(++visited <= 2000000,
               "omission traversal limit exceeded (input not truncated)");
+      horizon = std::max(horizon, state.position + 1);
       if (state.position == reading.size())
         continue;
       size_t child = tree.select0(tree.rank(state.node)) + 1;
@@ -322,6 +324,7 @@ struct Dictionary {
         pending.push_back({child, end, changed});
       }
     }
+    return horizon;
   }
   std::u16string nodeReading(size_t node) const {
     std::u16string value;
@@ -492,6 +495,7 @@ std::vector<std::string> category_names() {
           "work_stage"};
 }
 struct Engine::Impl {
+  std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
   std::unique_ptr<Dictionary> english_reading, english_words;
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
@@ -731,6 +735,15 @@ Engine::personal_dictionary(std::vector<PersonalEntry> entries) const {
   return std::shared_ptr<const PersonalDictionary>(
       new PersonalDictionary(std::move(entries), impl->connection.n));
 }
+bool PersonalDictionary::equivalent(const PersonalDictionary &other) const {
+  if (context_count != other.context_count || entries.size() != other.entries.size()) return false;
+  for (size_t i = 0; i < entries.size(); ++i) {
+    const auto &a = entries[i].entry, &b = other.entries[i].entry;
+    if (a.reading != b.reading || a.text != b.text || a.context_id != b.context_id ||
+        a.score != b.score || a.exact_only != b.exact_only || a.learned != b.learned) return false;
+  }
+  return true;
+}
 struct Workspace::Impl {
   struct Node {
     size_t start, end;
@@ -742,6 +755,17 @@ struct Workspace::Impl {
     int64_t tail = INF;
     const PersonalEntry *personal = nullptr;
   };
+  // Cache only immutable dictionary nodes. Overlay pointers and Viterbi tails
+  // belong to the current request and are never stored here. horizon includes
+  // the first failed lookup; EOF is represented by previous length + 1.
+  struct SearchRow { std::vector<Node> nodes; size_t horizon = 0; };
+  std::vector<SearchRow> search_rows;
+  std::u16string previous_reading;
+  std::weak_ptr<int> engine_identity;
+  std::shared_ptr<int> personal_identity, learned_identity;
+  size_t previous_count = 0, previous_limit = 0;
+  bool previous_omission = false, previous_prefix = false, previous_prediction = false;
+  bool cache_valid = false;
   std::vector<Node> nodes;
   std::vector<std::vector<size_t>> at;
   struct State {
@@ -764,9 +788,18 @@ struct Workspace::Impl {
         heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) + at.capacity() * sizeof(at[0]) +
         omission_pending.capacity() * sizeof(Dictionary::OmissionState);
     for (const auto &row : at) total += row.capacity() * sizeof(size_t);
+    total += search_rows.capacity() * sizeof(SearchRow);
+    // String small-buffer capacity is inline storage, not retained allocation.
+    if (previous_reading.capacity() > std::u16string().capacity())
+      total += previous_reading.capacity() * sizeof(char16_t);
+    for (const auto &row : search_rows) total += row.nodes.capacity() * sizeof(Node);
     return total;
   }
   void purge() noexcept {
+    std::vector<SearchRow>().swap(search_rows);
+    std::u16string().swap(previous_reading);
+    engine_identity.reset(); personal_identity.reset(); learned_identity.reset();
+    cache_valid = false;
     std::vector<Node>().swap(nodes);
     std::vector<State>().swap(states);
     std::vector<Item>().swap(heap);
@@ -803,7 +836,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   struct Cleanup {
     Workspace::Impl &work;
     bool active = true;
-    ~Cleanup() { if (active) work.finish(); }
+    ~Cleanup() { if (active) { work.cache_valid = false; work.finish(); } }
   } cleanup{work};
   using Node = Workspace::Impl::Node;
   auto &nodes = work.nodes;
@@ -813,6 +846,20 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   require((!personal || personal->context_count == conn.n) &&
               (!learned || learned->context_count == conn.n),
           "personal dictionary belongs to another matrix");
+  const auto personalIdentity = personal ? personal->identity : std::shared_ptr<int>();
+  const auto learnedIdentity = learned ? learned->identity : std::shared_ptr<int>();
+  const bool compatible = work.cache_valid && work.engine_identity.lock() == impl->identity &&
+      work.personal_identity == personalIdentity && work.learned_identity == learnedIdentity &&
+      work.previous_count == count && work.previous_limit == limit &&
+      work.previous_omission == omission && work.previous_prefix == prefix_candidates &&
+      work.previous_prediction == japanese_prediction;
+  size_t common = 0;
+  if (compatible)
+    while (common < reading.size() && common < work.previous_reading.size() &&
+           reading[common] == work.previous_reading[common]) ++common;
+  const bool same = compatible && reading == work.previous_reading;
+  if (!compatible) work.search_rows.clear();
+  work.search_rows.resize(reading.size());
   for (size_t i = 0; i < reading.size(); ++i) {
     if (reading[i] >= 0xdc00 && reading[i] <= 0xdfff)
       continue;
@@ -822,21 +869,31 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       at[i].push_back(nodes.size());
       nodes.push_back(node);
     };
-    for (auto &d : impl->dictionaries) {
-      auto matched = [&](size_t end, uint32_t token, size_t correctedNode) {
-        if (end < reading.size() && reading[end] >= 0xdc00 &&
-            reading[end] <= 0xdfff)
-          return;
-        auto p = d->pos[token];
-        add({i, end, d.get(), token, conn.left[p], conn.right[p],
-             d->costs[token] + (correctedNode ? 1900 : 0), correctedNode});
-      };
-      if (omission)
-        d->omissionPrefixes(reading, i, work.omission_pending, matched);
-      else
-        d->prefixes(reading, i, [&](size_t end, uint32_t token) {
-          matched(end, token, 0);
-        });
+    auto &cached = work.search_rows[i];
+    if (compatible && cached.horizon && (same || cached.horizon <= common)) {
+      ++result.reused_search_rows;
+      for (const auto &node : cached.nodes) add(node);
+    } else {
+      ++result.searched_rows;
+      cached.nodes.clear(); cached.horizon = 0;
+      for (auto &d : impl->dictionaries) {
+        auto matched = [&](size_t end, uint32_t token, size_t correctedNode) {
+          if (end < reading.size() && reading[end] >= 0xdc00 &&
+              reading[end] <= 0xdfff)
+            return;
+          auto p = d->pos[token];
+          Node node{i, end, d.get(), token, conn.left[p], conn.right[p],
+                    d->costs[token] + (correctedNode ? 1900 : 0), correctedNode};
+          cached.nodes.push_back(node);
+          add(node);
+        };
+        if (omission)
+          cached.horizon = std::max(cached.horizon, d->omissionPrefixes(reading, i, work.omission_pending, matched));
+        else
+          cached.horizon = std::max(cached.horizon, d->prefixes(reading, i, [&](size_t end, uint32_t token) {
+            matched(end, token, 0);
+          }));
+      }
     }
     for (const auto *overlay : {personal, learned}) {
       if (!overlay) continue;
@@ -1007,6 +1064,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   if (reading.empty())
     result.candidates.push_back({"", 0, {}});
   result.lattice_nodes = nodes.size();
+  work.previous_reading = reading;
+  work.engine_identity = impl->identity;
+  work.personal_identity = personalIdentity; work.learned_identity = learnedIdentity;
+  work.previous_count = count; work.previous_limit = limit;
+  work.previous_omission = omission; work.previous_prefix = prefix_candidates;
+  work.previous_prediction = japanese_prediction; work.cache_valid = true;
   work.finish();
   cleanup.active = false;
   result.elapsed_ms = std::chrono::duration<double, std::milli>(

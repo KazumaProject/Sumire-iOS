@@ -8,7 +8,6 @@ final class KeyboardSurface: UIInputView {
     var delete: (() -> Void)?
     var deleteUntilBoundary: (() -> Void)?
     var nextKeyboard: (() -> Void)?
-    var openSymbols: (() -> Void)?
     private var specialKeySettings = SumireSpecialKeySettings()
     private var katakanaCycle = SumireKatakanaCycle()
     var moveCursorRight: (() -> Void)?
@@ -207,6 +206,36 @@ final class KeyboardSurface: UIInputView {
     }
     func showDataNotice(_ text: String) { status.text = text }
     private let converter = ConversionService()
+    private var symbolPanel: SymbolKeyboardView?
+    private let clipboardHistory = ClipboardHistoryController()
+    func configureClipboard(accessAllowed: Bool, allowShared: Bool) {
+        candidateBar.clipboardAccessAllowed = accessAllowed
+        candidateBar.captureClipboardHistory = ClipboardHistorySettings.isEnabled(defaults: settingsDefaults)
+        clipboardHistory.configure(defaults: settingsDefaults, url: PersonalDataLocation.clipboardURL(allowShared: allowShared), allowed: accessAllowed)
+    }
+    private func closeSymbolKeyboard() {
+        symbolPanel?.removeFromSuperview(); symbolPanel = nil
+        clipboardHistory.detach(); stack.accessibilityElementsHidden = false
+    }
+    private func showSymbolKeyboard() {
+        guard symbolPanel == nil else { return }
+        do {
+            let panel = SymbolKeyboardView(defaults: settingsDefaults, catalog: try SymbolKeyboardCatalog.load())
+            panel.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness))
+            panel.onClose = { [weak self] in self?.closeSymbolKeyboard() }
+            panel.onInsert = { [weak self] value in
+                guard let self else { return }
+                self.beforeInput?(); self.commitComposition(); self.insert?(value)
+            }
+            panel.onDelete = { [weak self] in self?.pressed("⌫") }
+            clipboardHistory.attach(panel)
+            panel.translatesAutoresizingMaskIntoConstraints = false
+            closeExpandedCandidates(); addSubview(panel)
+            NSLayoutConstraint.activate([panel.topAnchor.constraint(equalTo: topAnchor), panel.bottomAnchor.constraint(equalTo: bottomAnchor), panel.leadingAnchor.constraint(equalTo: leadingAnchor), panel.trailingAnchor.constraint(equalTo: trailingAnchor)])
+            panel.accessibilityViewIsModal = true; stack.accessibilityElementsHidden = true
+            symbolPanel = panel
+        } catch { showDataNotice("記号パネル: " + error.localizedDescription) }
+    }
     private var learningURL: URL?
     var learnFirstCandidate = false
     func reloadLearningResults() {
@@ -289,6 +318,8 @@ final class KeyboardSurface: UIInputView {
     var tenKeyToggle = true
     private let geometry = KeyboardGeometry()
     private var keyRows: [UIStackView] = []
+    private let touchRouter = KeyTouchRouter()
+    private var touchFeedback = TouchFeedbackSettings()
     private let stack = UIStackView()
     private let status = UILabel()
     private var expandedCandidates: UIView?
@@ -323,6 +354,13 @@ final class KeyboardSurface: UIInputView {
             self.commitComposition()
             self.insert?(text)
         }
+        clipboardHistory.onInsertText = { [weak self] text in
+            guard let self else { return }; self.beforeInput?(); self.commitComposition(); self.insert?(text)
+        }
+        clipboardHistory.onNotice = { [weak self] text in self?.symbolPanel?.showNotice(text); self?.showDataNotice(text) }
+        clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
+        candidateBar.onClipboardCaptured = { [weak self] text, image in self?.clipboardHistory.capture(text: text, image: image) }
+        candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard() }
         candidateBar.onClipboardNotice = { [weak self] in self?.showDataNotice($0) }
         candidateBar.onResize = { [weak self] in self?.beginResize() }
         candidateBar.onExpand = { [weak self] in self?.showExpandedCandidates() }
@@ -330,19 +368,75 @@ final class KeyboardSurface: UIInputView {
         rebuild()
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
-    @objc private func purgeConversionCache() { converter.purgeCache() }
+    @objc private func purgeConversionCache() { converter.purgeCache(); clipboardHistory.purgeThumbnails() }
     override var intrinsicContentSize: CGSize {
         CGSize(width: UIView.noIntrinsicMetric, height: preferredHeight.constant)
     }
     override func systemLayoutSizeFitting(_ targetSize: CGSize) -> CGSize {
         CGSize(width: targetSize.width, height: preferredHeight.constant)
     }
+    override func didMoveToWindow() {
+        super.didMoveToWindow()
+        if window == nil { touchRouter.cancelAll() }
+    }
+    private func touchPolicy(for key: UIButton) -> (exclusive: Bool, blocksFollowing: Bool) {
+        let id = key.accessibilityIdentifier ?? ""
+        if id == "keyboard-switch" || ["tenkey-symbols", "gojuon-symbols"].contains(id) {
+            return (true, true)
+        }
+        if inputMode == .sumire, id.hasPrefix("sumire-") {
+            let arrangement = SumireKeyArrangement(rawValue: settingsDefaults.string(forKey: "sumire.keyArrangement") ?? "") ?? .toggle
+            if let special = SumireSpecialKeyID.resolve(String(id.dropFirst(7)), arrangement: arrangement, mode: sumireMode) {
+                switch specialKeySettings.action(for: special, gesture: .tap, arrangement: arrangement,
+                                                  mode: sumireMode, hasComposition: hasComposition) {
+                case .nextKeyboard, .openSymbols: return (true, true)
+                case .changeInputMode, .switchKana, .switchEnglish, .switchNumber: return (true, false)
+                default: break
+                }
+            }
+        }
+        if let key = key as? FlickKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        if let key = key as? RepeatingKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        if let key = key as? DirectionalActionKey { return (key.exclusiveTouchAction, key.blocksSequentialTouches) }
+        return (false, false)
+    }
+    private func configureTouchInput(in view: UIView) {
+        if let key = view as? UIButton {
+            // Resolve dynamic modifier/symbol actions at DOWN, not at layout time.
+            let policy = { [weak self, weak key] in
+                guard let self, let key else { return (exclusive: false, blocksFollowing: false) }
+                return self.touchPolicy(for: key)
+            }
+            if let flick = key as? FlickKey {
+                flick.touchRouter = touchRouter
+                flick.feedbackSettings = touchFeedback
+                flick.popupPalette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
+                flick.popupHost = self
+                flick.touchPolicy = policy
+            } else if let repeating = key as? RepeatingKey {
+                repeating.touchRouter = touchRouter
+                repeating.longPressMilliseconds = touchFeedback.longPressMilliseconds
+                repeating.touchPolicy = policy
+            } else if let directional = key as? DirectionalActionKey {
+                directional.touchRouter = touchRouter
+                directional.longPressMilliseconds = touchFeedback.longPressMilliseconds
+                directional.touchPolicy = policy
+            }
+        }
+        view.subviews.forEach { configureTouchInput(in: $0) }
+    }
     private func rebuild() {
+        touchRouter.cancelAll()
+        touchFeedback = TouchFeedbackSettings.load(defaults: settingsDefaults)
+        touchRouter.independentMultiTouch = touchFeedback.independentMultiTouch
+        // All arrangements, including early-return grids, share the same router.
+        defer { configureTouchInput(in: stack) }
         var specialKeyNotice: String?
         do { specialKeySettings = try SumireSpecialKeySettings.load(defaults: settingsDefaults) }
         catch { specialKeySettings = SumireSpecialKeySettings(); specialKeyNotice = error.localizedDescription }
         defer { if let specialKeyNotice { showDataNotice(specialKeyNotice) } }
         closeExpandedCandidates()
+        symbolPanel?.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness))
         appearance = .load(keyboardKind, defaults: settingsDefaults)
         stack.arrangedSubviews.forEach { stack.removeArrangedSubview($0); $0.removeFromSuperview() }
         keyRows = []
@@ -452,7 +546,8 @@ final class KeyboardSurface: UIInputView {
                         }
                     } else if definition.id == "tenkey-right" {
                         self.beforeInput?(); self.moveCompositionCursor(by: 1)
-                    } else if definition.action == .changeMode { self.showDataNotice("この操作は移植中です") }
+                    } else if definition.id == "tenkey-symbols" { self.showSymbolKeyboard() }
+                    else if definition.action == .changeMode { self.showDataNotice("この操作は移植中です") }
                     else { self.sumireAction(definition.action) }
                 }, for: .touchUpInside)
             }
@@ -594,6 +689,7 @@ final class KeyboardSurface: UIInputView {
                     if let last = self.composition.characterBeforeCursor, let previous = GojuonInput.previous(last, mode: self.gojuonMode) {
                         _ = self.composition.replaceLast(String(previous)); self.refreshConversion()
                     }
+                } else if definition.id == "gojuon-symbols" { self.showSymbolKeyboard()
                 } else if definition.id == "gojuon-mode" {
                     self.beforeInput?(); self.tapCycle.reset()
                     self.gojuonMode = self.gojuonMode.next
@@ -783,6 +879,13 @@ final class KeyboardSurface: UIInputView {
             let hasExtra = ["circularFlicks", "twoStepFlicks", "longPressFlicks", "twoStepLongPressFlicks"].contains { !(placement.source[$0]?.array ?? []).isEmpty }
             if hasExtra { action = .unsupported(raw: placement.id, reason: "追加ジェスチャーは移植中です") }
             (key as? RepeatingKey)?.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(action)
+            if let repeating = key as? RepeatingKey {
+                switch action {
+                case .switchLayout, .command(.changeMode): repeating.exclusiveTouchAction = true
+                case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
+                default: break
+                }
+            }
             if let key = key as? FlickKey, !hasExtra, !(special && definition?["doubleTapAction"]?.string != nil && definition?["doubleTapEnabled"] != .bool(false)) {
                 do {
                     let mapping = try CustomStandardFlick(placement: placement)
@@ -1107,13 +1210,14 @@ final class KeyboardSurface: UIInputView {
             composition.invalidate(); composition.append(text)
             _ = composition.moveCursor(by: min(oldCursor, text.count) - text.count)
             containsRomaji = false; refreshConversion()
+        case .openSymbols: showSymbolKeyboard()
         case .insertColon: pressed(":")
         case .insertHyphen: pressed("-")
         case .keyboardMenu:
             // The globe's UIKit menu handles this gesture without invoking a
             // second action or synthesizing private context-menu events.
             break
-        case .deleteAfterCursorUntilBoundary, .undoDelete, .cursorUp, .cursorDown, .copy, .cut, .selectAll, .openSymbols:
+        case .deleteAfterCursorUntilBoundary, .undoDelete, .cursorUp, .cursorDown, .copy, .cut, .selectAll:
             // The shared availability table rejects these before any edit.
             break
         }
@@ -1140,7 +1244,7 @@ final class KeyboardSurface: UIInputView {
         case .nextKeyboard: pressed("🌐")
         case .modifier:
             if hasComposition { pressed("゛") }
-            else { status.text = "記号・絵文字パネルは移植中です" }
+            else { showSymbolKeyboard() }
         case .delete: pressed("⌫")
         case .space: pressed("空白")
         case .enter: pressed("改行")
@@ -1217,6 +1321,7 @@ final class KeyboardSurface: UIInputView {
         keyRows.append(row)
     }
     func invalidateComposition() {
+        closeSymbolKeyboard()
         katakanaCycle.reset()
         closeExpandedCandidates()
         composition.invalidate()
@@ -1225,6 +1330,7 @@ final class KeyboardSurface: UIInputView {
         resultGeneration = nil
         selectedCandidate = nil
         candidateBar.candidates = []
+        candidateBar.isUpdating = false
         status.text = "Sumire · C++変換"
         englishComposition = false
         updateSumireKeys()
@@ -1233,7 +1339,7 @@ final class KeyboardSurface: UIInputView {
     private func closeExpandedCandidates() {
         expandedCandidates?.removeFromSuperview()
         expandedCandidates = nil
-        stack.accessibilityElementsHidden = false
+        stack.accessibilityElementsHidden = symbolPanel != nil
     }
     private func showExpandedCandidates() {
         guard !converted.isEmpty, expandedCandidates == nil else { return }
@@ -1296,8 +1402,11 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = nil
         converted = []
         resultGeneration = nil
-        candidateBar.candidates = []
         let reading = composition.reading
+        // Preserve the last accepted frame instead of submitting an empty list
+        // between keystrokes. Pending candidates cannot be selected or expanded.
+        candidateBar.isUpdating = !reading.isEmpty
+        if reading.isEmpty { candidateBar.candidates = [] }
         updateSumireKeys()
         markReading()
         status.text = reading.isEmpty ? "Sumire · C++変換" : reading
@@ -1314,6 +1423,7 @@ final class KeyboardSurface: UIInputView {
                 self.converted = result.candidates
                 self.resultGeneration = generation
                 self.candidateBar.candidates = result.candidates.map(\.text)
+                self.candidateBar.isUpdating = false
                 if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
@@ -1321,6 +1431,8 @@ final class KeyboardSurface: UIInputView {
                 self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "")
             case .failure(let error):
                 // Keep every reading character; Return can still commit the reading.
+                self.candidateBar.candidates = []
+                self.candidateBar.isUpdating = false
                 self.status.text = reading + " · " + error.localizedDescription
             }
         }
@@ -1363,7 +1475,8 @@ final class KeyboardSurface: UIInputView {
         converted = []
         resultGeneration = nil
         selectedCandidate = nil
-        candidateBar.candidates = []
+        candidateBar.isUpdating = !composition.reading.isEmpty
+        if composition.reading.isEmpty { candidateBar.candidates = [] }
         status.text = "Sumire · C++変換"
         englishComposition = false
         updateSumireKeys()
