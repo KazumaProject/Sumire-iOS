@@ -34,10 +34,12 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var onClipboardDelete: ((String) -> Void)?
     var onClipboardHistoryChanged: ((Bool) -> Void)?
     var onDefaultSkinToneChanged: ((EmojiSkinTone) -> Void)?
+    var onSettingsWritten: (([String]) -> Void)?
     var defaultSkinTone: EmojiSkinTone {
         didSet {
             guard defaultSkinTone != oldValue else { return }
-            defaultSkinTone.save(defaults: defaults)
+            defaultSkinTone.save(defaults: writableDefaults)
+            onSettingsWritten?([EmojiSkinTone.settingsKey])
             if mode == .emoji { reloadItems() }
         }
     }
@@ -51,6 +53,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var clipboardHistoryEnabled = false { didSet { clipboardSwitch.isOn = clipboardHistoryEnabled } }
     private(set) var mode: SymbolKeyboardMode
     private let defaults: UserDefaults
+    private let writableDefaults: UserDefaults
     private let catalog: [SymbolKeyboardCategory]
     private var history: SymbolKeyboardHistory
     private var categories: [SymbolKeyboardCategory] = []
@@ -65,8 +68,9 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     private let collection: UICollectionView
     private var palette = KeyboardPalette(hue: 0.73, dark: false)
 
-    init(defaults: UserDefaults, catalog: [SymbolKeyboardCategory], initialMode: SymbolKeyboardMode? = nil) {
+    init(defaults: UserDefaults, writableDefaults: UserDefaults? = nil, catalog: [SymbolKeyboardCategory], initialMode: SymbolKeyboardMode? = nil) {
         self.defaults = defaults; self.catalog = catalog
+        self.writableDefaults = writableDefaults ?? defaults
         mode = initialMode ?? .initialMode(defaults: defaults)
         history = SymbolKeyboardHistory(defaults: defaults)
         defaultSkinTone = EmojiSkinTone.load(defaults: defaults)
@@ -276,7 +280,8 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         if mode == .clipboard { onClipboardPaste?(clipboardSection(indexPath.section)[indexPath.item].id) }
         else {
             let value = symbols[indexPath.item]
-            history.record(value, mode: mode, defaults: defaults); onInsert?(value)
+            history.record(value, mode: mode, defaults: writableDefaults)
+            onSettingsWritten?([SymbolKeyboardHistory.storageKey]); onInsert?(value)
         }
     }
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
@@ -361,7 +366,9 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         let value = symbols[indexPath.item]; let selectedMode = mode
         return UIContextMenuConfiguration(identifier: nil, previewProvider: nil) { [weak self] _ in
             UIMenu(children: [UIAction(title: "履歴から削除", attributes: .destructive) { _ in
-                guard let self else { return }; self.history.remove(value, mode: selectedMode, defaults: self.defaults); self.selectMode(selectedMode)
+                guard let self else { return }
+                self.history.remove(value, mode: selectedMode, defaults: self.writableDefaults)
+                self.onSettingsWritten?([SymbolKeyboardHistory.storageKey]); self.selectMode(selectedMode)
             }])
         }
     }
