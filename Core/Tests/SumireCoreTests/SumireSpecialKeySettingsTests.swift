@@ -32,6 +32,19 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
         XCTAssertEqual(action(.paste, .longPress), .doNothing)
     }
 
+    func testKatakanaCyclesThroughFullHalfAndHiraganaWithoutChangingNonKana() {
+        var cycle = SumireKatakanaCycle()
+        let original = "がっこうＡ👩‍💻"
+        let full = cycle.next(original)
+        XCTAssertEqual(full, "ガッコウＡ👩‍💻")
+        let half = cycle.next(full)
+        XCTAssertEqual(half, "ｶﾞｯｺｳＡ👩‍💻")
+        XCTAssertEqual(cycle.next(half), original)
+        XCTAssertEqual(cycle.next(original), full)
+        cycle.reset()
+        XCTAssertEqual(cycle.next(original), full)
+    }
+
     func testOverridesPersistIndependentlyAndResetRestoresDynamicDefault() throws {
         let name = "SpecialKeySettingsTests." + UUID().uuidString
         let defaults = UserDefaults(suiteName: name)!
@@ -118,5 +131,20 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
                 XCTAssertTrue(keys.contains(.delete))
             }
         }
+    }
+
+    func testUnavailableActionsRetainTheirMeaningInsteadOfFallback() throws {
+        var settings = SumireSpecialKeySettings()
+        for action in [SumireSpecialKeyAction.selectAll, .cursorUp, .cursorDown, .copy, .cut, .undoDelete, .deleteAfterCursorUntilBoundary, .openSymbols] {
+            XCTAssertNotNil(action.unavailabilityReason(for: .delete, gesture: .up))
+            try settings.set(action, for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese)
+            let decoded = try SumireSpecialKeySettings.decode(JSONEncoder().encode(settings))
+            XCTAssertEqual(decoded.action(for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese), action)
+        }
+        XCTAssertNil(SumireSpecialKeyAction.keyboardMenu.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress))
+        XCTAssertNotNil(SumireSpecialKeyAction.deleteBackward.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress))
+        XCTAssertNotNil(SumireSpecialKeyAction.paste.unavailabilityReason(for: .keyboardSwitch, gesture: .right))
+        XCTAssertNil(SumireSpecialKeyAction.cursorRight.unavailabilityReason(for: .cursorLeft, gesture: .right))
+        XCTAssertNil(SumireSpecialKeyAction.deleteUntilBoundary.unavailabilityReason(for: .delete, gesture: .left))
     }
 }

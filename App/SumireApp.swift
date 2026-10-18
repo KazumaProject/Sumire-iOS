@@ -29,6 +29,7 @@ struct HomeView: View {
     @State private var showDictionaries = false
     @State private var showKeyAppearance = false
     @State private var showKeyboardSelection = false
+    @State private var showSpecialKeys = false
     @State private var appearanceRevision = 0
     @AppStorage("englishReadingEnabled", store: KeyboardSettings.appDefaults) private var englishReadingEnabled = true
     @AppStorage("categoryMask", store: KeyboardSettings.appDefaults) private var categoryMask = 0
@@ -64,6 +65,7 @@ struct HomeView: View {
                         Button("カスタムローマ字") { showRomaji = true }
                         Button("キーボードの選択・順序") { showKeyboardSelection = true }
                         Button("キー・文字サイズ") { showKeyAppearance = true }
+                        Button("Sumire の特殊キー操作") { showSpecialKeys = true }
                         NavigationLink("ライセンス・出典") { LicenseSettingsView() }
                         Button("分類辞書（\(categoryMask.nonzeroBitCount)/30）") { showDictionaries = true }
                         Toggle("コピー内容を変換欄に自動表示", isOn: $clipboardAutomaticPreview)
@@ -87,7 +89,7 @@ struct HomeView: View {
                     }
                 }
                 .frame(maxHeight: 310)
-                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+                InputHarness(preserveCompositionForAppearance: showKeyAppearance || showTheme || showSpecialKeys, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
                     .frame(minHeight: 80, maxHeight: .infinity)
             }
             .padding()
@@ -121,6 +123,7 @@ struct HomeView: View {
                 }
             }
             .sheet(isPresented: $showKeyAppearance, onDismiss: { appearanceRevision += 1 }) { KeyAppearanceSettings() }
+            .sheet(isPresented: $showSpecialKeys, onDismiss: { appearanceRevision += 1 }) { SpecialKeySettingsView() }
             .sheet(isPresented: $showDictionaries) { DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled) }
         }
     }

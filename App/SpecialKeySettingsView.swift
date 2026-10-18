@@ -33,13 +33,19 @@ struct SpecialKeySettingsView: View {
                         Picker(gesture.title, selection: actionBinding(gesture)) {
                             Text("標準の動作").tag(Optional<SumireSpecialKeyAction>.none)
                             ForEach(SumireSpecialKeyAction.allCases, id: \.rawValue) { action in
-                                Text(action.title).tag(Optional(action))
+                                Text(action.title + (action.unavailabilityReason(for: selectedKey, gesture: gesture) == nil ? "" : "（iOS で未対応）"))
+                                    .tag(Optional(action))
+                                    .disabled(action.unavailabilityReason(for: selectedKey, gesture: gesture) != nil)
                             }
                         }.accessibilityIdentifier("special-key-gesture-" + gesture.rawValue)
                         let normal = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
                         let composing = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode, hasComposition: true)
                         Text(gesture == .longPress && selectedKey != .keyboardSwitch ? "標準：タップが削除・カーソル操作なら繰り返し、それ以外は何もしない" : normal == composing ? "標準：\(normal.title)" : "標準：未入力時は\(normal.title)、編集中は\(composing.title)")
                             .font(.caption).foregroundStyle(.secondary)
+                        let selected = settings.action(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
+                        if let reason = selected.unavailabilityReason(for: selectedKey, gesture: gesture) {
+                            Text(reason).font(.caption).foregroundStyle(.secondary)
+                        }
                     }
                 }.disabled(!loaded)
                 Section {

@@ -1,5 +1,35 @@
 import Foundation
 
+/// The reference ToggleKatakana action cycles full-width katakana, half-width
+/// katakana, then hiragana. Keep non-kana characters (including full-width
+/// Latin text and emoji) intact when changing kana width.
+public struct SumireKatakanaCycle {
+    private var stage = 0
+    public init() {}
+    public mutating func reset() { stage = 0 }
+    public mutating func next(_ reading: String) -> String {
+        defer { stage = (stage + 1) % 3 }
+        switch stage {
+        case 0:
+            return reading.applyingTransform(.hiraganaToKatakana, reverse: false) ?? reading
+        case 1:
+            return reading.map { character in
+                let text = String(character)
+                guard text.unicodeScalars.contains(where: { (0x3040...0x30FF).contains($0.value) }) else { return text }
+                let katakana = text.applyingTransform(.hiraganaToKatakana, reverse: false) ?? text
+                return katakana.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? katakana
+            }.joined()
+        default:
+            let fullWidth = reading.map { character in
+                let text = String(character)
+                guard text.unicodeScalars.contains(where: { (0xFF61...0xFF9F).contains($0.value) }) else { return text }
+                return text.applyingTransform(.fullwidthToHalfwidth, reverse: true) ?? text
+            }.joined()
+            return fullWidth.applyingTransform(.hiraganaToKatakana, reverse: true) ?? fullWidth
+        }
+    }
+}
+
 /// The Android special-key editor exposes these five logical directions.
 /// Its UP_RIGHT[_FAR] and UP_LEFT[_FAR] slots resolve to right and left.
 /// Long press is an additional iOS binding; holding a flick may still repeat
@@ -100,6 +130,27 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
         switch self {
         case .deleteBackward, .cursorLeft, .cursorRight, .cursorUp, .cursorDown: return true
         default: return false
+        }
+    }
+
+    /// Shared by settings and execution. Keep unavailable persisted actions
+    /// representable; do not silently substitute another operation.
+    public func unavailabilityReason(for key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture) -> String? {
+        if key == .keyboardSwitch {
+            if gesture == .longPress {
+                return self == .keyboardMenu ? nil : "キーボード切替キーの長押しは配列選択メニューを使用します。別の長押し操作は現在未対応です"
+            }
+            if gesture != .tap && self != .doNothing { return "キーボード切替キーの方向別操作は現在未対応です" }
+        }
+        switch self {
+        case .selectAll: return "iOS のキーボード拡張には、入力先の全文を選択する公開 API がありません"
+        case .cursorUp, .cursorDown: return "iOS のキーボード拡張には、入力先の表示行を上下に移動する公開 API がありません。現在未対応です"
+        case .copy, .cut: return "入力先の選択文字をコピー・切り取りする操作は現在未対応です"
+        case .undoDelete: return "直前の削除履歴から復元する操作は現在未対応です"
+        case .deleteAfterCursorUntilBoundary: return "カーソル後を区切りまで削除する操作は現在未対応です"
+        case .openSymbols: return "記号画面を開く特殊キー操作は現在未対応です"
+        case .keyboardMenu: return key == .keyboardSwitch && gesture == .longPress ? nil : "配列選択メニューはキーボード切替キーの長押しから開きます"
+        default: return nil
         }
     }
 }
