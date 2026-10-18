@@ -2,6 +2,43 @@ import XCTest
 @testable import SumireCore
 
 final class ReferenceFlickMapsTests: XCTestCase {
+    func testBundledKanaGestureExamples() throws {
+        var config = MultiFlickConfiguration(); config.threshold = 28; config.centerReturnRadius = 70 / 2.625
+        let twoProfile = try ReferenceFlickMaps(arrangement: .toggle, mode: .japanese, style: .twoStep)
+        let twoKey = try XCTUnwrap(twoProfile.keys.first { $0.label == "か" })
+        guard case .twoStep(let map, let alternate, let sticky) = try twoProfile.definition(for: twoKey) else { return XCTFail() }
+        var two = TwoStepFlickEvaluator(map: map, longPressMap: alternate, sticky: sticky)
+        two.begin(at: .init(0, 0), configuration: config); two.move(to: .init(-40, 0))
+        XCTAssertEqual(two.end(at: .init(-60, 0)), "き")
+        two.begin(at: .init(0, 0), configuration: config); two.move(to: .init(-40, 0)); two.move(to: .init(-90, 35))
+        XCTAssertEqual(two.end(at: .init(-90, 35)), "ぎ")
+        two.begin(at: .init(0, 0), configuration: config); two.move(to: .init(-40, 0)); two.move(to: .init(0, 0))
+        XCTAssertEqual(two.end(at: .init(0, 0)), "か")
+        let profile = try ReferenceFlickMaps(arrangement: .toggle, mode: .japanese, style: .threeStep)
+        let key = try XCTUnwrap(profile.keys.first { $0.label == "か" })
+        guard case .hierarchical(let maps, let orders) = try profile.definition(for: key) else { return XCTFail() }
+        var three = HierarchicalFlickEvaluator(maps: maps, directionOrders: orders)
+        three.begin(at: .init(0, 0), configuration: config); three.move(to: .init(-40, 0)); three.move(to: .init(0, -60)); three.move(to: .init(-60, -100))
+        XCTAssertEqual(three.end(), "きゅう")
+    }
+    func testCircularPostProcessingAndMapSwitch() throws {
+        let profile = try ReferenceFlickMaps(arrangement: .toggle, mode: .japanese, style: .donut)
+        let key = try XCTUnwrap(profile.keys.first { $0.label == "か" })
+        let settings = [CircularSlotSetting(mode: 0, keyIdentifier: "か", slot: 4, action: .switchMap)]
+        guard case .circular(let maps) = try profile.definition(for: key, slotSettings: settings) else { return XCTFail("circular") }
+        XCTAssertTrue(maps.allSatisfy { $0[.slot4] == .mapSwitch })
+        var evaluator = CircularFlickEvaluator(maps: maps, directionCount: 5)
+        evaluator.begin(at: .init(0, 0), configuration: .init())
+        let range = try XCTUnwrap(evaluator.effectiveRanges[.slot4])
+        let angle = (range.start + range.sweep / 2) * Double.pi / 180
+        evaluator.move(to: .init(cos(angle) * 100, sin(angle) * 100))
+        XCTAssertEqual(evaluator.mapIndex, 1)
+        evaluator.move(to: .init(0, 0))
+        XCTAssertEqual(evaluator.end(at: .init(0, 0)), .text("が"))
+        let raw: [CircularFlickEvaluator.Map] = [[.tap:.text("あ"),.slot4:.text("old")]]
+        XCTAssertNil(CircularSlotSetting.apply(raw, settings: [], mode: 0, keyIdentifier: "あ", isSpecialKey: false)[0][.slot4])
+        XCTAssertEqual(CircularSlotSetting.apply(raw, settings: [], mode: 0, keyIdentifier: "あ", isSpecialKey: true), raw)
+    }
     func testPinnedKanaMapsAndRotationOrders() throws {
         let two = try ReferenceFlickMaps(arrangement: .toggle, mode: .japanese, style: .twoStep)
         let key = try XCTUnwrap(two.keys.first { $0.label == "か" })

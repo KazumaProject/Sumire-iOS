@@ -14,6 +14,7 @@ public struct ReferenceFlickMaps {
         public let keyId: String?
         public let label: String
         public let keyType: String
+        public let isSpecialKey: Bool
         public let row: Int
         public let column: Int
     }
@@ -57,7 +58,9 @@ public struct ReferenceFlickMaps {
     public let sourceRevision: String
     public let payloadBytes: Int
     private let payload: Payload
+    private let mode: TenKeyMode
     public init(arrangement: SumireKeyArrangement, mode: TenKeyMode, style: SumireFlickStyle) throws {
+        self.mode = mode
         let indexURL = Bundle.module.url(forResource: "flick-map-index", withExtension: "json")
         guard let indexURL else { throw Self.invalid("index missing") }
         let index = try JSONDecoder().decode(Index.self, from: Data(contentsOf: indexURL))
@@ -72,7 +75,7 @@ public struct ReferenceFlickMaps {
         keys = profile.keys; sourceRevision = index.sourceRevision; payloadBytes = data.count
     }
     public func key(row: Int, column: Int) -> Key? { keys.first { $0.row == row && $0.column == column } }
-    public func definition(for key: Key, settings: FlickStyleSettings = .init()) throws -> ReferenceFlickDefinition? {
+    public func definition(for key: Key, settings: FlickStyleSettings = .init(), slotSettings: [CircularSlotSetting] = []) throws -> ReferenceFlickDefinition? {
         let id = key.keyId ?? key.label
         switch key.keyType {
         case "NORMAL", "CROSS_FLICK": return nil // Existing function-key controller owns these.
@@ -97,9 +100,11 @@ public struct ReferenceFlickMaps {
             return .hierarchical(maps, orders: orders)
         case "CIRCULAR_FLICK":
             if let maps = payload.circularFlickKeyMaps[id] ?? payload.circularFlickKeyMaps[key.label] {
-                return .circular(try maps.map { map in
+                let decoded = try maps.map { map in
                     try Dictionary(uniqueKeysWithValues: map.map { (try Self.slot($0.key), try output($0.value)) })
-                })
+                }
+                return .circular(CircularSlotSetting.apply(decoded, settings: slotSettings, mode: mode.rawValue,
+                    keyIdentifier: id, isSpecialKey: key.isSpecialKey))
             }
             guard let maps = payload.flickKeyMaps[id] ?? payload.flickKeyMaps[key.label] else { throw Self.invalid(id) }
             let legacy: [String: CircularFlickSlot] = ["TAP": .tap, "UP": .slot0, "UP_RIGHT_FAR": .slot1, "DOWN": .slot2, "UP_LEFT_FAR": .slot3, "UP_RIGHT": .slot4, "UP_LEFT": .slot5]

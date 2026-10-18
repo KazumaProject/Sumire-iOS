@@ -47,6 +47,7 @@ struct FlickStyleSettingsView: View {
             Section("ドーナツ入力") {
                 Stepper("分割数：\(settings.circularDirectionCount)", value: $settings.circularDirectionCount, in: 4...7)
                     .accessibilityIdentifier("sumire-donut-count")
+                NavigationLink("追加方向の操作") { CircularSlotSettingsView() }
             }
             Button("標準に戻す") { settings = FlickStyleSettings() }
         }
