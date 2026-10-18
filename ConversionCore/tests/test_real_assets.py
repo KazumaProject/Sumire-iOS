@@ -1,13 +1,23 @@
 #!/usr/bin/env python3
-"""Verify shipped-asset samples for system + all 30 categories and every matrix cell.
+"""Verify shipped assets for system + all 30 categories + auxiliary dictionaries and every matrix cell.
 Usage: test_real_assets.py CLI GENERATED_DIR ANDROID_REFERENCE
 This is data/CLI verification, not Android application candidate parity.
 """
-import array, importlib.util, json, pathlib, struct, subprocess, sys, zipfile
+import array, hashlib, importlib.util, json, pathlib, struct, subprocess, sys, zipfile
 sys.dont_write_bytecode = True
 spec=importlib.util.spec_from_file_location('builder',pathlib.Path(__file__).resolve().parents[2]/'Scripts/build_dictionary.py')
 b=importlib.util.module_from_spec(spec);spec.loader.exec_module(b)
 cli,data,source=sys.argv[1:];data=pathlib.Path(data);assets=pathlib.Path(source)/'app/src/main/assets'
+manifest=json.loads((data/'manifest.json').read_text())
+assert manifest['source_revision']==b.REVISION
+for relative,expected in b.AUXILIARY_ASSET_SHA256.items():
+    actual=hashlib.sha256((assets/relative).read_bytes()).hexdigest()
+    assert actual==expected and manifest['asset_sha256'].get(relative)==expected, relative
+for name in b.AUXILIARY_DICTIONARIES:
+    output=data/(name+'.sud')
+    assert output.is_file(), name
+    digest=hashlib.sha256(output.read_bytes()).hexdigest()
+    assert manifest['output_sha256'].get(name+'.sud')==digest, name
 def raw(path):
     with zipfile.ZipFile(path) as z:return z.read(z.namelist()[0])
 def tree_parent(lbs,labels):
@@ -64,4 +74,4 @@ for row in range(n):
             bit=word&-word;column=block*64+bit.bit_length()-1
             assert column<n;decoded[column]=values[v];v+=1;word^=bit
     assert v==starts[row+1] and decoded==matrix[row*n:(row+1)*n],row
-print(json.dumps({'verified_dictionaries':31,'verified_matrix_cells':n*n,'samples':samples},ensure_ascii=False,indent=2))
+print(json.dumps({'verified_dictionaries':31,'verified_auxiliary_dictionaries':list(b.AUXILIARY_DICTIONARIES),'verified_auxiliary_asset_hashes':len(b.AUXILIARY_ASSET_SHA256),'verified_matrix_cells':n*n,'samples':samples},ensure_ascii=False,indent=2))

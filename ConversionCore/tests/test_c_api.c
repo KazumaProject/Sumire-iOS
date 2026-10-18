@@ -41,8 +41,8 @@ static void test_edit_reuse(const char *directory) {
   sumire_session *reused = NULL;
   CHECK(sumire_engine_open_with_dictionaries(directory,0,1,&engine,error,sizeof error) == 0);
   CHECK(sumire_session_create(engine,&reused,error,sizeof error) == 0);
-  const char *readings[] = {"あいあい", "あいあいあ", "あいあい", "あいあい", "あいあい", "hel", "あいあい", "😀あい", "😁あい", "があい", "かあい"};
-  unsigned flags[] = {12,12,12,12,13,2,12,12,12,12,12};
+  const char *readings[] = {"あいあい", "あいあいあ", "あいあい", "あいあい", "あいあい", "hel", "あいあい", "😀あい", "😁あい", "があい", "かあい", "あいあい"};
+  unsigned flags[] = {12,12,12,12,13,2,12,12,12,12,12,16};
   size_t hits = 0;
   for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
     sumire_session *fresh = NULL;
@@ -56,6 +56,13 @@ static void test_edit_reuse(const char *directory) {
     CHECK(sumire_session_update(reused,&request,&a,error,sizeof error) == 0);
     CHECK(sumire_session_update(fresh,&request,&b,error,sizeof error) == 0);
     compare_results(a,b);
+    if (i == 11) {
+      sumire_metrics metrics;
+      CHECK(sumire_result_metrics(a, &metrics) == 0);
+      // Flag 16 selects the bunsetsu route; this fixture intentionally omits
+      // the four auxiliary dictionaries, so that route must report incomplete.
+      CHECK(metrics.complete == 0);
+    }
     size_t reused_rows, searched_rows;
     CHECK(sumire_result_search_rows(a,&reused_rows,&searched_rows) == 0);
     hits += reused_rows;

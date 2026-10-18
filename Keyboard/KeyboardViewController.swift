@@ -80,6 +80,7 @@ final class KeyboardViewController: UIInputViewController {
         surface.candidateBar.automaticallyPreviewClipboard = defaults.bool(forKey: "clipboardAutomaticPreview")
         surface.settingsDefaults = defaults
         surface.settingsWriteDefaults = access.writeDefaults
+        surface.bunsetsuSeparation = defaults.bool(forKey: "bunsetsuSeparation")
         surface.onSettingsWritten = { [weak access] keys in access?.didWrite(keys) }
         let clipboardReset = LocalDataReset(store: .clipboard, url: PersonalDataLocation.clipboardURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
         surface.configureClipboard(accessAllowed: hasFullAccess, allowShared: hasFullAccess, localReset: clipboardReset)

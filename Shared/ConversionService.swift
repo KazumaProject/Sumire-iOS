@@ -49,7 +49,7 @@ final class ConversionService {
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
-        let locations = ["cli-priority-v1", "cli-english-v1"].flatMap { name in
+        let locations = ["standard-mozc-scoring-auxiliary-english", "cli-priority-v1", "cli-english-v1"].flatMap { name in
             [bundle.appendingPathComponent(name, isDirectory: true),
              bundle.appendingPathComponent("PlugIns/SumireKeyboard.appex/" + name, isDirectory: true)]
         }
@@ -89,7 +89,8 @@ final class ConversionService {
             } catch { state.learningFailure = "学習データの削除を再試行します: " + error.localizedDescription }
         }
     }
-    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false, includeBunsetsu: Bool = false,
+    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
+                 includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directory = directory, mask = categoryMask, englishReading = englishReadingEnabled
         let pending = pending, ticket = pending.advance()
@@ -105,11 +106,14 @@ final class ConversionService {
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
                 var error = [CChar](repeating: 0, count: 1024)
                 var result: OpaquePointer?
+                let flags: UInt32
+                if english { flags = 2 }
+                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) }
                 let status = reading.utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
                     var request = sumire_request(generation: generation, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,
                                                  edit_start_utf16: UInt32(max(0, editStart)),
-                                                 candidate_count: 20, max_states: 200_000, flags: english ? 2 : (omission ? 1 : 0) | 12)
+                                                 candidate_count: 20, max_states: 200_000, flags: flags)
                     return sumire_session_update(state.session, &request, &result, &error, error.count)
                 }
                 guard status == 0, let result else { throw NativeError(String(cString: error)) }
@@ -120,12 +124,19 @@ final class ConversionService {
                 for index in 0..<sumire_result_count(result) {
                     var candidate = sumire_candidate()
                     guard sumire_result_candidate(result, index, &candidate) == 0 else { throw NativeError("候補を取得できません") }
+                    let text = Self.copy(candidate.text)
+                    let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
+                    // Auxiliary and predicted entries can be malformed for this
+                    // input range. They must not make the complete conversion fail
+                    // or expose a candidate that cannot be committed safely.
+                    guard range.location == 0, range.length > 0,
+                          let consumedRange = Range(range, in: reading) else { continue }
                     var dictionaries: [String] = []
                     var tokens: [BunsetsuToken] = []
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
-                        if includeBunsetsu {
+                        if includeBunsetsu || bunsetsuSearch {
                             tokens.append(BunsetsuToken(
                                 readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
                                 text: Self.copy(segment.text)))
@@ -141,10 +152,8 @@ final class ConversionService {
                         let name = Self.copy(category)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
                     }
-                    let text = Self.copy(candidate.text)
-                    let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
                     var bunsetsu: [BunsetsuSegment] = []
-                    if includeBunsetsu {
+                    if includeBunsetsu || bunsetsuSearch {
                         var boundaries: [Int] = []
                         for boundaryIndex in 0..<sumire_result_bunsetsu_count(result, index) {
                             var offset: UInt32 = 0
@@ -153,15 +162,14 @@ final class ConversionService {
                             }
                             boundaries.append(Int(offset))
                         }
-                        guard range.location == 0, let consumedRange = Range(range, in: reading) else {
-                            throw NativeError("候補の読み範囲が不正です")
-                        }
                         // Partial matches project only their consumed prefix. A completion
                         // spans the typed prefix, not the longer predicted reading.
                         // All text is owned before the native snapshot is destroyed.
-                        bunsetsu = try BunsetsuProjection.project(
-                            reading: String(reading[consumedRange]), candidate: text,
-                            tokens: tokens, boundaries: boundaries)
+                        if !tokens.isEmpty {
+                            bunsetsu = (try? BunsetsuProjection.project(
+                                reading: String(reading[consumedRange]), candidate: text,
+                                tokens: tokens, boundaries: boundaries)) ?? []
+                        }
                     }
                     candidates.append(ConversionCandidate(id: candidate.candidate_id, text: text,
                                                           score: candidate.score, range: range,

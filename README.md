@@ -17,7 +17,7 @@
 - `App/`：SwiftUI 設定と UITextView 入力テスト画面。
 - `Scripts/`：辞書生成、CLI 起動、アイコン生成、オフライン処理のソース検査。
 
-システム辞書、30分類、英語辞書の生成・CLI 検索を実装しています。各配列の基本入力、候補、学習、設定・編集画面を開発中です。文節境界・文節選択モデル、基準色からの配色モデルには直接テストがありますが、モデルの存在だけで実入力画面との接続完了とは扱いません。
+システム辞書、30分類、英語辞書を変換CLIから検索できます。固定参照のGNKG v3/v4を使う文節候補探索もCLIとC ABIに接続し、設定ON時の文節候補・残り読み確定までInputHarnessで検証しています。これは本家との全操作一致や実キーボード拡張の実機検証を意味しません。各配列の基本入力、候補、学習、設定・編集画面は引き続き開発中です。
 
 ## 辞書の準備
 
@@ -38,7 +38,14 @@ python3 Scripts/build_dictionary.py --english --english-reading \
   --output "$HOME/sumire-data/cli-next"
 ```
 
-v5の単独読み優先辞書も検証して`standalone.sud`へ変換します。優先フラグはスコアと独立しており、分類辞書の完全一致はN-best件数とは別に統合します。同点の主候補はUTF-16の表記順です。CLIの`standalone_priority_available`で搭載を確認できます。旧辞書は読めますが、この値がfalseのとき単独読み優先は利用できません。システムv3/v4の文節経路優先と数値N-gram補正は未実装です。
+v5の単独読み優先辞書も検証して`standalone.sud`へ変換します。優先フラグはスコアと独立しており、分類辞書の完全一致はN-best件数とは別に統合します。同点の主候補はUTF-16の表記順です。CLIの`standalone_priority_available`で搭載を確認できます。旧辞書は読めますが、この値がfalseのとき単独読み優先は利用できません。既定の生成処理は文節探索用GNKG v3/v4とMozcの採点資産も、元値を変えずに辞書世代へコピーします。
+
+iOS Simulator/実機ビルドのresource folderは、リポジトリの隣にある`../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english`です。アプリ用世代は次のように別の空ディレクトリへ生成します（既存世代は上書きしません）。
+
+```sh
+python3 Scripts/build_dictionary.py --english --english-reading \
+  --output ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english
+```
 
 入力・出力のハッシュ、出典とライセンス通知は生成先の `manifest.json` と `licenses/` に保存します。各辞書の条件はプログラムのライセンスと別に確認が必要です。特に英語データの適用ライセンスには未確認事項があり、配布条件の確認完了を意味しません。
 
@@ -52,10 +59,11 @@ v5の単独読み優先辞書も検証して`standalone.sud`へ変換します�
 ./Scripts/sumire-cli --omission かつこう
 ./Scripts/sumire-cli --list-categories
 ./Scripts/sumire-cli --categories medical,station --nbest 10 とうきょう
+./Scripts/sumire-cli --bunsetsu きょうはとうきょうにいきます
 printf '%s\n' にほんご とうきょう | ./Scripts/sumire-cli --categories all --stdin
 ```
 
-標準出力は JSON、`--stdin` は1入力につき JSON 1行です。AI エージェントからも同じコマンドを利用できます。候補、スコア、辞書種別、UTF-16 の範囲、文節境界、探索完了状態を返します。`--lookup` は読みの完全一致検索です。システム辞書は常に有効、分類は初期状態で無効です。`complete: false` は探索予算への到達を示します。本家の予測・読み訂正・候補統合までの同等性は未達成です。
+標準出力は JSON、`--stdin` は1入力につき JSON 1行です。AI エージェントからも同じコマンドを利用できます。候補、スコア、辞書種別、UTF-16 の範囲、文節境界、探索完了状態を返します。`--lookup` は読みの完全一致検索です。`--bunsetsu` は固定GNKG v3/v4とMozc採点資産を使う専用候補探索です。システム辞書は常に有効、分類は初期状態で無効です。`complete: false` は探索予算または必要な文節資産がない状態を示します。本家の予測・読み訂正・候補統合までの同等性は未達成です。
 
 C ABI の所有権・世代番号・結果の有効期間は `ConversionCore/src/c_api.h` を参照してください。
 
@@ -80,7 +88,7 @@ xcodebuild -project Sumire.xcodeproj -scheme Sumire -sdk iphonesimulator \
   -derivedDataPath "$HOME/sumire-build/ios" CODE_SIGNING_ALLOWED=NO build
 ```
 
-`project.yml` はチェックアウトの隣の `../sumire-data/cli-priority-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
+`project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
 
@@ -136,6 +144,6 @@ python3 Scripts/check_offline.py
 
 ## 完成に向けた残作業
 
-本家の全入力スタイル・特殊キー、記号／絵文字／顔文字／クリップボード画面、文節変換 UI、候補生成の品質と表示件数、外部辞書 ZIP の取り込み、App Groups の実機共有検証、各種設定の実入力への接続と互換性、実機・iPad 検証が残っています。
+文節変換はInputHarnessの1ケースで先頭候補・残り読みの確定まで確認しましたが、本家の候補巡回や編集状況ごとの全遷移、実キーボード拡張での動作は未検証です。本家の全入力スタイル・特殊キー、記号／絵文字／顔文字／クリップボード画面、候補生成の品質と表示件数、外部辞書 ZIP の取り込み、App Groups の実機共有検証、各種設定の実入力への接続と互換性、実機・iPad 検証も残っています。
 
 メモ等の他アプリでの未確定入力・修正・確定、入力から候補描画までの遅延、拡張の起動・メモリ、長時間試験はそれぞれ実環境で検証します。CLI や本体内テストの成功を、拡張全体の完成とは報告しません。ソースのオフライン検査も、実通信の計測を代替しません。

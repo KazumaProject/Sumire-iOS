@@ -17,7 +17,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
     }
     private static var rules: [String: Rule] {
         var result: [String: Rule] = [:]
-        for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
+        for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "bunsetsuSeparation", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
             result[key] = .boolean
         }
         result[SymbolKeyboardMode.initialModeKey] = .text(Set(SymbolKeyboardMode.allCases.map(\.rawValue)))

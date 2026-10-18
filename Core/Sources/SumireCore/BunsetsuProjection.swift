@@ -81,6 +81,18 @@ public enum BunsetsuProjection {
         }
         return result
     }
+
+    /// Returns the first segment's reading only when the projected path really
+    /// divides the typed reading. The UTF-16 range must remain on Swift string
+    /// boundaries so callers can safely retain the unconverted suffix.
+    public static func firstReadingPrefix(in segments: [BunsetsuSegment], reading: String) -> String? {
+        guard segments.count > 1, let first = segments.first,
+              first.readingRange.location == 0,
+              first.readingRange.length > 0,
+              first.readingRange.length < reading.utf16.count,
+              let range = Range(first.readingRange, in: reading) else { return nil }
+        return String(reading[..<range.upperBound])
+    }
 }
 
 /// Editing a selected bunsetsu preserves every other whole-sentence choice.

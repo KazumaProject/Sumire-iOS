@@ -13,6 +13,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set(12, forKey: "clipboard.retentionHours")
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "englishReadingEnabled")
+        defaults.set(true, forKey: "bunsetsuSeparation")
         defaults.set(0x3fff_ffff, forKey: "categoryMask")
         defaults.set("flick", forKey: "sumire.keyArrangement")
         defaults.set(true, forKey: "qwerty.english.flickUp")
@@ -47,6 +48,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         XCTAssertEqual(original.values["clipboard.retentionHours"], .number(12))
         XCTAssertEqual(original.values["theme.saturation"], .number(0.35))
         XCTAssertEqual(original.values["theme.brightness"], .number(0.65))
+        XCTAssertEqual(original.values["bunsetsuSeparation"], .boolean(true))
         let restored = try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(original))
         defaults.removePersistentDomain(forName: name)
         defaults.set("keep", forKey: "unrelated.account")
@@ -73,6 +75,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
             ("candidateRowCount", .number(1.5)), ("categoryMask", .number(-1)),
             ("theme.hue", .number(.nan)), ("theme.saturation", .number(1.1)), ("theme.brightness", .number(-0.1)), ("theme.mode", .text("invalid")),
             ("englishReadingEnabled", .number(0)), ("unknown.key", .boolean(true)),
+            ("bunsetsuSeparation", .number(1)),
             ("appearance.english.keyScale", .number(0.1)),
             ("customRomaji.library", .data(Data("{}".utf8))),
             ("customKeyboard.library", .data(Data("{}".utf8))),
