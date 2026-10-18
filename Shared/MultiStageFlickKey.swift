@@ -20,7 +20,21 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         return config
     }()
     var definition: ReferenceFlickDefinition?
+    struct CommitEvent {
+        let output: CircularFlickOutput
+        let isTap: Bool
+        let wasFlick: Bool
+        let isLongPress: Bool
+        let direction: MultiFlickDirection?
+        let secondDirection: MultiFlickDirection?
+        let circularSlot: CircularFlickSlot?
+        var isPureTap: Bool { isTap && !wasFlick && !isLongPress }
+    }
+    var onCommit: ((CommitEvent) -> Void)?
     var onOutput: ((CircularFlickOutput) -> Void)?
+    private var downPoint = FlickPoint(0, 0)
+    private var wasFlick = false
+    private var activeConfiguration = MultiFlickConfiguration()
     private var tracked: UITouch?
     private var holdTimer: Timer?
     private var engine: Engine?
@@ -111,12 +125,26 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
             switch self { case .single(let e): return e.holdPending; case .two(let e): return e.holdPending
             case .hierarchy(let e): return e.holdPending; case .circle(let e): return e.holdPending }
         }
-        mutating func end(_ point: FlickPoint) -> CircularFlickOutput? {
+        mutating func end(_ point: FlickPoint, wasFlick: Bool) -> CommitEvent? {
             switch self {
-            case .single(var e): return e.end(at: point).map { .text($0) }
-            case .two(var e): return e.end(at: point).map { .text($0) }
-            case .hierarchy(var e): return e.end().map { .text($0) }
-            case .circle(var e): return e.end(at: point)
+            case .single(var e):
+                guard let value = e.endSelection(at: point), let text = value.text else { return nil }
+                return CommitEvent(output: .text(text), isTap: value.direction == .tap, wasFlick: wasFlick,
+                    isLongPress: value.longPress, direction: value.direction, secondDirection: nil, circularSlot: nil)
+            case .two(var e):
+                guard let value = e.endSelection(at: point), let text = value.text else { return nil }
+                return CommitEvent(output: .text(text), isTap: value.first == .tap && value.second == .tap, wasFlick: wasFlick,
+                    isLongPress: value.longPress, direction: value.first, secondDirection: value.second, circularSlot: nil)
+            case .hierarchy(var e):
+                let direction = e.selected, held = e.expandedGuide
+                guard let text = e.end() else { return nil }
+                return CommitEvent(output: .text(text), isTap: direction == .tap, wasFlick: wasFlick,
+                    isLongPress: held, direction: direction, secondDirection: nil, circularSlot: nil)
+            case .circle(var e):
+                let slot = e.direction(at: point), held = e.expandedGuide
+                guard let output = e.end(at: point) else { return nil }
+                return CommitEvent(output: output, isTap: slot == .tap, wasFlick: wasFlick,
+                    isLongPress: held, direction: nil, secondDirection: nil, circularSlot: slot)
             }
         }
         var preview: MultiStageFlickPopupView.Content {
@@ -155,7 +183,8 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         config.guideGrid = gestureStyle.presentation == .guideAboveKey
         config.startsAtKeyCenter = gestureStyle.startPosition == .keyCenter
         engine = Engine(definition, settings: gestureStyle)
-        engine?.begin(point(touch), config)
+        downPoint = point(touch); wasFlick = false; activeConfiguration = config
+        engine?.begin(downPoint, config)
         updatePopup()
         let timer = Timer(timeInterval: Double(gestureSettings.longPressMilliseconds) / 1000, repeats: false) { [weak self] _ in
             guard let self, self.tracked != nil, self.engine?.holdPending == true else { return }
@@ -165,6 +194,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     }
     override func touchesMoved(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = tracked, touches.contains(touch) else { return }
+        updateMovement(point(touch))
         engine?.move(point(touch))
         if engine?.holdPending != true { holdTimer?.invalidate(); holdTimer = nil }
         updatePopup()
@@ -175,9 +205,18 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     }
     func finishActiveInput() {
         guard let touch = tracked else { return }
-        let output = engine?.end(point(touch))
+        updateMovement(point(touch))
+        let result = engine?.end(point(touch), wasFlick: wasFlick)
         cancelActiveInput()
-        if let output { onOutput?(output) }
+        if let result { emit(result) }
+    }
+    private func emit(_ result: CommitEvent) {
+        if let onCommit { onCommit(result) } else { onOutput?(result.output) }
+    }
+    private func updateMovement(_ point: FlickPoint) {
+        let dx = point.x - downPoint.x, dy = point.y - downPoint.y
+        let distance = activeConfiguration.circularThreshold ? hypot(dx, dy) : max(abs(dx), abs(dy))
+        wasFlick = wasFlick || distance >= max(1, activeConfiguration.threshold)
     }
     func cancelActiveInput() {
         touchRouter?.end(self)
@@ -211,7 +250,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         var evaluator = Engine(definition, settings: styleSettings.normalized)
         let center = FlickPoint(bounds.midX, bounds.midY)
         evaluator.begin(center, gestureConfiguration)
-        if let output = evaluator.end(center) { onOutput?(output); return true }
+        if let result = evaluator.end(center, wasFlick: false) { emit(result); return true }
         return false
     }
     deinit { holdTimer?.invalidate(); popup?.removeFromSuperview() }

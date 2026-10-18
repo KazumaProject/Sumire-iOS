@@ -5,6 +5,23 @@ final class MultiStageFlickTests: XCTestCase {
     private let map: TwoStepFlickEvaluator.Map = [
         .tap: [.tap: "か"], .left: [.tap: "き", .left: "き", .upLeft: "ぎ", .downLeft: "きゃ"],
         .up: [.tap: "く", .up: "く", .upRight: "ぐ"]]
+    func testReleaseMetadataUsesFinalDirectionAndConsumesOnce() throws {
+        var single = SingleStageFlickEvaluator(style: .standard, map: [.tap: "あ", .right: "え"])
+        single.begin(at: .init(0, 0), configuration: .init())
+        let selection = try XCTUnwrap(single.endSelection(at: .init(100, 0)))
+        XCTAssertEqual(selection.direction, .right)
+        XCTAssertEqual(selection.text, "え")
+        XCTAssertFalse(selection.longPress)
+        XCTAssertNil(single.endSelection(at: .init(100, 0)))
+        var two = TwoStepFlickEvaluator(map: [.tap: [.tap:"か"], .right: [.tap:"か", .right:"け"]])
+        two.begin(at: .init(0, 0), configuration: .init())
+        let value = try XCTUnwrap(two.endSelection(at: .init(100, 0)))
+        XCTAssertEqual(value.first, .right); XCTAssertEqual(value.second, .right)
+        XCTAssertEqual(value.text, "け")
+        XCTAssertNil(two.endSelection(at: .init(100, 0)))
+        two.begin(at: .init(0, 0), configuration: .init()); two.hold()
+        XCTAssertTrue(try XCTUnwrap(two.endSelection(at: .init(0, 0))).longPress)
+    }
     func testTwoStepHoldExpandsGuideAndCancelClearsIt() {
         var evaluator = TwoStepFlickEvaluator(map: map, sticky: true)
         evaluator.begin(at: .init(0, 0), configuration: .init())
