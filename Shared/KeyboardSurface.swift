@@ -1633,9 +1633,15 @@ final class KeyboardSurface: UIInputView {
     }
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()
+        let previousEnglishComposition = englishComposition
         inputMode = mode
         if let customID { activeCustomID = customID }
         rememberKeyboard()
+        updateModeConversionLanguage()
+        if hasComposition && englishComposition != previousEnglishComposition {
+            composition.optionsChanged()
+            refreshConversion()
+        }
         shifted = false
         qwertyCapsLock = false; qwertyLastShiftTap = 0
         rebuild()
@@ -1735,7 +1741,8 @@ final class KeyboardSurface: UIInputView {
         }
     }
     private func updateModeConversionLanguage() {
-        let englishMode = (inputMode == .tenKey && tenKeyMode == .english)
+        let englishMode = inputMode == .english
+            || (inputMode == .tenKey && tenKeyMode == .english)
             || (inputMode == .sumire && sumireMode == .english)
             || (inputMode == .kana && gojuonMode == .english)
         // Keep mixed kana/Latin compositions in the Japanese lattice. Mode

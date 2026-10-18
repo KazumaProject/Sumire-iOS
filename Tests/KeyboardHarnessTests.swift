@@ -1555,7 +1555,6 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons["⇧"].tap()
         app.buttons["A"].tap()
         XCTAssertEqual(editor.value as? String, "日本語A")
-        app.buttons["かな"].tap()
         selectKeyboard("ローマ字", in: app)
         for key in "kan" { app.buttons[String(key)].tap() }
         XCTAssertEqual(editor.value as? String, "日本語Aかn")

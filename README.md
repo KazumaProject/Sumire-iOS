@@ -51,6 +51,16 @@ python3 Scripts/build_dictionary.py --english --english-reading \
 
 配列の追従用として JapaneseKeyboard dev `9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93`、変換参照として kotlin-kana-kanji-converter `d5bcefcf613b238966242a2aac3771ef9a18e12d` も使用しています。辞書生成元の固定リビジョンとは区別します。
 
+絵文字・顔文字・記号カタログと肌色差分表も、同じ JapaneseKeyboard `9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93` を使用します。`build_symbol_catalog.py` はGit HEADと入力15ファイルのSHA-256を照合し、出力は指定した新規のリポジトリ外ディレクトリへ生成します。辞書用 `df1f383...` checkoutは切り替えず、記号用の別checkoutを使ってください。
+
+```sh
+git clone https://github.com/KazumaProject/JapaneseKeyboard.git /path/to/JapaneseKeyboard-9506
+git -C /path/to/JapaneseKeyboard-9506 checkout --detach 9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93
+python3 Scripts/build_symbol_catalog.py \
+  --source /path/to/JapaneseKeyboard-9506 \
+  --output /path/to/new-symbol-catalog-output
+```
+
 ## CLI
 
 ```sh
