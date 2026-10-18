@@ -82,7 +82,10 @@ final class KeyboardSurface: UIInputView {
     private func applySizing() {
         guard preferredHeight != nil else { return }
         let availableHeight = window?.bounds.height ?? 1000
-        let rows = CGFloat(min(3, max(1, candidateRowCount))) * 44
+        // Shortcut mode occupies one row. When composition begins, grow the
+        // whole keyboard with the candidate bar instead of taking that space
+        // from the key grid.
+        let rows = candidateBar.displayedHeight
         let height = min(sizeValue.height + rows + safeAreaInsets.bottom, max(210, availableHeight * 0.72))
         if abs(preferredHeight.constant - height) > 0.5 {
             preferredHeight.constant = height
@@ -373,6 +376,7 @@ final class KeyboardSurface: UIInputView {
         clipboardHistory.onNotice = { [weak self] text in self?.symbolPanel?.showNotice(text); self?.showDataNotice(text) }
         clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
         candidateBar.onClipboardCaptured = { [weak self] text, image in self?.clipboardHistory.capture(text: text, image: image) }
+        candidateBar.onDisplayedHeightChange = { [weak self] _ in self?.applySizing() }
         candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard() }
         candidateBar.onClipboardNotice = { [weak self] in self?.showDataNotice($0) }
         candidateBar.onResize = { [weak self] in self?.beginResize() }
