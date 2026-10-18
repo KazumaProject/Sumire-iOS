@@ -39,12 +39,12 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable {
-    case keyboards, customKeyboard, romaji, specialKeys, conversion, appearance, theme, candidates
+    case keyboards, customKeyboard, romaji, specialKeys, conversion, touchFeedback, appearance, theme, candidates
     case personalDictionary, dictionaries, learning, symbols, clipboard, backup, setup, licenses
     var id: String { rawValue }
     var category: SettingsCategory {
         switch self {
-        case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion: return .input
+        case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback: return .input
         case .appearance, .theme, .candidates: return .appearance
         case .personalDictionary, .dictionaries, .learning: return .dictionaries
         case .symbols, .clipboard, .backup: return .data
@@ -58,6 +58,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .romaji: return "カスタムローマ字"
         case .specialKeys: return "Sumire の特殊キー操作"
         case .conversion: return "入力と変換"
+        case .touchFeedback: return "入力の操作と表示"
         case .appearance: return "キー・文字サイズ"
         case .theme: return "キーボードの配色"
         case .candidates: return "候補欄の段数"
@@ -78,6 +79,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .romaji: return "ローマ字からかなへの変換ルール"
         case .specialKeys: return "タップ・フリック・長押しの動作"
         case .conversion: return "ライブ変換、修飾キー省略、削除の区切り"
+        case .touchFeedback: return "ポップアップ・二本指・長押し時間"
         case .appearance: return "通常キー・特殊キーとフリックガイド"
         case .theme: return "好きな色とライト・ダーク表示"
         case .candidates: return "候補を1・2・3段で表示"
@@ -98,6 +100,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .romaji: return "textformat.abc"
         case .specialKeys: return "hand.draw"
         case .conversion: return "character.cursor.ibeam"
+        case .touchFeedback: return "hand.point.up.left"
         case .appearance: return "textformat.size"
         case .theme: return "paintpalette"
         case .candidates: return "rectangle.split.3x1"
@@ -115,6 +118,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .keyboards: return "テンキー TenKey QWERTY 50音 五十音 Sumire 配列"
         case .customKeyboard: return "カスタム 配列 編集 JSON"
+        case .touchFeedback: return "フリック ポップアップ popup マルチタッチ 二本指 長押し"
         case .appearance: return "フォント ガイド フリック 通常キー 特殊キー 大きさ"
         case .theme: return "マテリアル Material ライト ダーク 色"
         case .symbols: return "絵文字 顔文字 記号 肌色 履歴 clipboard"

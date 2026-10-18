@@ -410,6 +410,7 @@ final class KeyboardSurface: UIInputView {
             if let flick = key as? FlickKey {
                 flick.touchRouter = touchRouter
                 flick.feedbackSettings = touchFeedback
+                flick.popupPalette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
                 flick.popupHost = self
                 flick.touchPolicy = policy
             } else if let repeating = key as? RepeatingKey {

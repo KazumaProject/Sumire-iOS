@@ -23,11 +23,11 @@ final class FlickPopupView: UIView {
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     func update(values: [String], selected: Int, fontSize: CGFloat,
-                background: UIColor, foreground: UIColor, highlight: UIColor) {
+                background: UIColor, foreground: UIColor, highlight: UIColor, highlightForeground: UIColor) {
         for i in 0..<5 {
             labels[i].text = values.indices.contains(i) ? values[i] : ""
             labels[i].font = .systemFont(ofSize: fontSize)
-            labels[i].textColor = foreground
+            labels[i].textColor = i == selected ? highlightForeground : foreground
             cells[i].backgroundColor = i == selected ? highlight : background
             cells[i].layer.borderColor = foreground.withAlphaComponent(0.25).cgColor
         }

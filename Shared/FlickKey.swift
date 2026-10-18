@@ -21,6 +21,7 @@ final class FlickKey: UIButton, KeyTouchParticipant {
     /// Set to the keyboard's overlay host, never the app-wide window.
     weak var popupHost: UIView?
     var feedbackSettings = TouchFeedbackSettings()
+    var popupPalette: KeyboardPalette?
     /// Only use for an explicitly supported five-direction alternate map.
     /// TFBI / hierarchical maps need their own controller, not this adapter.
     var longPressValues: [String]?
@@ -179,10 +180,11 @@ final class FlickKey: UIButton, KeyTouchParticipant {
             popup = view
         }
         let values = longPressActive ? (longPressValues ?? outputs) : outputs
+        let palette = popupPalette ?? KeyboardPalette(hue: 0.73, dark: traitCollection.userInterfaceStyle == .dark)
         popup?.update(values: values, selected: selectedDirection.rawValue,
                       fontSize: CGFloat(gestureSettings.popupTextSize),
-                      background: backgroundColor ?? .secondarySystemBackground,
-                      foreground: titleColor(for: .normal) ?? .label, highlight: tintColor.withAlphaComponent(0.45))
+                      background: palette.key, foreground: palette.foreground,
+                      highlight: palette.accent, highlightForeground: palette.accentForeground)
         popup?.place(keyRect: convert(bounds, to: host), within: host,
                      scale: CGFloat(gestureSettings.popupScalePercent / 100))
     }
