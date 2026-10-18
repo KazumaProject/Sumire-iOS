@@ -36,7 +36,7 @@ struct HomeView: View {
                                   openPreview: { showPreview = true }, open: { destination = $0 })
                 .navigationDestination(isPresented: $showPreview) { preview }
         }
-        .tint(.purple)
+        .tint(SettingsBrand.purple)
         .sheet(item: $destination, onDismiss: { appearanceRevision += 1 }) { item in
             destinationView(item)
         }
@@ -144,7 +144,7 @@ struct HomeView: View {
                 Section("設定の保存先") {
                     Text(KeyboardSettings.sharedDefaults == nil
                          ? "共有領域にアクセスできません。設定はこのアプリ内に保存しています。キーボード拡張への設定共有はまだ成立していません。"
-                         : "共有領域にアクセスできます。キーボード拡張からの利用にはフルアクセスが必要です。入力先で設定が反映されることを確認してください。")
+                         : "本体アプリから共有領域にアクセスできます。この表示だけではキーボード拡張での読み込みを確認できません。入力先で設定の反映を確認してください。")
                         .accessibilityIdentifier("sharing-status-detail")
                     if KeyboardSettings.sharedDefaults == nil {
                         Text("開発用ビルドではApp Groupsの権限と署名プロファイルの設定が必要です。このアプリから署名の設定を変更することはできません。")
@@ -156,7 +156,7 @@ struct HomeView: View {
                     Text("入力中は地球儀キーからSumireへ切り替えます。")
                 }
                 Section("オフラインで使えます") {
-                    Text("入力文字をネットワークに送信する機能はありません。フルアクセスは共有データとクリップボードのために使用します。")
+                    Text("入力文字をネットワークに送信する機能はありません。フルアクセスをOFFのまま基本入力を利用できます。設定共有の署名状態は上の項目で確認できます。")
                 }
                 if let notice = personalLibrary.notice { Section("データの状態") { Text(notice).foregroundStyle(.secondary) } }
             }

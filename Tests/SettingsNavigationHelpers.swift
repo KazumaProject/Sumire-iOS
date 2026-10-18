@@ -12,7 +12,7 @@ extension XCTestCase {
 
     func settingsButton(_ title: String, in app: XCUIApplication, file: StaticString = #filePath, line: UInt = #line) -> XCUIElement {
         let button = app.buttons[title]
-        if !button.isHittable {
+        if !button.exists || !button.isHittable {
             let menu = app.buttons["preview-settings"]
             XCTAssertTrue(menu.waitForExistence(timeout: 3), file: file, line: line)
             menu.tap()

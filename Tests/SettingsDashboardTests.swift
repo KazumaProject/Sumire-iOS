@@ -16,6 +16,13 @@ final class SettingsDashboardTests: XCTestCase {
         app.buttons["settings-category-appearance"].tap()
         XCTAssertTrue(app.buttons["settings-destination-theme"].waitForExistence(timeout: 3))
         XCTAssertTrue(app.buttons["settings-destination-candidates"].exists)
+        app.navigationBars.buttons.firstMatch.tap()
+        let application = app.buttons["settings-category-app"]
+        for _ in 0..<4 where !application.isHittable { app.swipeUp() }
+        XCTAssertTrue(application.isHittable); application.tap()
+        app.buttons["settings-destination-licenses"].tap()
+        XCTAssertTrue(app.buttons["完了"].waitForExistence(timeout: 3))
+        app.buttons["完了"].tap()
     }
 
     func testSearchOpensThemeAndReportsNoResults() {

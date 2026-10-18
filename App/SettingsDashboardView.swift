@@ -1,4 +1,9 @@
 import SwiftUI
+import UIKit
+
+enum SettingsBrand {
+    static let purple = Color(red: 0.48, green: 0.29, blue: 0.70)
+}
 
 /// Navigation labels describe user tasks; storage and diagnostics stay in detail screens.
 enum SettingsCategory: String, CaseIterable, Identifiable {
@@ -138,7 +143,7 @@ struct SettingsDashboardView: View {
                     welcome
                     Button(action: openPreview) {
                         HStack(spacing: 14) {
-                            Image(systemName: "keyboard").font(.title2)
+                            Image(systemName: "keyboard").font(.title2).accessibilityHidden(true)
                             VStack(alignment: .leading, spacing: 4) {
                                 Text("キーボードを試す").font(.headline)
                                 Text("文字を打って、使い心地を確かめる").font(.subheadline)
@@ -167,8 +172,8 @@ struct SettingsDashboardView: View {
                     ForEach(SettingsCategory.allCases) { category in
                         NavigationLink(value: category) {
                             HStack(alignment: .center, spacing: 16) {
-                                Image(systemName: category.icon).font(.title2).foregroundStyle(.purple)
-                                    .frame(width: 44, height: 44).background(.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
+                                Image(systemName: category.icon).accessibilityHidden(true).font(.title2).foregroundStyle(SettingsBrand.purple)
+                                    .frame(width: 44, height: 44).background(SettingsBrand.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 14))
                                 VStack(alignment: .leading, spacing: 5) {
                                     Text(category.title).font(.headline).foregroundStyle(.primary)
                                     Text(category.subtitle).font(.subheadline).foregroundStyle(.secondary)
@@ -210,7 +215,7 @@ struct SettingsDashboardView: View {
     }
     private var welcome: some View {
         HStack(alignment: .center, spacing: 14) {
-            Image("SumireLogo.png").renderingMode(.template).resizable().scaledToFit().foregroundStyle(.purple).frame(width: 52, height: 52).accessibilityHidden(true)
+            Image(uiImage: UIImage(named: "SumireLogo.png") ?? UIImage()).renderingMode(.original).resizable().scaledToFit().frame(width: 52, height: 52).clipShape(RoundedRectangle(cornerRadius: 14)).accessibilityHidden(true)
             VStack(alignment: .leading, spacing: 4) {
                 Text("Sumireを、あなたらしく。").font(.title3.bold())
                 Text("お気に入りの入力を育てましょう。").font(.subheadline).foregroundStyle(.secondary)
@@ -226,7 +231,7 @@ private struct SettingsDestinationRow: View {
     var body: some View {
         Button(action: action) {
             HStack(spacing: 14) {
-                Image(systemName: item.icon).foregroundStyle(.purple).frame(width: 28).accessibilityHidden(true)
+                Image(systemName: item.icon).foregroundStyle(SettingsBrand.purple).frame(width: 28).accessibilityHidden(true)
                 VStack(alignment: .leading, spacing: 5) {
                     Text(item.title).foregroundStyle(.primary)
                     Text(item.subtitle).font(.caption).foregroundStyle(.secondary)
