@@ -135,7 +135,7 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
 
     func testUnavailableActionsRetainTheirMeaningInsteadOfFallback() throws {
         var settings = SumireSpecialKeySettings()
-        for action in [SumireSpecialKeyAction.selectAll, .cursorUp, .cursorDown, .copy, .cut, .undoDelete, .deleteAfterCursorUntilBoundary, .openSymbols] {
+        for action in [SumireSpecialKeyAction.selectAll, .cursorUp, .cursorDown, .copy, .cut, .undoDelete, .deleteAfterCursorUntilBoundary] {
             XCTAssertNotNil(action.unavailabilityReason(for: .delete, gesture: .up))
             try settings.set(action, for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese)
             let decoded = try SumireSpecialKeySettings.decode(JSONEncoder().encode(settings))
@@ -147,4 +147,12 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
         XCTAssertNil(SumireSpecialKeyAction.cursorRight.unavailabilityReason(for: .cursorLeft, gesture: .right))
         XCTAssertNil(SumireSpecialKeyAction.deleteUntilBoundary.unavailabilityReason(for: .delete, gesture: .left))
     }
+    func testSymbolPanelActionIsAvailableAndPersists() throws {
+        XCTAssertNil(SumireSpecialKeyAction.openSymbols.unavailabilityReason(for: .delete, gesture: .up))
+        var settings = SumireSpecialKeySettings()
+        try settings.set(.openSymbols, for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese)
+        let restored = try SumireSpecialKeySettings.decode(JSONEncoder().encode(settings))
+        XCTAssertEqual(restored.action(for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese), .openSymbols)
+    }
+
 }

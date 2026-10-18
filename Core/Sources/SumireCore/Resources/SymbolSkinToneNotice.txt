@@ -1,0 +1,24 @@
+Emoji skin-tone variant table
+Source revision: 9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93
+Generated from the pinned EmojiSkinToneSupport single-base rules, retaining only variants present in EmojiCategoryMetadata Unicode 17.0 data. Multi-base and absent sequences are not synthesized.
+
+Verified inputs (SHA-256):
+{
+  "LICENSE": "92dee8c459ec7a90ff505414adba21b6bef2219f40b7d8d0d2183dea3f65df75",
+  "app/src/main/assets/licenses/core.html": "6f1ffaad95692c8ae160200ce302f3b1f6af8759b3fa5e7b78de18b28a180674",
+  "app/src/main/assets/emoji/tango_emoji.dat": "f05fcb3b56aaf683910847342a33e36009676ad9a5abc2d43d3620dbc07700a4",
+  "app/src/main/assets/emoji/token_emoji.dat": "1c25ddcf25f61595915f3a37e1d76665a7eeff2110d2521322817618e0f535a5",
+  "app/src/main/assets/emoticon/tango_emoticon.dat": "ec102a95f3a490587940d4035ebeedfad4438fa13eb1b37c54ac544059c6ff6a",
+  "app/src/main/assets/emoticon/token_emoticon.dat": "c4c88e2f84342aa4f13b295d37947fa4d222b019325d32346333b71989c069c5",
+  "app/src/main/assets/symbol/tango_symbol.dat": "5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca",
+  "app/src/main/assets/symbol/token_symbol.dat": "22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb",
+  "symbol_keyboard/src/main/java/com/kazumaproject/domain/Emoji.kt": "ea8b8a7e1f343db193677e21139da5a9971582c8f5c83216d561d3195fbfc5fa",
+  "symbol_keyboard/src/main/java/com/kazumaproject/domain/EmojiCategoryMetadata.kt": "901e51922551329b116e6b10ecf3cf13bca893a9e94a734aeef471585eb00fcf",
+  "symbol_keyboard/src/main/java/com/kazumaproject/domain/EmojiSkinToneSupport.kt": "4c5d9345569d8e1b8f38250694c847a3f0c70c87bee42212117824cfa077cdfc",
+  "symbol_keyboard/src/main/java/com/kazumaproject/symbol_keyboard/CustomSymbolKeyboardView.kt": "780a77c796cd6f9e8f248a467f4a8697540ebc7add8cf50eae711eec2f9135cc",
+  "symbol_keyboard/src/main/java/com/kazumaproject/data/emoji/EmojiCategory.kt": "eeae1fbdd3e5ef68cc72d52ed628ec1b216c368cf1cea8efda6a6be7667cc845",
+  "symbol_keyboard/src/main/java/com/kazumaproject/data/emoticon/EmoticonCategory.kt": "4ede9c3f580033b74e92a862935e9b324e8521070a10ef1a039fd382f8c3f640",
+  "symbol_keyboard/src/main/java/com/kazumaproject/data/symbol/SymbolCategory.kt": "f746802cee52dffa6669a718be828df84e9db2596b64f856d09802a185024576"
+}
+
+See SymbolCatalogNotice.txt and SymbolDataLicenses.html for preserved copyright and license notices.
