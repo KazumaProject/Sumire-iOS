@@ -3,7 +3,12 @@ import SumireCore
 
 /// Tracks a single touch and commits on release. Moving outside the original key
 /// is allowed for flicks; cancellation emits nothing. No per-frame view creation.
-final class FlickKey: UIButton {
+final class FlickKey: UIButton, KeyTouchParticipant {
+    weak var touchRouter: KeyTouchRouter?
+    var exclusiveTouchAction = false
+    /// The reference bypasses subsequent fingers on IME-switch / emoji keys
+    /// even when independent multi-touch is disabled.
+    var blocksSequentialTouches = false
     var values = ""
     var directionalValues: [String]?
     private var outputs: [String] { directionalValues ?? values.map(String.init) }
@@ -105,6 +110,7 @@ final class FlickKey: UIButton {
         return .resolve(dx: point.x - start.x, dy: point.y - start.y, shape: thresholdShape)
     }
     private func restore() {
+        touchRouter?.end(self)
         holdTimer?.invalidate(); holdTimer = nil
         popup?.removeFromSuperview(); popup = nil
         longPressActive = false
@@ -113,7 +119,8 @@ final class FlickKey: UIButton {
         setAttributedTitle(restingAttributedTitle, for: .normal)
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
-        guard tracked == nil, let touch = touches.first else { return }
+        guard isEnabled, tracked == nil, let touch = touches.first else { return }
+        guard touchRouter?.begin(self, exclusive: exclusiveTouchAction, blocksSequentialTouches: blocksSequentialTouches) != false else { return }
         tracked = touch; start = touch.location(in: window); isHighlighted = true
         gestureSettings = feedbackSettings.normalized()
         selectedDirection = .tap
@@ -147,6 +154,8 @@ final class FlickKey: UIButton {
         if useAlternate { onLongPressFlick?(selected) } else { onFlick?(selected) }
     }
     func cancelActiveFlick() { restore() }
+    func finishActiveInput() { finishActiveFlick() }
+    func cancelActiveInput() { cancelActiveFlick() }
     private func scheduleHold() {
         holdTimer?.invalidate(); holdTimer = nil
         let index = selectedDirection.rawValue
