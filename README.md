@@ -67,9 +67,47 @@ xcodebuild -project Sumire.xcodeproj -scheme Sumire -sdk iphonesimulator \
   -derivedDataPath "$HOME/sumire-build/ios" CODE_SIGNING_ALLOWED=NO build
 ```
 
-`project.yml` はチェックアウトの隣の `../sumire-data/cli-english-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。参照コピー・辞書・署名情報は自動ダウンロードや自動設定しません。
+`project.yml` はチェックアウトの隣の `../sumire-data/cli-english-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
-実機では両ターゲットに自分の Team を設定し、App Groups の entitlement とプロファイルを一致させる必要があります。現在の Personal Team では App Groups が成立しておらず、本体・拡張間の設定・辞書共有は未完成です。共有を省いたビルドを完成版とは扱いません。
+### 正式な実機署名と App Groups
+
+本体 `com.kazumaproject.sumire.ios` と拡張 `com.kazumaproject.sumire.ios.keyboard` を同じ Team で署名し、両方の署名・プロファイルに `group.com.kazumaproject.sumire.ios` が必要です。共有の entitlement は `Shared/Sumire.entitlements` に定義しています。
+
+2026-10-18 に Personal Team で、両方の App Group 対応プロファイルの発行と正式な Release 署名ビルドを確認しました。[Apple の対応表](https://developer.apple.com/help/account/reference/supported-capabilities-ios/)でも App groups は Apple Developer 列に対応表示があります。利用中のアカウント・プロファイルでの成立を確認してください。
+
+個人の Team ID は、Git 管理しないローカル設定に保存できます。
+
+```sh
+cp project.signing.example.yml project.signing.local.yml
+# project.signing.local.yml の YOUR_TEAM_ID を自分の Team ID に変更する
+xcodegen generate --spec project.signing.local.yml
+```
+
+初回は生成した `Sumire.xcodeproj` を Xcode で開き、`Sumire` と `SumireKeyboard` の両ターゲットで次を確認します。
+
+1. Signing & Capabilities の Automatically manage signing を有効にして、自分の Team を選択する。
+2. App Groups に `group.com.kazumaproject.sumire.ios` があることを確認し、Xcode の登録・関連付け・プロファイル更新が完了するまで待つ。[Apple の設定手順](https://developer.apple.com/documentation/xcode/configuring-app-groups)も参照してください。
+3. 下記のビルド後、本体と拡張の署名および embedded profile の App Groups を照合する。
+
+今回の確認では、CLI に Team を渡した初回ビルドは App Groups を含まないプロファイルで失敗しました。Xcode で両ターゲットの Team を選択した後に、グループを含むプロファイルが再生成されました。以後は `project.yml` から再生成したプロジェクトでも、CLI の Team 指定で正式署名ビルドが成功しました。
+
+```sh
+xcodebuild -project Sumire.xcodeproj -scheme Sumire -configuration Release \
+  -destination 'generic/platform=iOS' -allowProvisioningUpdates \
+  -derivedDataPath "$HOME/sumire-build/ios-device" build
+
+# ローカル設定を使わず project.yml から生成した場合は、上記に
+# DEVELOPMENT_TEAM=自分のTeamID を追加する
+
+codesign -d --entitlements :- \
+  "$HOME/sumire-build/ios-device/Build/Products/Release-iphoneos/Sumire.app"
+codesign -d --entitlements :- \
+  "$HOME/sumire-build/ios-device/Build/Products/Release-iphoneos/Sumire.app/PlugIns/SumireKeyboard.appex"
+```
+
+同じ2つの bundle の `embedded.mobileprovision` を `security cms -D -i ファイル名` で読み、`Entitlements` の `com.apple.security.application-groups` に同じグループが含まれることも確認します。プロファイル・署名情報はコミットしません。
+
+空の entitlement ファイルを `CODE_SIGN_ENTITLEMENTS` に指定するビルドは、設定共有の検証には使用しません。署名成功後も、実機へ更新し、本体設定が共有領域に保存され、フルアクセスを許可した拡張で候補段数・配色が反映されることを確認する必要があります。未確定入力を確定してから更新してください。共有を省いたビルドを完成版とは扱いません。
 
 次の直接テストは実辞書・端末・署名なしで実行できます。GitHub Actions もこの範囲を対象にします。
 
@@ -85,6 +123,6 @@ python3 Scripts/check_offline.py
 
 ## 完成に向けた残作業
 
-本家の全入力スタイル・特殊キー、記号／絵文字／顔文字／クリップボード画面、文節変換 UI、候補生成の品質と表示件数、外部辞書 ZIP の取り込み、App Groups、各種設定の実入力への接続と互換性、実機・iPad 検証が残っています。
+本家の全入力スタイル・特殊キー、記号／絵文字／顔文字／クリップボード画面、文節変換 UI、候補生成の品質と表示件数、外部辞書 ZIP の取り込み、App Groups の実機共有検証、各種設定の実入力への接続と互換性、実機・iPad 検証が残っています。
 
 メモ等の他アプリでの未確定入力・修正・確定、入力から候補描画までの遅延、拡張の起動・メモリ、長時間試験はそれぞれ実環境で検証します。CLI や本体内テストの成功を、拡張全体の完成とは報告しません。ソースのオフライン検査も、実通信の計測を代替しません。

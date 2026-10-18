@@ -21,6 +21,11 @@ files = [p for directory in SOURCE_DIRS for p in (ROOT / directory).rglob("*")
          if p.suffix in SOURCE_SUFFIXES]
 for path in files:
     for number, line in enumerate(path.read_text().splitlines(), 1):
+        # Preserve the pinned vendor's unmodified Apache license header. This
+        # exact comment is attribution, not a runtime URL or a network API.
+        if (path.is_relative_to(ROOT / "Core/Sources/MaterialColorUtilities")
+                and line == "//      http://www.apache.org/licenses/LICENSE-2.0"):
+            continue
         if FORBIDDEN.search(line):
             errors.append(f"{path.relative_to(ROOT)}:{number}: network API/URL requires removal: {line.strip()}")
 dependency_files = ["Core/Package.swift", "project.yml"]
