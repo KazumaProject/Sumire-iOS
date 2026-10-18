@@ -98,6 +98,39 @@ xcodebuild -project Sumire.xcodeproj -scheme Sumire -sdk iphonesimulator \
   -derivedDataPath "$HOME/sumire-build/ios" CODE_SIGNING_ALLOWED=NO build
 ```
 
+Release の全辞書ベンチマークでは、測定対象のcommitをprovenanceに記録します。
+
+```sh
+export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
+xcodegen generate
+xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -derivedDataPath "$HOME/sumire-build/benchmark" CODE_SIGNING_ALLOWED=NO test
+```
+
+参照元の実辞書検証は、`SUMIRE_REFERENCE_ASSETS` を固定commit `df1f38315bf56d860d32919a3eaed6a75499e91e` のGit checkout内にある `app/src/main/assets` に設定します。テストはその場所を含むGit checkoutの実HEADと資産SHA-256の両方を照合します。単にファイルを展開したディレクトリではcommitを検証できないため受け付けません。
+
+```sh
+export SUMIRE_REFERENCE_ASSETS="$PWD/.reference/JapaneseKeyboard/app/src/main/assets"
+git -C "$SUMIRE_REFERENCE_ASSETS" rev-parse HEAD
+swift test --package-path Core --filter DictionarySourceValidationTests
+```
+
+実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` です。
+
+```sh
+export SUMIRE_REFERENCE_SOURCE_ZIP=/path/to/android-dictionary.zip
+export SUMIRE_REFERENCE_NATIVE_DICTIONARIES="$HOME/sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english"
+export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
+xcodegen generate
+xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
+  -destination 'platform=iOS Simulator,id=<simulator-udid>' \
+  -only-testing:SumireNativeTests/DictionaryGenerationIntegrationTests/testPinnedAndroidArchiveConvertsPublishesAndOpensAllDictionaries \
+  -derivedDataPath "$HOME/sumire-build/dictionary-import" CODE_SIGNING_ALLOWED=NO test
+```
+
+参照manifestの `source_revision` は固定Android revision `df1f38315bf56d860d32919a3eaed6a75499e91e` と照合し、変換された34ファイルのSHA-256を比較します。このSimulatorテストは実機App Groups共有やキーボード拡張のFull Access OFF動作を検証するものではありません。
+
 `project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
