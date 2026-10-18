@@ -13,7 +13,7 @@ public enum CustomKeyAction: Codable, Equatable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
         case paste = "Paste", cursorLeft = "MoveCursorLeft", nextKeyboard = "SwitchToNextIme"
-        case modifier = "小゛゜", changeMode = "ChangeInputMode"
+        case modifier = "小゛゜", changeMode = "ChangeInputMode", moveCustomKeyboardTab = "MoveCustomKeyboardTab"
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
     }
@@ -72,8 +72,14 @@ public struct CustomLayoutActionReview {
                 let definition = key.source["key"]
                 for field in ["action", "doubleTapAction"] {
                     if let raw = definition?[field]?.string {
+                        let action: CustomKeyAction
+                        if field == "doubleTapAction", definition?["doubleTapEnabled"] != .bool(false) {
+                            action = .unsupported(raw: raw, reason: "ダブルタップ操作は移植中です")
+                        } else {
+                            action = .tap(raw, targets: targets)
+                        }
                         items.append(Item(layoutID: layout.id, keyID: key.id, location: field,
-                                          action: .tap(raw, targets: targets)))
+                                          action: action))
                     }
                 }
                 for field in ["flicks", "circularFlicks"] {
@@ -82,6 +88,24 @@ public struct CustomLayoutActionReview {
                                           action: .flick(type: mapping["actionType"]?.string ?? "INPUT_TEXT",
                                                          value: mapping["actionValue"]?.string, targets: targets)))
                     }
+                }
+                for field in ["longPressFlicks", "twoStepFlicks", "twoStepLongPressFlicks"] {
+                    for (index, mapping) in (key.source[field]?.array ?? []).enumerated() {
+                        let action: CustomKeyAction
+                        if let output = mapping["output"]?.string {
+                            action = .text(output)
+                        } else {
+                            action = .unsupported(raw: "\(field)[\(index)]", reason: "出力文字がありません")
+                        }
+                        items.append(Item(layoutID: layout.id, keyID: key.id, location: "\(field)[\(index)]",
+                                          action: action))
+                    }
+                }
+                if let type = definition?["keyType"]?.string,
+                   !["NORMAL", "STANDARD_FLICK", "PETAL_FLICK", "CENTER_GUIDE_FLICK", "CROSS_FLICK",
+                     "CIRCULAR_FLICK", "TWO_STEP_FLICK", "STICKY_TWO_STEP_FLICK", "FLICK_LONG_PRESS"].contains(type) {
+                    items.append(Item(layoutID: layout.id, keyID: key.id, location: "key.keyType",
+                                      action: .unsupported(raw: type, reason: "このカスタム入力方式はiOS側で未対応です")))
                 }
             }
         }
