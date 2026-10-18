@@ -12,6 +12,7 @@ public struct ValidatedDictionarySource {
     public let tokenCount: Int
     /// Legal in the distributed English dictionary: term IDs need not cover every posting.
     public let unreferencedTokenCount: Int
+    let maximumUTF16Length: Int
     /// Japanese -1 = katakana reading; -2 = unchanged reading.
     /// English -1 = unchanged reading, encoded as -2 in the native dictionary.
     public func nativeSurfaceReference(at index: Int) throws -> Int64 {
@@ -81,7 +82,7 @@ public enum DictionarySourceValidation {
         }
         return .init(isEnglish: isEnglish, reading: reading, surface: surface, tokens: tokens,
                      surfaceParents: tango.parents, postingOffsets: offsets, tokenCount: count,
-                     unreferencedTokenCount: count - referenced)
+                     unreferencedTokenCount: count - referenced, maximumUTF16Length: limits.utf16Length)
     }
     private static func bad(_ part: String) -> PersonalDataError { PersonalDataError("辞書の構造が不正です: " + part) }
     private static func kinds(_ arrays: [DictionaryPrimitiveArray], _ expected: [DictionaryPrimitiveKind], _ part: String) throws {

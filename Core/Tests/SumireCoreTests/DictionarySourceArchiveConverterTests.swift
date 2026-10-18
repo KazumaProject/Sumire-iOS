@@ -117,6 +117,40 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
         ]
     }
 
+    private func longSurfaceSource(depth: Int) throws -> ValidatedDictionarySource {
+        var tree = [UInt64](repeating: 0, count: (depth * 2 + 1 + 63) / 64)
+        var leaves = [UInt64](repeating: 0, count: tree.count)
+        for position in stride(from: 0, through: depth * 2, by: 2) {
+            tree[position / 64] |= UInt64(1) << (position % 64)
+        }
+        leaves[(depth * 2) / 64] |= UInt64(1) << ((depth * 2) % 64)
+        let surface = try DictionaryJavaArrays.read(javaStream([
+            .init(kind: .longs, values: tree),
+            .init(kind: .longs, values: leaves),
+            .init(kind: .characters, values: [0, 0x20] + Array(repeating: 0x61, count: depth))
+        ]), kinds: [.longs, .longs, .characters])
+        let reading = try DictionaryJavaArrays.read(javaStream([
+            .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
+            .init(kind: .characters, values: [0, 0x20, 0x3042]), .init(kind: .ints, values: [1])
+        ]), kinds: [.longs, .longs, .characters, .ints])
+        let tokens = try DictionaryJavaArrays.read(javaStream([
+            .init(kind: .shorts, values: [0]), .init(kind: .shorts, values: [100]),
+            .init(kind: .ints, values: [UInt64(depth * 2)]), .init(kind: .longs, values: [0b10])
+        ]), kinds: [.shorts, .shorts, .ints, .longs])
+        var limits = DictionarySourceValidation.Limits()
+        limits.utf16Length = depth
+        return try DictionarySourceValidation.validate(reading: reading, surface: surface, tokens: tokens,
+                                                       posTableCount: 1, limits: limits)
+    }
+
+    func testConfiguredSurfaceLengthLimitIsHonoredByConversion() throws {
+        for depth in [4096, 4097] {
+            let source = try longSurfaceSource(depth: depth)
+            let sections = try SumireDictionarySourceConverter.sections(for: source)
+            XCTAssertEqual(sections[9].count, depth)
+        }
+    }
+
     func testConvertsNestedAndroidArchivesAndReportsMetadataAndUnknownEntries() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

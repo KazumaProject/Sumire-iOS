@@ -80,7 +80,7 @@ public enum SumireDictionarySourceConverter {
         var node = start
         while node > 1 {
             guard node < labels.count, node < source.surfaceParents.count,
-                  units.count < 4096 else { throw PersonalDataError("辞書の表記経路が不正です") }
+                  units.count < source.maximumUTF16Length else { throw PersonalDataError("辞書の表記経路が不正です") }
             let label = try labels.unsigned(at: node)
             guard label <= UInt64(UInt16.max) else { throw PersonalDataError("辞書の表記文字が不正です") }
             units.append(UInt16(label))
