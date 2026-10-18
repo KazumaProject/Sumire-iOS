@@ -45,6 +45,7 @@ void usage() {
                "or Java runtime.\n"
                "--max-states N bounds N-best states (default 200000); "
                "complete=false reports exhaustion.\n"
+               "--predict-japanese appends up to 4 system completions (3..16 UTF-16 input, lookahead 3).\n"
                "--prefix-candidates appends system reading-prefix matches with consumed UTF-16 ranges and word costs.\n"
                "--omission enables directional kana modifier omission (default "
                "OFF).\n"
@@ -65,6 +66,7 @@ int main(int argc, char **argv) {
     std::string dir;
     std::vector<std::string> categories, readings;
     bool prefix_candidates = false;
+    bool japanese_prediction = false;
     bool stream = false, list = false, lookup = false, omission = false, english = false, english_words = false, predict_english = false, english_candidates = false, include_english_reading = false;
     size_t count = 10, limit = 200000;
     for (int i = 1; i < argc; ++i) {
@@ -99,6 +101,8 @@ int main(int argc, char **argv) {
         count = number(value());
       else if (a == "--max-states")
         limit = number(value());
+      else if (a == "--predict-japanese")
+        japanese_prediction = true;
       else if (a == "--prefix-candidates")
         prefix_candidates = true;
       else if (a == "--omission")
@@ -166,7 +170,7 @@ int main(int argc, char **argv) {
     auto run = [&](const std::string &reading) {
       try {
         auto r = (predict_english || english_candidates) ? engine.predict_english(reading, count, english_candidates) : english_words ? engine.lookup_english(reading, count) : english ? engine.lookup_english_reading(reading, count) : lookup ? engine.lookup(reading, count)
-                        : engine.convert(reading, count, limit, omission, nullptr, nullptr, &workspace, prefix_candidates);
+                        : engine.convert(reading, count, limit, omission, nullptr, nullptr, &workspace, prefix_candidates, japanese_prediction);
         std::cout << "{\"reading\":" << json(reading)
                   << ",\"mode\":" << json(english_candidates ? "english" : predict_english ? "english-predict" : english_words ? "english-lookup" : english ? "english-reading-lookup" : lookup ? "lookup" : "convert")
                   << ",\"complete\":" << (r.complete ? "true" : "false")

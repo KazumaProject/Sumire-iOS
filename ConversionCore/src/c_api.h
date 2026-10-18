@@ -25,8 +25,10 @@ typedef struct {
   const char *reading;
   size_t reading_bytes;
   uint32_t edit_start_utf16;
-  uint32_t candidate_count; /* Primary N-best limit; enabled kana-to-English exact entries are appended. */
+  uint32_t candidate_count; /* Primary N-best limit, not total result limit. Japanese predictions merge by score; enabled auxiliary candidates may add results. */
   uint32_t max_states;
+  /* Bit 3 enables Japanese system completion: defaults 3..16 input units,
+   * lookahead 3, up to 4 additional candidates. Consumes the typed input only. */
   uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates. */
 } sumire_request;
 typedef struct {

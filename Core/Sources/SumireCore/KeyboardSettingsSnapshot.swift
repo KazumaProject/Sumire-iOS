@@ -25,6 +25,8 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         result["candidateRowCount"] = .number(1...3, integer: true)
         result["categoryMask"] = .number(0...Double(0x3fff_ffff), integer: true)
         result["theme.hue"] = .number(0...1, integer: false)
+        result["theme.saturation"] = .number(0...1, integer: false)
+        result["theme.brightness"] = .number(0...1, integer: false)
         result["theme.mode"] = .text(Set(KeyboardColorMode.allCases.map(\.rawValue)))
         result["sumire.keyArrangement"] = .text(Set(SumireKeyArrangement.allCases.map(\.rawValue)))
         for kind in KeyboardKind.allCases {
