@@ -235,6 +235,7 @@ enum ConversionBenchmarkProvenance {
             throw NSError(domain: "SumireBenchmark", code: 1,
                 userInfo: [NSLocalizedDescriptionKey: "Set test runner SUMIRE_BENCHMARK_REVISION to the 40-character source commit"])
         }
+        let beforeHash = ProcessMemory.sample()
         let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
         let files = try FileManager.default.contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
             .filter { $0.pathExtension == "sud" }.sorted { $0.lastPathComponent < $1.lastPathComponent }
@@ -245,14 +246,18 @@ enum ConversionBenchmarkProvenance {
             defer { try? handle.close() }
             var hash = SHA256()
             var size: UInt64 = 0
-            while let data = try handle.read(upToCount: 1_048_576), !data.isEmpty {
+            while try autoreleasepool(invoking: { () throws -> Bool in
+                guard let data = try handle.read(upToCount: 1_048_576), !data.isEmpty else { return false }
                 hash.update(data: data)
                 size += UInt64(data.count)
-            }
+                return true
+            }) {}
             hashes[file.lastPathComponent] = hash.finalize().map { String(format: "%02x", $0) }.joined()
             sizes[file.lastPathComponent] = size
         }
         return ["source_revision": revision,
+                "before_hash_footprint_bytes": beforeHash?.footprintBytes ?? 0,
+                "after_hash_footprint_bytes": ProcessMemory.sample()?.footprintBytes ?? 0,
                 "dictionary_manifest": try JSONSerialization.jsonObject(with: manifest),
                 "manifest_sha256": SHA256.hash(data: manifest).map { String(format: "%02x", $0) }.joined(),
                 "dictionary_file_sha256": hashes, "dictionary_file_bytes": sizes,
