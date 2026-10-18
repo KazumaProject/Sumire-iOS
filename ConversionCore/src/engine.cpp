@@ -1,5 +1,6 @@
 #include "engine.hpp"
 #include "dictionary_format.hpp"
+#include "standalone_dictionary.hpp"
 #include "bunsetsu.hpp"
 #include "unicode_case.hpp"
 #include <algorithm>
@@ -7,7 +8,9 @@
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <limits>
+#include <numeric>
 #include <queue>
 #include <span>
 #include <stdexcept>
@@ -15,6 +18,7 @@
 #include <sys/stat.h>
 #include <unistd.h>
 #include <unordered_set>
+#include <unordered_map>
 #include <zlib.h>
 namespace sumire {
 namespace {
@@ -168,9 +172,13 @@ struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
   std::unique_ptr<Dictionary> english_reading, english_words;
+  std::unique_ptr<detail::StandaloneDictionary> standalone;
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
-  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words)
+  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority)
       : connection(dir) {
+    const auto path = dir + "/standalone.sud";
+    if (standalone_priority && std::filesystem::exists(path))
+      standalone = std::make_unique<detail::StandaloneDictionary>(path);
     if (words) english_words = std::make_unique<Dictionary>(dir, "english");
     if (english) english_reading = std::make_unique<Dictionary>(dir, "english_reading");
     if (english_reading)
@@ -190,11 +198,13 @@ struct Engine::Impl {
         require(p < connection.left.size(), "token POS outside table");
   }
 };
-Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words)
-    : impl(std::make_unique<Impl>(dir, c, english, words)) {}
+Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority)
+    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority)) {}
 Engine::~Engine() = default;
+bool Engine::standalone_priority_available() const { return impl->standalone != nullptr; }
 size_t Engine::mapped_bytes() const {
   size_t n = impl->connection.file.size;
+  if (impl->standalone) n += impl->standalone->file.size;
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
   for (auto &d : impl->dictionaries)
@@ -489,6 +499,24 @@ Workspace::~Workspace() = default;
 void Workspace::purge() noexcept { impl->purge(); }
 size_t Workspace::retained_bytes() const noexcept { return impl->bytes(); }
 
+static void rank_primary(std::vector<Candidate> &candidates) {
+  std::vector<std::u16string> surfaces;
+  surfaces.reserve(candidates.size());
+  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
+  std::vector<size_t> order(candidates.size());
+  std::iota(order.begin(), order.end(), 0);
+  std::stable_sort(order.begin(), order.end(), [&](size_t a, size_t b) {
+    if (candidates[a].standalone_unigram_matched != candidates[b].standalone_unigram_matched)
+      return candidates[a].standalone_unigram_matched;
+    if (candidates[a].score != candidates[b].score) return candidates[a].score < candidates[b].score;
+    return surfaces[a] < surfaces[b]; // Kotlin String.compareTo uses UTF-16.
+  });
+  std::vector<Candidate> ranked;
+  ranked.reserve(candidates.size());
+  for (auto index : order) ranked.push_back(std::move(candidates[index]));
+  candidates = std::move(ranked);
+}
+
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
@@ -633,8 +661,19 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   };
   for (auto id : at[0])
     push(id, none, int64_t(conn.cost(0, nodes[id].left)) + nodes[id].cost);
+  auto literal = [&](const Node &node) {
+    if (node.start != 0 || node.end != reading.size() || node.correctedNode) return false;
+    return node.personal ? node.personal->text == input
+        : node.dict ? node.dict->surface(node.token, reading, 0, reading.size()) == input
+        : true;
+  };
+  const bool standaloneMayMatch = impl->standalone && impl->standalone->contains(input) &&
+      std::any_of(at[0].begin(), at[0].end(), [&](size_t i) { return literal(nodes[i]); });
+  // Preserve N even when callers request more than Android's safety window.
+  const size_t searchCount = standaloneMayMatch ? std::max(count, std::min(size_t(64), std::max(count * 4, size_t(32)))) : count;
+  bool standaloneFound = false;
   std::unordered_set<std::string> seen;
-  while (!heap.empty() && result.candidates.size() < count) {
+  while (!heap.empty() && result.candidates.size() < searchCount) {
     auto index = heap.front().index;
     std::pop_heap(heap.begin(), heap.end(), std::greater<Workspace::Impl::Item>());
     heap.pop_back();
@@ -663,15 +702,56 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              : n.dict   ? n.dict->name
                         : "unknown",
              uint32_t(n.start), uint32_t(n.end - n.start)});
+        if (n.dict && n.dict != impl->dictionaries.front().get() &&
+            std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
+          c.classified_categories.push_back(n.dict->name);
+      }
+      c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
+      if (c.standalone_unigram_matched) {
+        standaloneFound = true;
+        // A later single-node path can promote an earlier cheaper duplicate.
+        for (auto &existing : result.candidates)
+          if (existing.text == c.text) existing.standalone_unigram_matched = true;
       }
       if (seen.insert(c.text).second)
         result.candidates.push_back(std::move(c));
+      if (standaloneFound && result.candidates.size() >= count) break;
     } else
       for (size_t id : at[node.end])
         push(id, index,
              state.cost + conn.cost(node.right, nodes[id].left) +
                  nodes[id].cost);
   }
+  rank_primary(result.candidates);
+  if (result.candidates.size() > count) result.candidates.resize(count);
+  seen.clear();
+  std::unordered_map<std::string, size_t> primary;
+  for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
+  // Category exact matches are independent of the N-best search limit. Keep
+  // every homophone, but merge duplicate origins without fabricating segments.
+  for (size_t id : at[0]) {
+    const auto &node = nodes[id];
+    if (!node.dict || node.dict == impl->dictionaries.front().get() ||
+        node.end != reading.size() || node.correctedNode) continue;
+    Candidate exact;
+    exact.text = node.dict->surface(node.token, reading, 0, reading.size());
+    exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
+    exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
+    exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
+    auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
+    if (inserted) result.candidates.push_back(std::move(exact));
+    auto &winner = result.candidates[position->second];
+    const bool matched = winner.standalone_unigram_matched || exact.standalone_unigram_matched;
+    if (!inserted && exact.score < winner.score) {
+      exact.classified_categories = std::move(winner.classified_categories);
+      winner = std::move(exact);
+    }
+    winner.standalone_unigram_matched = matched;
+    if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
+      winner.classified_categories.push_back(node.dict->name);
+  }
+  rank_primary(result.candidates);
+  for (const auto &candidate : result.candidates) seen.insert(candidate.text);
   if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.
@@ -687,15 +767,13 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       if (best.size() > 4) best.pop_back();
     });
     result.complete = result.complete && complete;
-    const size_t full_count = result.candidates.size();
     for (const auto &prediction : best) {
       auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
       if (seen.insert(text).second)
         result.candidates.push_back({text, prediction.score,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
-    std::inplace_merge(result.candidates.begin(), result.candidates.begin() + full_count,
-                       result.candidates.end(), [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
+    rank_primary(result.candidates);
   }
   if (impl->english_reading && !reading.empty()) {
     const auto &d = *impl->english_reading;

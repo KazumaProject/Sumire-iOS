@@ -41,12 +41,15 @@ void usage() {
                "dictionary is always enabled.\n"
                "Categories default to none. Scores include BOS/EOS connection "
                "costs; lower is better.\n"
+               "Primary candidates rank standalone matches before score, then UTF-16 surface.\n"
+               "All category exact matches are merged independently of --nbest.\n"
                "UTF-16 segment ranges refer to the input reading. No network "
                "or Java runtime.\n"
                "--max-states N bounds N-best states (default 200000); "
                "complete=false reports exhaustion.\n"
                "--predict-japanese appends up to 4 system completions (3..16 UTF-16 input, lookahead 3).\n"
                "--prefix-candidates appends system reading-prefix matches with consumed UTF-16 ranges and word costs.\n"
+               "--no-standalone-priority disables the optional standalone.sud table.\n"
                "--omission enables directional kana modifier omission (default "
                "OFF).\n"
                "--english-reading appends exact kana-to-English entries after Japanese N-best.\n"
@@ -67,6 +70,7 @@ int main(int argc, char **argv) {
     std::vector<std::string> categories, readings;
     bool prefix_candidates = false;
     bool japanese_prediction = false;
+    bool standalone_priority = true;
     bool stream = false, list = false, lookup = false, omission = false, english = false, english_words = false, predict_english = false, english_candidates = false, include_english_reading = false;
     size_t count = 10, limit = 200000;
     for (int i = 1; i < argc; ++i) {
@@ -103,6 +107,8 @@ int main(int argc, char **argv) {
         limit = number(value());
       else if (a == "--predict-japanese")
         japanese_prediction = true;
+      else if (a == "--no-standalone-priority")
+        standalone_priority = false;
       else if (a == "--prefix-candidates")
         prefix_candidates = true;
       else if (a == "--omission")
@@ -161,7 +167,7 @@ int main(int argc, char **argv) {
     if (count < 1 || count > 100 || limit < 1 || limit > 2000000)
       throw std::runtime_error("invalid search limits");
     auto start = std::chrono::steady_clock::now();
-    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates);
+    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates, standalone_priority);
     sumire::Workspace workspace;
     double load = std::chrono::duration<double, std::milli>(
                       std::chrono::steady_clock::now() - start)
@@ -177,6 +183,7 @@ int main(int argc, char **argv) {
                   << ",\"load_ms\":" << load
                   << ",\"conversion_ms\":" << r.elapsed_ms
                   << ",\"mapped_bytes\":" << engine.mapped_bytes()
+                  << ",\"standalone_priority_available\":" << (engine.standalone_priority_available() ? "true" : "false")
                   << ",\"workspace_cache_bytes\":" << workspace.retained_bytes()
                   << ",\"reused_search_rows\":" << r.reused_search_rows
                   << ",\"searched_rows\":" << r.searched_rows
@@ -197,6 +204,12 @@ int main(int argc, char **argv) {
                       << ",\"dictionary\":" << json(s.dictionary)
                       << ",\"start_utf16\":" << s.start
                       << ",\"length_utf16\":" << s.length << '}';
+          }
+          std::cout << "],\"standalone_unigram_matched\":" << (c.standalone_unigram_matched ? "true" : "false")
+                    << ",\"categories\":[";
+          for (size_t j = 0; j < c.classified_categories.size(); ++j) {
+            if (j) std::cout << ',';
+            std::cout << json(c.classified_categories[j]);
           }
           std::cout << "],\"bunsetsu_boundaries_utf16\":[";
           for (size_t j = 0; j < c.bunsetsu_boundaries.size(); ++j) {

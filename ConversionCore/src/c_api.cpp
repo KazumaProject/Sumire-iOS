@@ -135,7 +135,7 @@ int sumire_engine_open_with_dictionaries(const char *directory, uint32_t mask,
   if (out) *out = nullptr;
   return guarded(error, size, [&] {
     check(out && directory, "null engine argument");
-    check((flags & ~uint32_t(3)) == 0, "unknown dictionary flags");
+    check((flags & ~uint32_t(7)) == 0, "unknown dictionary flags");
     check((mask >> 30) == 0, "unknown category mask");
     std::vector<std::string> categories;
     auto names = sumire::category_names();
@@ -143,11 +143,14 @@ int sumire_engine_open_with_dictionaries(const char *directory, uint32_t mask,
       if (mask & (uint32_t(1) << i))
         categories.push_back(names[i]);
     auto e = std::make_unique<sumire_engine>();
-    e->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0, (flags & 1) != 0);
+    e->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0, (flags & 1) != 0, (flags & 4) == 0);
     *out = e.release();
   });
 }
 void sumire_engine_close(sumire_engine *engine) { delete engine; }
+int sumire_engine_has_standalone_priority(const sumire_engine *engine) {
+  return engine && engine->value->standalone_priority_available() ? 1 : 0;
+}
 int sumire_session_create(sumire_engine *engine, sumire_session **out,
                           char *error, size_t size) {
   if (out)
@@ -225,6 +228,16 @@ int sumire_result_segment(const sumire_result *result, size_t candidate,
     return -1;
   const auto &s = segments[index];
   *out = {string(s.text), string(s.dictionary), s.start, s.length};
+  return 0;
+}
+size_t sumire_result_category_count(const sumire_result *result, size_t candidate) {
+  return result && candidate < sumire_result_count(result)
+      ? result->snapshot->value.candidates[candidate].classified_categories.size() : 0;
+}
+int sumire_result_category(const sumire_result *result, size_t candidate,
+                           size_t index, sumire_string *out) {
+  if (!out || index >= sumire_result_category_count(result, candidate)) return -1;
+  *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
   return 0;
 }
 size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidate) {

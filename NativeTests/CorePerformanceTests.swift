@@ -4,7 +4,7 @@ import CryptoKit
 
 final class CorePerformanceTests: XCTestCase {
     func testUnicodeEnglishUppercaseWithBundledDictionary() throws {
-        let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
+        let directory = try XCTUnwrap(ConversionService.bundledDictionary)
         var error = [CChar](repeating: 0, count: 1024)
         var engine: OpaquePointer?
         XCTAssertEqual(sumire_engine_open_with_dictionaries(directory.path, 0, 1, &engine, &error, error.count), 0, String(cString: error))
@@ -62,7 +62,7 @@ final class CorePerformanceTests: XCTestCase {
         #if DEBUG
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
-        let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
+        let directory = try XCTUnwrap(ConversionService.bundledDictionary)
         let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
         var cycles: [[String: Any]] = []
         let baseline = try footprint()
@@ -127,7 +127,7 @@ final class CorePerformanceTests: XCTestCase {
         #if DEBUG
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
-        let directory = Bundle.main.bundleURL.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1")
+        let directory = try XCTUnwrap(ConversionService.bundledDictionary)
         let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
         let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
         let japaneseFlags: UInt32 = prediction ? 12 : 4

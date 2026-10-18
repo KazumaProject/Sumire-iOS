@@ -15,6 +15,10 @@ def bits(values):
     return array.array('Q',words)
 
 def dictionary(path,entries):
+    def units(value):
+        data=value.encode('utf-16-le','surrogatepass')
+        return ''.join(chr(v) for v in struct.unpack('<'+'H'*(len(data)//2),data))
+    entries=[(units(reading),*rest) for reading,*rest in entries]
     root={}
     for reading,*_ in entries:
         node=root
@@ -44,6 +48,11 @@ def connection(path):
     sections=[array.array('H',[0,1,2]),array.array('H',[0,1,2]),array.array('h',[0,0,0]),array.array('Q',[6,7,7]),array.array('h',[10,20,30,-50,70,40,-80,90]),array.array('I',[0,2,5,8]),array.array('H',[0,0,0])]
     b.pack_file(path,2,3,[b.le(a) for a in sections])
 
+def standalone(path,words):
+    offsets=array.array('I',[0]);text=bytearray()
+    for word in sorted(w.encode() for w in words):text.extend(word);offsets.append(len(text))
+    b.pack_file(path,3,len(words),[b.le(offsets),bytes(text)])
+
 def brute(reading,entries):
     paths=[]
     def visit(i,rid,cost,text):
@@ -58,6 +67,59 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def test_classified_exact_candidates_ignore_nbest_count_and_use_utf16_ties(self):
+        dictionary(self.data/'system.sud',[('あい','Primary',1,-1000)])
+        surfaces=['甲','乙','丙','\U00010000','\ue000']+[f'Word{i}' for i in range(12)]
+        dictionary(self.data/'medical.sud',[('あい',s,1,10) for s in surfaces])
+        result=json.loads(self.run_cli('--categories','medical','--nbest','1','あい').stdout)
+        candidates=result['candidates']
+        self.assertEqual(len(candidates),len(surfaces)+1)
+        self.assertEqual(candidates[0]['text'],'Primary')
+        self.assertEqual([c['text'] for c in candidates[1:]],sorted(surfaces,key=lambda s:s.encode('utf-16-be')))
+        self.assertTrue(all(c['categories']==['medical'] for c in candidates[1:]))
+        self.assertLessEqual(result['workspace_cache_bytes'],4*1024*1024)
+    def test_exact_origins_union_without_replacing_lower_cost_selected_path(self):
+        dictionary(self.data/'system.sud',[('あい','Same',1,-1000)])
+        dictionary(self.data/'medical.sud',[('あい','Same',1,10)])
+        dictionary(self.data/'person.sud',[('あい','Same',2,20)])
+        candidates=json.loads(self.run_cli('--categories','medical,person','--nbest','1','あい').stdout)['candidates']
+        self.assertEqual(len(candidates),1)
+        self.assertEqual(candidates[0]['score'],-960)
+        self.assertEqual(candidates[0]['categories'],['medical','person'])
+        self.assertEqual(candidates[0]['segments'][0]['dictionary'],'system')
+    def test_standalone_later_duplicate_promotes_without_lowering_score(self):
+        entries=[('し','し',1,-100),('ろ','ろ',1,-100),('しろ','城',1,-500),('しろ','しろ',1,100)]
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['しろ','ごと'])
+        for n in [1,4,10,20,100]:
+            enabled=json.loads(self.run_cli('--nbest',str(n),'しろ').stdout)['candidates']
+            self.assertEqual(enabled[0]['text'],'しろ')
+            self.assertEqual(enabled[0]['score'],-210)
+            self.assertTrue(enabled[0]['standalone_unigram_matched'])
+            self.assertEqual(len(enabled[0]['segments']),2)
+        disabled=json.loads(self.run_cli('--no-standalone-priority','--nbest','1','しろ').stdout)['candidates']
+        self.assertEqual(disabled[0]['text'],'城')
+        self.assertFalse(disabled[0]['standalone_unigram_matched'])
+        compound=json.loads(self.run_cli('--nbest','10','しろあ').stdout)['candidates']
+        self.assertFalse(any(c['standalone_unigram_matched'] for c in compound))
+        dictionary(self.data/'system.sud',[('ごと','ごと',1,-100)])
+        corrected=json.loads(self.run_cli('--omission','こと').stdout)['candidates']
+        self.assertFalse(any(c['standalone_unigram_matched'] for c in corrected))
+        dictionary(self.data/'system.sud',[('しろ','しろ',1,0)]+[('しろ',f'Word{i}',1,i+1) for i in range(110)])
+        large=json.loads(self.run_cli('--nbest','100','しろ').stdout)['candidates']
+        self.assertEqual(len(large),100)  # Safety lookahead must not cap N at64.
+        self.assertEqual(large[0]['text'],'しろ')
+    def test_corrupt_standalone_fails_closed_but_disabled_table_is_not_opened(self):
+        standalone(self.data/'standalone.sud',['しろ'])
+        path=self.data/'standalone.sud';good=path.read_bytes()
+        for damaged in [good[:-1],good[:70],good[:-1]+bytes([good[-1]^1])]:
+            path.write_bytes(damaged);self.run_cli('しろ',ok=False)
+            self.run_cli('--no-standalone-priority','しろ')
+        # Structurally valid CRC is insufficient: reject unordered words/UTF8.
+        b.pack_file(path,3,2,[b.le(array.array('I',[0,1,2])),b'ba'])
+        self.run_cli('しろ',ok=False)
+        b.pack_file(path,3,1,[b.le(array.array('I',[0,1])),b'\xff'])
+        self.run_cli('しろ',ok=False)
     def test_japanese_completion_defaults_and_preserved_full_candidates(self):
         entries=[('あいう','Exact',1,100), ('あいうえ','Next',1,-9000),
                  ('あいうえお','Long',1,-9000), ('あいうえおか','Longest',1,-9000),
@@ -239,6 +301,8 @@ class Tests(unittest.TestCase):
 
     def test_incremental_search_rows_match_fresh_conversion(self):
         if INCREMENTAL is None:self.skipTest("Incremental executable not supplied")
+        dictionary(self.data/'system.sud',ENTRIES+[('しろ','しろ',1,100),('しろ','城',1,-500)])
+        standalone(self.data/'standalone.sud',['しろ'])
         result=subprocess.run([INCREMENTAL,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
         self.assertIn(b'reused_search_rows=',result.stdout)
@@ -247,6 +311,8 @@ class Tests(unittest.TestCase):
         if C_API is None:self.skipTest("C ABI executable not supplied")
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
+        dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
+        standalone(self.data/'standalone.sud',['しろ'])
         result=subprocess.run([C_API,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
     def test_exhaustive_nbest(self):

@@ -76,6 +76,85 @@ def pack_file(path,kind,dimension,sections):
         desc.append(struct.pack('<QQII',offset,len(s),zlib.crc32(s),0));payload.extend(s);offset+=len(s)
     path.write_bytes(header+b''.join(desc)+payload)
 
+def standalone_words(data):
+    """Validate/decode fixed GNKJ v5; no Java objects or runtime hash table.
+
+    Binary contract: Android PackedSystemNgramDictionary, fixed source revision.
+    Only the whole-input word signature is accepted. Values are not inferred
+    from stale tests or duplicated as hard-coded vocabulary.
+    """
+    if not 80 <= len(data) <= 1024*1024: raise ValueError('invalid standalone size')
+    h=struct.unpack_from('<20I',data)
+    magic,version,count,contexts,pos_count,signatures,max_key,block_size,sig_off,ctx_off,bucket_off,hash_off,block_off,record_off,total,crc,buckets,blocks,*_=h
+    if magic!=0x4a4b4e47 or version!=5 or total!=len(data) or crc!=zlib.crc32(data[80:]):raise ValueError('invalid standalone header/checksum')
+    if not (0<count<=100000 and 0<contexts<=100000 and 1<=pos_count<=255 and 1<=signatures<=count and 1<=max_key<=32768 and block_size==16):raise ValueError('invalid standalone dimensions')
+    if not (256<=buckets<=65536 and buckets&(buckets-1)==0 and blocks==(count+15)//16):raise ValueError('invalid standalone index dimensions')
+    expected_ctx=80+4*signatures;expected_bucket=(expected_ctx+contexts+3)&~3
+    if (sig_off,ctx_off,bucket_off,hash_off,block_off,record_off)!=(80,expected_ctx,expected_bucket,expected_bucket+4*(buckets+1),expected_bucket+4*(buckets+1)+10*count,expected_bucket+4*(buckets+1)+10*count+4*(blocks+1)) or record_off>len(data):raise ValueError('invalid standalone sections')
+    sigs=struct.unpack_from('<'+'I'*signatures,data,sig_off)
+    if any(s!=9 for s in sigs) or len(set(sigs))!=len(sigs):raise ValueError('unsupported standalone signature')
+    if any(not 1<=p<=pos_count for p in data[ctx_off:ctx_off+contexts]):raise ValueError('invalid standalone POS')
+    starts=struct.unpack_from('<'+'I'*(buckets+1),data,bucket_off)
+    offsets=struct.unpack_from('<'+'I'*(blocks+1),data,block_off)
+    if starts[0]!=0 or starts[-1]!=count or any(a>b for a,b in zip(starts,starts[1:])):raise ValueError('invalid standalone buckets')
+    if offsets[0]!=0 or offsets[-1]!=len(data)-record_off or any(a>b for a,b in zip(offsets,offsets[1:])):raise ValueError('invalid standalone blocks')
+    def var(position,end):
+        value=0
+        for shift in range(0,35,7):
+            if position>=end:raise ValueError('truncated standalone varint')
+            byte=data[position];position+=1;value|=(byte&127)<<shift
+            if not byte&128:
+                if shift==28 and byte>15:raise ValueError('standalone varint overflow')
+                return value,position
+        raise ValueError('standalone varint overflow')
+    records=[];words=[];decoded_bytes=0
+    for block in range(blocks):
+        at=record_off+offsets[block];end=record_off+offsets[block+1];previous=b''
+        for i in range(min(16,count-16*block)):
+            if i==0:prefix=0
+            else:prefix,at=var(at,end)
+            size,at=var(at,end)
+            if prefix>len(previous) or not 1<=prefix+size<=max_key or size>end-at:raise ValueError('invalid standalone record')
+            record=previous[:prefix]+data[at:at+size];at+=size;previous=record
+            decoded_bytes+=len(record)
+            if decoded_bytes>4*1024*1024:raise ValueError('standalone decoded limit exceeded')
+            if record[:2]!=b'\x09\x00':raise ValueError('invalid standalone word signature')
+            # The key's word length is another unsigned varint.
+            value=shift=0;position=2
+            while position<len(record) and shift<=28:
+                byte=record[position];position+=1;value|=(byte&127)<<shift
+                if not byte&128:break
+                shift+=7
+            else:raise ValueError('invalid standalone word length')
+            if position>3 and record[position-1]==0:raise ValueError('noncanonical standalone word length')
+            word=record[position:]
+            if value!=len(word) or not word:raise ValueError('invalid standalone word length')
+            word.decode('utf-8')
+            records.append(record);words.append(word)
+        if at!=end:raise ValueError('trailing standalone block data')
+    # Check every decoded record is reachable through the original hash index.
+    mask=(1<<64)-1;entries=set()
+    for bucket in range(buckets):
+        previous=(-1,-1)
+        for entry in range(starts[bucket],starts[bucket+1]):
+            at=hash_off+10*entry;remainder=int.from_bytes(data[at:at+6],'little');record_id=struct.unpack_from('<I',data,at+6)[0]
+            if record_id>=count or (remainder,record_id)<=previous:raise ValueError('invalid standalone hash entry')
+            previous=(remainder,record_id);entries.add((bucket,remainder,record_id))
+    for record_id,record in enumerate(records):
+        value=(-3750763034362895579)&mask
+        for byte in record:value=((value^byte)*1099511628211)&mask
+        value=((value^(value>>33))*(-49064778989728563))&mask
+        value=((value^(value>>33))*(-4265267296055464877))&mask;value^=value>>33
+        if (value>>(64-(buckets.bit_length()-1)),value&((1<<48)-1),record_id) not in entries:raise ValueError('unreachable standalone record')
+    if len(set(words))!=count:raise ValueError('duplicate standalone words')
+    return sorted(words)
+
+def pack_standalone(path,data):
+    words=standalone_words(data);offsets=array.array('I',[0]);text=bytearray()
+    for word in words:text.extend(word);offsets.append(len(text))
+    pack_file(path,3,len(words),[le(offsets),bytes(text)])
+    return len(words)
+
 class Bits:
     def __init__(self,a):
         self.a=[x & ((1<<64)-1) for x in a];self.prefix=[0]
@@ -97,7 +176,7 @@ def build(source,output,english_reading=False,english=False):
     if revision!=REVISION:raise ValueError('reference revision differs from pinned revision')
     dictionary_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
     if english_reading:dictionary_sources['english_reading']='english_reading'
-    paths=['pos_table.dat','connectionId.dat.zip']+[f'{d}/{f}.dat.zip' for d in dictionary_sources.values() for f in ['yomi','tango','token']]
+    paths=['pos_table.dat','connectionId.dat.zip','ngram/system_ngram_standalone_unigram.dat']+[f'{d}/{f}.dat.zip' for d in dictionary_sources.values() for f in ['yomi','tango','token']]
     if english:
         dictionary_sources['english']='english'
         paths += ['english/reading.dat.zip','english/word.dat','english/token.dat.zip']
@@ -179,6 +258,8 @@ def build(source,output,english_reading=False,english=False):
             pack_file(dest/(name+'.sud'),1,0,[le(a) for a in [lbs,labels,leaf,terms,postings,pos,cost,refs,offsets]]+[bytes(blob)])
             summary[name]={'entries':len(pos),'readings':len(terms),'bytes':(dest/(name+'.sud')).stat().st_size}
             print(name,summary[name],file=sys.stderr,flush=True)
+        standalone_count=pack_standalone(dest/'standalone.sud',read('ngram/system_ngram_standalone_unigram.dat'))
+        summary['standalone']={'rules':standalone_count,'bytes':(dest/'standalone.sud').stat().st_size}
         shutil.copytree(assets/'licenses',dest/'licenses')
         shutil.copy2(source/'LICENSE',dest/'SOURCE-LICENSE')
         manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Lossless array and surface re-encoding; connection row defaults plus exact exceptions. See copied licenses for data terms.'}
