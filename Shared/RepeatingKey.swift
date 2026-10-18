@@ -5,6 +5,7 @@ import SumireCore
 /// ordinary release action so lifting a held key does not emit an extra edit.
 final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchParticipant {
     weak var touchRouter: KeyTouchRouter?
+    var touchPolicy: (() -> (exclusive: Bool, blocksFollowing: Bool))?
     var exclusiveTouchAction = false
     /// The reference bypasses subsequent fingers on IME-switch / emoji keys
     /// even when independent multi-touch is disabled.
@@ -19,7 +20,8 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
 
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isEnabled, activeTouch == nil, let touch = touches.first else { return }
-        guard touchRouter?.begin(self, exclusive: exclusiveTouchAction, blocksSequentialTouches: blocksSequentialTouches) != false else { return }
+        let policy = touchPolicy?() ?? (exclusiveTouchAction, blocksSequentialTouches)
+        guard touchRouter?.begin(self, exclusive: policy.0, blocksSequentialTouches: policy.1) != false else { return }
         activeTouch = touch; emission.begin(); inside = true
         super.touchesBegan([touch], with: event)
     }

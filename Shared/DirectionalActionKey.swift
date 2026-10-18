@@ -5,6 +5,7 @@ import SumireCore
 /// A repeated gesture emits no additional action on release.
 final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     weak var touchRouter: KeyTouchRouter?
+    var touchPolicy: (() -> (exclusive: Bool, blocksFollowing: Bool))?
     var exclusiveTouchAction = false
     /// The reference bypasses subsequent fingers on IME-switch / emoji keys
     /// even when independent multi-touch is disabled.
@@ -20,7 +21,8 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     private var timer: Timer?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isEnabled, touch == nil, let first = touches.first else { return }
-        guard touchRouter?.begin(self, exclusive: exclusiveTouchAction, blocksSequentialTouches: blocksSequentialTouches) != false else { return }
+        let policy = touchPolicy?() ?? (exclusiveTouchAction, blocksSequentialTouches)
+        guard touchRouter?.begin(self, exclusive: policy.0, blocksSequentialTouches: policy.1) != false else { return }
         touch = first; origin = first.location(in: window)
         direction = .tap; emitted = false; isHighlighted = true
         scheduleInitialHold()

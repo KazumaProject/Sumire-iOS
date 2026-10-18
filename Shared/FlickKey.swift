@@ -5,6 +5,7 @@ import SumireCore
 /// is allowed for flicks; cancellation emits nothing. No per-frame view creation.
 final class FlickKey: UIButton, KeyTouchParticipant {
     weak var touchRouter: KeyTouchRouter?
+    var touchPolicy: (() -> (exclusive: Bool, blocksFollowing: Bool))?
     var exclusiveTouchAction = false
     /// The reference bypasses subsequent fingers on IME-switch / emoji keys
     /// even when independent multi-touch is disabled.
@@ -120,7 +121,8 @@ final class FlickKey: UIButton, KeyTouchParticipant {
     }
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isEnabled, tracked == nil, let touch = touches.first else { return }
-        guard touchRouter?.begin(self, exclusive: exclusiveTouchAction, blocksSequentialTouches: blocksSequentialTouches) != false else { return }
+        let policy = touchPolicy?() ?? (exclusiveTouchAction, blocksSequentialTouches)
+        guard touchRouter?.begin(self, exclusive: policy.0, blocksSequentialTouches: policy.1) != false else { return }
         tracked = touch; start = touch.location(in: window); isHighlighted = true
         gestureSettings = feedbackSettings.normalized()
         selectedDirection = .tap
