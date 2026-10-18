@@ -10,26 +10,26 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
         }
         XCTAssertEqual(action(.cursorLeft, .tap), .cursorLeft)
         XCTAssertEqual(action(.cursorLeft, .right), .cursorRight)
-        XCTAssertEqual(action(.cursorLeft, .left), .none)
-        XCTAssertEqual(action(.cursorLeft, .up), .none)
+        XCTAssertEqual(action(.cursorLeft, .left), .doNothing)
+        XCTAssertEqual(action(.cursorLeft, .up), .doNothing)
         XCTAssertEqual(action(.cursorLeft, .up, .cursor), .cursorUp)
         XCTAssertEqual(action(.cursorLeft, .down, .toggle, .english), .cursorDown)
         XCTAssertEqual(action(.cursorRight, .left, .flick), .cursorLeft)
-        XCTAssertEqual(action(.cursorRight, .up, .flick), .none)
+        XCTAssertEqual(action(.cursorRight, .up, .flick), .doNothing)
         XCTAssertEqual(action(.delete, .left), .deleteUntilBoundary)
-        XCTAssertEqual(action(.delete, .up), .none)
-        XCTAssertEqual(action(.delete, .down), .none)
+        XCTAssertEqual(action(.delete, .up), .doNothing)
+        XCTAssertEqual(action(.delete, .down), .doNothing)
         XCTAssertEqual(action(.paste, .up), .selectAll)
         XCTAssertEqual(action(.paste, .right), .copy)
         XCTAssertEqual(action(.spaceConvert, .tap), .space)
         XCTAssertEqual(action(.spaceConvert, .tap, composing: true), .convert)
-        XCTAssertEqual(action(.spaceConvert, .left, composing: true), .none)
+        XCTAssertEqual(action(.spaceConvert, .left, composing: true), .doNothing)
         XCTAssertEqual(action(.enter, .tap, composing: true), .confirm)
         XCTAssertEqual(action(.katakanaToggle, .tap, .cursor), .switchNumber)
         XCTAssertEqual(action(.katakanaToggle, .tap, .cursor, composing: true), .toggleKatakana)
         XCTAssertEqual(action(.keyboardSwitch, .longPress), .keyboardMenu)
         XCTAssertEqual(action(.delete, .longPress), .deleteBackward)
-        XCTAssertEqual(action(.paste, .longPress), .none)
+        XCTAssertEqual(action(.paste, .longPress), .doNothing)
     }
 
     func testOverridesPersistIndependentlyAndResetRestoresDynamicDefault() throws {
@@ -38,13 +38,13 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         var settings = try SumireSpecialKeySettings.load(defaults: defaults)
         try settings.set(.undoDelete, for: .delete, gesture: .down, arrangement: .toggle, mode: .japanese)
-        try settings.set(SumireSpecialKeyAction.none, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
+        try settings.set(.doNothing, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
         try settings.set(.cursorRight, for: .delete, gesture: .longPress, arrangement: .toggle, mode: .japanese)
         try settings.set(.copy, for: .spaceConvert, gesture: .tap, arrangement: .cursor, mode: .english)
         try settings.save(defaults: defaults)
         settings = try SumireSpecialKeySettings.load(defaults: UserDefaults(suiteName: name)!)
         XCTAssertEqual(settings.action(for: .delete, gesture: .down, arrangement: .toggle, mode: .japanese), .undoDelete)
-        XCTAssertEqual(settings.action(for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese), .none)
+        XCTAssertEqual(settings.action(for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese), .doNothing)
         XCTAssertEqual(settings.action(for: .delete, gesture: .left, arrangement: .flick, mode: .japanese), .deleteUntilBoundary)
         XCTAssertEqual(settings.action(for: .delete, gesture: .left, arrangement: .toggle, mode: .english), .deleteUntilBoundary)
         XCTAssertEqual(settings.action(for: .delete, gesture: .longPress, arrangement: .toggle, mode: .japanese), .cursorRight)
@@ -60,7 +60,19 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
         try settings.set(.cursorRight, for: .delete, gesture: .tap, arrangement: .toggle, mode: .japanese)
         XCTAssertEqual(settings.action(for: .delete, gesture: .longPress, arrangement: .toggle, mode: .japanese), .cursorRight)
         try settings.set(.paste, for: .delete, gesture: .tap, arrangement: .toggle, mode: .japanese)
-        XCTAssertEqual(settings.action(for: .delete, gesture: .longPress, arrangement: .toggle, mode: .japanese), .none)
+        XCTAssertEqual(settings.action(for: .delete, gesture: .longPress, arrangement: .toggle, mode: .japanese), .doNothing)
+    }
+
+    func testExplicitNoOperationKeepsLegacyStoredValueAndDiffersFromDefault() throws {
+        XCTAssertEqual(SumireSpecialKeyAction.doNothing.rawValue, "none")
+        XCTAssertEqual(try JSONDecoder().decode(SumireSpecialKeyAction.self, from: Data("\"none\"".utf8)), .doNothing)
+        var settings = SumireSpecialKeySettings()
+        try settings.set(.doNothing, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
+        let restored = try SumireSpecialKeySettings.decode(JSONEncoder().encode(settings))
+        XCTAssertEqual(restored.assignedAction(for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese), .doNothing)
+        try settings.set(nil, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
+        XCTAssertNil(settings.assignedAction(for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese))
+        XCTAssertEqual(settings.action(for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese), .deleteUntilBoundary)
     }
 
     func testCorruptionUnknownActionsDuplicatesAndVersionsDoNotOverwriteSavedData() throws {

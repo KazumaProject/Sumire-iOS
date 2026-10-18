@@ -58,14 +58,15 @@ public enum SumireSpecialKeyID: String, Codable, CaseIterable {
 /// Semantic actions only. The UIKit host implements document operations; this
 /// model never substitutes another operation for an unavailable host action.
 public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
-    case none, deleteBackward, deleteUntilBoundary, deleteAfterCursorUntilBoundary, undoDelete
+    case doNothing = "none"
+    case deleteBackward, deleteUntilBoundary, deleteAfterCursorUntilBoundary, undoDelete
     case cursorLeft, cursorRight, cursorUp, cursorDown
     case paste, copy, cut, selectAll, space, convert, enter, confirm
     case nextKeyboard, keyboardMenu, changeInputMode, switchKana, switchEnglish, switchNumber
     case toggleKatakana, toggleDakuten, openSymbols, insertColon, insertHyphen
     public var title: String {
         switch self {
-        case .none: return "何もしない"
+        case .doNothing: return "何もしない"
         case .deleteBackward: return "1文字削除"
         case .deleteUntilBoundary: return "未確定文字を全削除／区切りまで前方削除"
         case .deleteAfterCursorUntilBoundary: return "カーソル後を区切りまで削除"
@@ -105,7 +106,7 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
 
 /// Sparse overrides, partitioned like the reference editor by layout, input
 /// mode, key ID and direction. An absent override follows the dynamic default;
-/// `.none` explicitly disables that gesture.
+/// `.doNothing` explicitly disables that gesture.
 public struct SumireSpecialKeySettings: Codable, Equatable {
     public static let storageKey = "sumire.specialKeyActions"
     public static let maximumBytes = 128 * 1024
@@ -142,13 +143,13 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
         if gesture == .longPress {
             if key == .keyboardSwitch { return .keyboardMenu }
             let tap = defaultAction(for: key, gesture: .tap, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
-            return tap.isRepeatable ? tap : .none
+            return tap.isRepeatable ? tap : .doNothing
         }
         switch key {
         case .delete:
             // The reference enables only left-delete-until-symbol by default.
             if gesture == .tap { return .deleteBackward }
-            return gesture == .left ? .deleteUntilBoundary : .none
+            return gesture == .left ? .deleteUntilBoundary : .doNothing
         case .cursorLeft, .cursorRight:
             if gesture == .tap { return key == .cursorLeft ? .cursorLeft : .cursorRight }
             if gesture == .right, key == .cursorLeft { return .cursorRight }
@@ -164,17 +165,17 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
                 default: break
                 }
             }
-            return .none
+            return .doNothing
         case .paste:
             if gesture == .tap { return .paste }
             if gesture == .up { return .selectAll }
-            return gesture == .right ? .copy : .none
+            return gesture == .right ? .copy : .doNothing
         case .spaceConvert:
             if gesture == .tap { return hasComposition ? .convert : .space }
             // The conversion state has only a tap mapping in the reference.
-            return gesture == .left && !hasComposition ? .space : .none
+            return gesture == .left && !hasComposition ? .space : .doNothing
         default:
-            guard gesture == .tap else { return .none }
+            guard gesture == .tap else { return .doNothing }
             switch key {
             case .enter: return hasComposition ? .confirm : .enter
             case .keyboardSwitch: return .nextKeyboard
@@ -185,7 +186,7 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
             case .katakanaToggle: return hasComposition ? .toggleKatakana : .switchNumber
             case .colon: return .insertColon
             case .hyphen: return .insertHyphen
-            default: return .none
+            default: return .doNothing
             }
         }
     }
@@ -200,7 +201,7 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
         if let assigned = assignedAction(for: key, gesture: gesture, arrangement: arrangement, mode: mode) { return assigned }
         if gesture == .longPress, key != .keyboardSwitch {
             let tap = action(for: key, gesture: .tap, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
-            return tap.isRepeatable ? tap : .none
+            return tap.isRepeatable ? tap : .doNothing
         }
         return Self.defaultAction(for: key, gesture: gesture, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
     }
