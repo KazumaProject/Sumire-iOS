@@ -12,6 +12,7 @@ final class BunsetsuProjectionTests: XCTestCase {
         let result = try BunsetsuProjection.project(reading: "きょうはとうきょうにいきます", candidate: "今日は東京に行きます", tokens: tokens, boundaries: [4, 10])
         XCTAssertEqual(result.map(\.text), ["今日は", "東京に", "行きます"])
         XCTAssertEqual(result.map(\.reading), ["きょうは", "とうきょうに", "いきます"])
+        XCTAssertEqual(BunsetsuProjection.firstReadingPrefix(in: result, reading: "きょうはとうきょうにいきます"), "きょうは")
         var selection = BunsetsuSelection(segments: result)
         try selection.select(2)
         XCTAssertEqual(selection.alternatives(["生きます", "行きます", "生きます"]), ["行きます", "生きます"])
@@ -33,7 +34,15 @@ final class BunsetsuProjectionTests: XCTestCase {
         let a = BunsetsuToken(readingRange: NSRange(location: 2, length: 1), text: "亜")
         let result = try BunsetsuProjection.project(reading: "😀あ", candidate: "😀亜", tokens: [emoji, a], boundaries: [2])
         XCTAssertEqual(result.map(\.reading), ["😀", "あ"])
+        XCTAssertEqual(BunsetsuProjection.firstReadingPrefix(in: result, reading: "😀あ"), "😀")
         let decomposed = [BunsetsuToken(readingRange: NSRange(location: 0, length: 1), text: "A"), BunsetsuToken(readingRange: NSRange(location: 1, length: 1), text: "B")]
         XCTAssertThrowsError(try BunsetsuProjection.project(reading: "か\u{3099}", candidate: "AB", tokens: decomposed, boundaries: [1]))
+    }
+
+    func testFirstReadingPrefixRequiresARealLeadingSplit() throws {
+        let whole = try BunsetsuProjection.project(reading: "きょう", candidate: "今日", tokens: [
+            BunsetsuToken(readingRange: NSRange(location: 0, length: 3), text: "今日")], boundaries: [])
+        XCTAssertNil(BunsetsuProjection.firstReadingPrefix(in: whole, reading: "きょう"))
+        XCTAssertNil(BunsetsuProjection.firstReadingPrefix(in: [], reading: "きょう"))
     }
 }

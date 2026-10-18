@@ -1,6 +1,8 @@
 #include "engine.hpp"
 #include "dictionary_format.hpp"
 #include "standalone_dictionary.hpp"
+#include "system_ngram.hpp"
+#include "mozc_scoring_data.hpp"
 #include "bunsetsu.hpp"
 #include "unicode_case.hpp"
 #include <algorithm>
@@ -35,6 +37,50 @@ constexpr bool is_ascii_alphabet(char16_t c) {
 }
 constexpr size_t ANDROID_FORWARD_BEAM_WIDTH = 20;
 constexpr int64_t ANDROID_DIGIT_OUTPUT_PENALTY = 2000;
+constexpr size_t MAX_BUNSETSU_SPLIT_PATTERNS = 4;
+std::u16string hiragana_to_katakana(std::u16string value) {
+  for (auto &c : value) {
+    if (c == 0x3094 || (c >= 0x3041 && c <= 0x3093))
+      c += 0x60;
+  }
+  return value;
+}
+std::u16string katakana_to_halfwidth(std::u16string_view value) {
+  static const std::unordered_map<char16_t, std::u16string> replacements = {
+      {u'。',u"｡"},{u'「',u"｢"},{u'」',u"｣"},{u'、',u"､"},{u'・',u"･"},
+      {0x3099,u"ﾞ"},{0x309a,u"ﾟ"},{0x309b,u"ﾞ"},{0x309c,u"ﾟ"},
+      {0x30a1,u"ｧ"},{0x30a2,u"ｱ"},{0x30a3,u"ｨ"},{0x30a4,u"ｲ"},
+      {0x30a5,u"ｩ"},{0x30a6,u"ｳ"},{0x30a7,u"ｪ"},{0x30a8,u"ｴ"},
+      {0x30a9,u"ｫ"},{0x30aa,u"ｵ"},{0x30ab,u"ｶ"},{0x30ac,u"ｶﾞ"},
+      {0x30ad,u"ｷ"},{0x30ae,u"ｷﾞ"},{0x30af,u"ｸ"},{0x30b0,u"ｸﾞ"},
+      {0x30b1,u"ｹ"},{0x30b2,u"ｹﾞ"},{0x30b3,u"ｺ"},{0x30b4,u"ｺﾞ"},
+      {0x30b5,u"ｻ"},{0x30b6,u"ｻﾞ"},{0x30b7,u"ｼ"},{0x30b8,u"ｼﾞ"},
+      {0x30b9,u"ｽ"},{0x30ba,u"ｽﾞ"},{0x30bb,u"ｾ"},{0x30bc,u"ｾﾞ"},
+      {0x30bd,u"ｿ"},{0x30be,u"ｿﾞ"},{0x30bf,u"ﾀ"},{0x30c0,u"ﾀﾞ"},
+      {0x30c1,u"ﾁ"},{0x30c2,u"ﾁﾞ"},{0x30c3,u"ｯ"},{0x30c4,u"ﾂ"},
+      {0x30c5,u"ﾂﾞ"},{0x30c6,u"ﾃ"},{0x30c7,u"ﾃﾞ"},{0x30c8,u"ﾄ"},
+      {0x30c9,u"ﾄﾞ"},{0x30ca,u"ﾅ"},{0x30cb,u"ﾆ"},{0x30cc,u"ﾇ"},
+      {0x30cd,u"ﾈ"},{0x30ce,u"ﾉ"},{0x30cf,u"ﾊ"},{0x30d0,u"ﾊﾞ"},
+      {0x30d1,u"ﾊﾟ"},{0x30d2,u"ﾋ"},{0x30d3,u"ﾋﾞ"},{0x30d4,u"ﾋﾟ"},
+      {0x30d5,u"ﾌ"},{0x30d6,u"ﾌﾞ"},{0x30d7,u"ﾌﾟ"},{0x30d8,u"ﾍ"},
+      {0x30d9,u"ﾍﾞ"},{0x30da,u"ﾍﾟ"},{0x30db,u"ﾎ"},{0x30dc,u"ﾎﾞ"},
+      {0x30dd,u"ﾎﾟ"},{0x30de,u"ﾏ"},{0x30df,u"ﾐ"},{0x30e0,u"ﾑ"},
+      {0x30e1,u"ﾒ"},{0x30e2,u"ﾓ"},{0x30e3,u"ｬ"},{0x30e4,u"ﾔ"},
+      {0x30e5,u"ｭ"},{0x30e6,u"ﾕ"},{0x30e7,u"ｮ"},{0x30e8,u"ﾖ"},
+      {0x30e9,u"ﾗ"},{0x30ea,u"ﾘ"},{0x30eb,u"ﾙ"},{0x30ec,u"ﾚ"},
+      {0x30ed,u"ﾛ"},{0x30ef,u"ﾜ"},{0x30f2,u"ｦ"},{0x30f3,u"ﾝ"},
+      {0x30f4,u"ｳﾞ"},{0x30f7,u"ﾜﾞ"},{0x30fa,u"ｦﾞ"},{0x30fb,u"･"},
+      {0x30fc,u"ｰ"},
+  };
+  std::u16string result;
+  result.reserve(value.size());
+  for (auto c : value) {
+    auto it = replacements.find(c);
+    if (it == replacements.end()) result.push_back(c);
+    else result.append(it->second);
+  }
+  return result;
+}
 bool has_digit(std::u16string_view value) {
   return std::any_of(value.begin(), value.end(), unicode_is_digit);
 }
@@ -234,13 +280,30 @@ struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
   std::unique_ptr<Dictionary> english_reading, english_words;
+  std::unique_ptr<Dictionary> single_kanji, emoji, emoticon, symbol;
+  bool auxiliary_dictionaries_available = false;
   std::unique_ptr<detail::StandaloneDictionary> standalone;
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
+  std::unique_ptr<detail::SystemNgram> system_ngram;
+  std::unique_ptr<detail::MozcScoringData> mozc_scoring_data;
   Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority)
       : connection(dir) {
     const auto path = dir + "/standalone.sud";
     if (standalone_priority && std::filesystem::exists(path))
       standalone = std::make_unique<detail::StandaloneDictionary>(path);
+    const auto ngram_path = dir + "/system_ngram.dat";
+    const auto unigram_path = dir + "/system_ngram_unigram.dat";
+    if (std::filesystem::exists(ngram_path) != std::filesystem::exists(unigram_path))
+      throw std::runtime_error("incomplete system n-gram asset set");
+    if (std::filesystem::exists(ngram_path))
+      system_ngram = std::make_unique<detail::SystemNgram>(dir);
+    const auto segmenter_path = dir + "/mozc/segmenter.dat";
+    const auto attributes_path = dir + "/mozc/node_attribute_by_lid.dat";
+    const bool has_segmenter = std::filesystem::exists(segmenter_path);
+    const bool has_attributes = std::filesystem::exists(attributes_path);
+    require(has_segmenter == has_attributes, "incomplete Mozc scoring asset set");
+    if (has_segmenter)
+      mozc_scoring_data = std::make_unique<detail::MozcScoringData>(dir);
     if (words) english_words = std::make_unique<Dictionary>(dir, "english");
     if (english) english_reading = std::make_unique<Dictionary>(dir, "english_reading");
     if (english_reading)
@@ -258,6 +321,25 @@ struct Engine::Impl {
     for (auto &d : dictionaries)
       for (auto p : d->pos)
         require(p < connection.left.size(), "token POS outside table");
+    const std::vector<std::string> auxiliary_names = {
+        "single_kanji", "emoji", "emoticon", "symbol"};
+    size_t auxiliary_present = 0;
+    for (const auto &name : auxiliary_names)
+      auxiliary_present += std::filesystem::exists(dir + "/" + name + ".sud");
+    require(auxiliary_present == 0 || auxiliary_present == auxiliary_names.size(),
+            "incomplete auxiliary dictionary set");
+    if (auxiliary_present) {
+      single_kanji = std::make_unique<Dictionary>(dir, "single_kanji");
+      emoji = std::make_unique<Dictionary>(dir, "emoji");
+      emoticon = std::make_unique<Dictionary>(dir, "emoticon");
+      symbol = std::make_unique<Dictionary>(dir, "symbol");
+      auxiliary_dictionaries_available = true;
+      for (const auto *dictionary : {single_kanji.get(), emoji.get(),
+                                     emoticon.get(), symbol.get()})
+        for (auto p : dictionary->pos)
+          require(p < connection.left.size(),
+                  "auxiliary token POS outside table");
+    }
   }
 };
 Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority)
@@ -267,8 +349,14 @@ bool Engine::standalone_priority_available() const { return impl->standalone != 
 size_t Engine::mapped_bytes() const {
   size_t n = impl->connection.file.size;
   if (impl->standalone) n += impl->standalone->file.size;
+  if (impl->system_ngram) n += impl->system_ngram->mapped_bytes();
+  if (impl->mozc_scoring_data) n += impl->mozc_scoring_data->mapped_bytes();
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
+  if (impl->single_kanji) n += impl->single_kanji->file.size;
+  if (impl->emoji) n += impl->emoji->file.size;
+  if (impl->emoticon) n += impl->emoticon->file.size;
+  if (impl->symbol) n += impl->symbol->file.size;
   for (auto &d : impl->dictionaries)
     n += d->file.size;
   return n;
@@ -510,6 +598,7 @@ struct Workspace::Impl {
   std::shared_ptr<int> personal_identity, learned_identity;
   size_t previous_count = 0, previous_limit = 0;
   bool previous_omission = false, previous_prefix = false, previous_prediction = false;
+  detail::NgramScratch ngram_scratch;
   bool cache_valid = false;
   std::vector<Node> nodes;
   std::vector<std::vector<size_t>> at;
@@ -535,6 +624,7 @@ struct Workspace::Impl {
         heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) +
         at.capacity() * sizeof(at[0]) + ending.capacity() * sizeof(ending[0]) +
         omission_pending.capacity() * sizeof(Dictionary::OmissionState);
+    total += ngram_scratch.query.capacity() + ngram_scratch.record.capacity();
     for (const auto &row : at) total += row.capacity() * sizeof(size_t);
     for (const auto &row : ending) total += row.capacity() * sizeof(size_t);
     total += search_rows.capacity() * sizeof(SearchRow);
@@ -556,6 +646,8 @@ struct Workspace::Impl {
     std::vector<std::vector<size_t>>().swap(at);
     std::vector<std::vector<size_t>>().swap(ending);
     std::vector<Dictionary::OmissionState>().swap(omission_pending);
+    std::vector<unsigned char>().swap(ngram_scratch.query);
+    std::vector<unsigned char>().swap(ngram_scratch.record);
   }
   void finish() noexcept {
     nodes.clear(); states.clear(); heap.clear(); path.clear();
@@ -638,14 +730,37 @@ static void rank_primary(std::vector<Candidate> &candidates,
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
-                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction) const {
+                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
   auto reading = utf16(input);
+  if (bunsetsu_search) {
+    require(impl->system_ngram && impl->system_ngram->available(),
+            "bunsetsu search requires the pinned system n-gram assets");
+    require(impl->mozc_scoring_data != nullptr,
+            "bunsetsu search requires the pinned Mozc scoring assets");
+    japanese_prediction = false;
+    // The Android bunsetsu API always appends all exact and partial system
+    // reading matches after its primary path candidates.
+    prefix_candidates = true;
+  }
   require(reading.size() <= 8192,
           "input exceeds CLI limit of 8192 UTF-16 units (not truncated)");
   Result result;
+  std::unordered_map<std::string, size_t> splitPatternIndex;
+  auto setSplitPattern = [&](const std::string &surface,
+                             const std::vector<uint32_t> &positions,
+                             bool replace) {
+    if (!bunsetsu_search)
+      return;
+    auto [it, inserted] = splitPatternIndex.emplace(
+        surface, result.split_pattern_by_candidate.size());
+    if (inserted)
+      result.split_pattern_by_candidate.push_back({surface, positions});
+    else if (replace)
+      result.split_pattern_by_candidate[it->second].positions = positions;
+  };
   std::unique_ptr<Workspace> temporary;
   if (!workspace) { temporary = std::make_unique<Workspace>(); workspace = temporary.get(); }
   auto &work = *workspace->impl;
@@ -778,6 +893,32 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     }
     add({i, end, nullptr, 0, unknownPos, unknownPos, unknownCost});
   }
+  auto literal = [&](const Node &node) {
+    if (node.start != 0 || node.end != reading.size() || node.correctedNode)
+      return false;
+    return node.personal ? node.personal->text == input
+        : node.dict ? node.dict->surface(node.token, reading, 0, reading.size()) == input
+        : true;
+  };
+  auto node_surface = [&](const Node &node) {
+    return node.personal ? node.personal->text
+         : node.dict ? node.dict->surface(node.token, reading, node.start, node.end,
+                                          node.correctedNode)
+                     : utf8(reading.substr(node.start, node.end - node.start));
+  };
+  auto search_cost = [&](const Node &node) -> int64_t {
+    int64_t cost = node.cost;
+    if (!bunsetsu_search)
+      return cost;
+    const bool zero_prefix_penalty =
+        node.start == 0 && node.end == reading.size() && !node.correctedNode &&
+        (reading == u"にて" || reading == u"しか") && literal(node);
+    if (node.start == 0 && !zero_prefix_penalty)
+      cost += impl->mozc_scoring_data->prefix_penalty(node.left);
+    if (node.end == reading.size())
+      cost += impl->mozc_scoring_data->suffix_penalty(node.right);
+    return cost;
+  };
   // Match Android's ordinary conversion path: forward-DP costs prune each
   // reading end position to its 20 cheapest nodes before N-best search.
   ending.resize(reading.size() + 1);
@@ -795,14 +936,15 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     for (size_t id : row) {
       auto &node = nodes[id];
       if (node.start == 0) {
-        node.forward = int64_t(conn.cost(0, node.left)) + node.cost;
+        node.forward = int64_t(conn.cost(0, node.left)) + search_cost(node);
       } else if (node.start < ending.size()) {
         for (size_t previous_id : ending[node.start]) {
           const auto &previous = nodes[previous_id];
           if (previous.forward == INF) continue;
           node.forward = std::min(
               node.forward,
-              previous.forward + conn.cost(previous.right, node.left) + node.cost);
+              previous.forward + conn.cost(previous.right, node.left) +
+                  search_cost(node));
         }
       }
     }
@@ -830,7 +972,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           auto &n = nodes[next];
           node.tail =
               std::min(node.tail, int64_t(conn.cost(node.right, n.left)) +
-                                      n.cost + n.tail);
+                                      search_cost(n) + n.tail);
         }
     }
   // A* enumerates complete paths in score order using the exact tail bound.
@@ -853,17 +995,55 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     std::push_heap(heap.begin(), heap.end(), std::greater<Workspace::Impl::Item>());
   };
   for (auto id : at[0])
-    push(id, none, int64_t(conn.cost(0, nodes[id].left)) + nodes[id].cost);
-  auto literal = [&](const Node &node) {
-    if (node.start != 0 || node.end != reading.size() || node.correctedNode) return false;
-    return node.personal ? node.personal->text == input
-        : node.dict ? node.dict->surface(node.token, reading, 0, reading.size()) == input
-        : true;
-  };
+    push(id, none,
+         int64_t(conn.cost(0, nodes[id].left)) + search_cost(nodes[id]));
   const bool standaloneMayMatch = impl->standalone && impl->standalone->contains(input) &&
       std::any_of(at[0].begin(), at[0].end(), [&](size_t i) { return literal(nodes[i]); });
+  bool systemNgramMayAffectCandidates = standaloneMayMatch;
+  if (bunsetsu_search && impl->system_ngram &&
+      impl->system_ngram->rule_count() != 0) {
+    // Match Android's conservative lattice precheck. The first-node and
+    // first-pair indexes can return false positives, but never false negatives.
+    for (size_t start = 0; start < reading.size() &&
+                            !systemNgramMayAffectCandidates; ++start) {
+      for (size_t leftId : at[start]) {
+        const auto &left = nodes[leftId];
+        if (left.end == 0 || left.end >= reading.size())
+          continue;
+        const auto leftText = node_surface(left);
+        const detail::NgramFeature leftFeature{leftText, left.left};
+        if (impl->system_ngram->may_match_first_node(leftFeature)) {
+          systemNgramMayAffectCandidates = true;
+          break;
+        }
+        for (size_t rightId : at[left.end]) {
+          const auto &right = nodes[rightId];
+          if (right.start != left.end)
+            continue;
+          const auto rightText = node_surface(right);
+          const detail::NgramFeature rightFeature{rightText, right.left};
+          if (impl->system_ngram->may_match_first_pair(leftFeature,
+                                                      rightFeature)) {
+            systemNgramMayAffectCandidates = true;
+            break;
+          }
+        }
+        if (systemNgramMayAffectCandidates)
+          break;
+      }
+    }
+  }
   // Preserve N even when callers request more than Android's safety window.
-  const size_t searchCount = standaloneMayMatch ? std::max(count, std::min(size_t(64), std::max(count * 4, size_t(32)))) : count;
+  const bool needsSafetyWindow = bunsetsu_search || standaloneMayMatch;
+  const size_t searchCount = needsSafetyWindow
+      ? std::max(count, std::min(size_t(64), std::max(count * 4, size_t(32))))
+      : count;
+  const size_t systemNgramSafetyCandidateCount =
+      impl->system_ngram && impl->system_ngram->rule_count() != 0
+          ? std::max(count, std::min(size_t(64),
+                                     std::max(count * 4, size_t(32))))
+          : count;
+  bool splitMapCaptureOpen = bunsetsu_search;
   bool standaloneFound = false;
   std::unordered_set<std::string> seen;
   while (!heap.empty() && result.candidates.size() < searchCount) {
@@ -881,12 +1061,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       path.clear();
       for (size_t p = index; p != none; p = states[p].parent)
         path.push_back(states[p].node);
+      std::vector<std::string> ngramSurfaces;
+      if (bunsetsu_search && impl->system_ngram)
+        ngramSurfaces.reserve(path.size());
       for (auto it = path.rbegin(); it != path.rend(); ++it) {
         auto &n = nodes[*it];
-        auto s = n.personal ? n.personal->text
-                 : n.dict   ? n.dict->surface(n.token, reading, n.start, n.end,
-                                              n.correctedNode)
-                            : utf8(reading.substr(n.start, n.end - n.start));
+        auto s = node_surface(n);
         if (n.start > 0 && is_bunsetsu_independent(n.left))
           c.bunsetsu_boundaries.push_back(uint32_t(n.start));
         c.text += s;
@@ -896,6 +1076,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              : n.dict   ? n.dict->name
                         : "unknown",
              uint32_t(n.start), uint32_t(n.end - n.start)});
+        if (bunsetsu_search && impl->system_ngram)
+          ngramSurfaces.push_back(std::move(s));
         if (n.dict && n.dict != impl->dictionaries.front().get() &&
             std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
           c.classified_categories.push_back(n.dict->name);
@@ -903,23 +1085,86 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       require(state.contains_digit == has_digit(c.text),
               "candidate digit state differs from materialized surface");
       c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
+      if (bunsetsu_search && impl->system_ngram) {
+        std::vector<detail::NgramFeature> features;
+        features.reserve(path.size());
+        size_t surface_index = 0;
+        for (auto it = path.rbegin(); it != path.rend(); ++it)
+          features.push_back({ngramSurfaces[surface_index++], nodes[*it].left});
+        c.system_ngram_matched = c.standalone_unigram_matched ||
+            impl->system_ngram->matches(features, work.ngram_scratch);
+        if (c.system_ngram_matched &&
+            std::find(result.system_ngram_matched_candidates.begin(),
+                      result.system_ngram_matched_candidates.end(), c.text) ==
+                result.system_ngram_matched_candidates.end())
+          result.system_ngram_matched_candidates.push_back(c.text);
+      }
       if (c.standalone_unigram_matched) {
         standaloneFound = true;
         // A later single-node path can promote an earlier cheaper duplicate.
         for (auto &existing : result.candidates)
-          if (existing.text == c.text) existing.standalone_unigram_matched = true;
+          if (existing.text == c.text) {
+            existing.standalone_unigram_matched = true;
+            if (bunsetsu_search)
+              existing.system_ngram_matched = true;
+          }
       }
-      if (seen.insert(c.text).second)
+      if (bunsetsu_search) {
+        auto existing = std::find_if(
+            result.candidates.begin(), result.candidates.end(),
+            [&](const Candidate &value) { return value.text == c.text; });
+        if (existing != result.candidates.end()) {
+          if (c.system_ngram_matched)
+            existing->system_ngram_matched = true;
+        } else if (seen.insert(c.text).second) {
+          // Android records the first emitted path for each surface before
+          // it ranks/truncates the N-best candidate vector.
+          if (splitMapCaptureOpen)
+            setSplitPattern(c.text, c.bunsetsu_boundaries, false);
+          if (result.bunsetsu_split_patterns.size() <
+                  MAX_BUNSETSU_SPLIT_PATTERNS &&
+              std::find(result.bunsetsu_split_patterns.begin(),
+                        result.bunsetsu_split_patterns.end(),
+                        c.bunsetsu_boundaries) ==
+                  result.bunsetsu_split_patterns.end())
+            result.bunsetsu_split_patterns.push_back(c.bunsetsu_boundaries);
+          result.candidates.push_back(std::move(c));
+        }
+        if (splitMapCaptureOpen) {
+          const bool enoughCandidates = result.candidates.size() >= count;
+          if (!systemNgramMayAffectCandidates && enoughCandidates) {
+            splitMapCaptureOpen = false;
+          } else if (systemNgramMayAffectCandidates &&
+                     (result.candidates.size() >=
+                          systemNgramSafetyCandidateCount ||
+                      (enoughCandidates &&
+                       !result.system_ngram_matched_candidates.empty() &&
+                       (!standaloneMayMatch || standaloneFound)))) {
+            splitMapCaptureOpen = false;
+          }
+        }
+      } else if (seen.insert(c.text).second) {
         result.candidates.push_back(std::move(c));
-      if (standaloneFound && result.candidates.size() >= count) break;
+      }
+      if (!bunsetsu_search && standaloneFound && result.candidates.size() >= count) break;
     } else
       for (size_t id : at[node.end])
         push(id, index,
              state.cost + conn.cost(node.right, nodes[id].left) +
-                 nodes[id].cost);
+                 search_cost(nodes[id]));
   }
   if (result.candidates.size() > count) {
-    rank_primary(result.candidates, count);
+    if (bunsetsu_search) {
+      std::stable_sort(result.candidates.begin(), result.candidates.end(),
+                       [](const Candidate &a, const Candidate &b) {
+                         if (a.system_ngram_matched != b.system_ngram_matched)
+                           return a.system_ngram_matched;
+                         return a.score < b.score;
+                       });
+      result.candidates.resize(count);
+    } else {
+      rank_primary(result.candidates, count);
+    }
   }
   seen.clear();
   if (!exactCategoryNodes.empty()) {
@@ -932,25 +1177,50 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       const auto &node = nodes[id];
       Candidate exact;
       exact.text = node.dict->surface(node.token, reading, 0, reading.size());
-      exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
+      // ClassifiedExactCandidates.merge marks every exact category surface
+      // as unsplit, even when an existing lower-cost path remains selected.
+      setSplitPattern(exact.text, {}, true);
+      exact.score = conn.cost(0, node.left) + search_cost(node) + conn.cost(node.right, 0);
       exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
       exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
+      if (bunsetsu_search && impl->system_ngram) {
+        const std::string surface = exact.text;
+        const detail::NgramFeature feature{surface, node.left};
+        exact.system_ngram_matched = exact.standalone_unigram_matched ||
+            impl->system_ngram->matches(std::span<const detail::NgramFeature>(&feature, 1),
+                                        work.ngram_scratch);
+        if (exact.system_ngram_matched &&
+            std::find(result.system_ngram_matched_candidates.begin(),
+                      result.system_ngram_matched_candidates.end(), exact.text) ==
+                result.system_ngram_matched_candidates.end())
+          result.system_ngram_matched_candidates.push_back(exact.text);
+      }
       const bool exactMatched = exact.standalone_unigram_matched;
+      const bool systemNgramMatched = exact.system_ngram_matched;
       auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
       if (inserted) result.candidates.push_back(std::move(exact));
       auto &winner = result.candidates[position->second];
       const bool matched = winner.standalone_unigram_matched || exactMatched;
+      const bool systemMatched = winner.system_ngram_matched || systemNgramMatched;
       if (!inserted && exact.score < winner.score) {
         exact.classified_categories = std::move(winner.classified_categories);
         winner = std::move(exact);
       }
       winner.standalone_unigram_matched = matched;
+      winner.system_ngram_matched = systemMatched;
       if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
         winner.classified_categories.push_back(node.dict->name);
     }
   }
   for (const auto &candidate : result.candidates) seen.insert(candidate.text);
-  if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
+  if (bunsetsu_search && !result.candidates.empty())
+    result.primary_bunsetsu_split_positions =
+        result.candidates.front().bunsetsu_boundaries;
+  if (result.bunsetsu_split_patterns.empty() && bunsetsu_search &&
+      !result.primary_bunsetsu_split_positions.empty())
+    result.bunsetsu_split_patterns.push_back(
+        result.primary_bunsetsu_split_positions);
+  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.
     const auto &d = *impl->dictionaries.front();
@@ -972,7 +1242,22 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
   }
-  rank_primary(result.candidates);
+  if (bunsetsu_search) {
+    for (auto &candidate : result.candidates) {
+      auto it = splitPatternIndex.find(candidate.text);
+      if (it != splitPatternIndex.end())
+        candidate.bunsetsu_boundaries =
+            result.split_pattern_by_candidate[it->second].positions;
+    }
+    std::stable_sort(result.candidates.begin(), result.candidates.end(),
+                     [](const Candidate &a, const Candidate &b) {
+                       if (a.system_ngram_matched != b.system_ngram_matched)
+                         return a.system_ngram_matched;
+                       return a.score < b.score;
+                     });
+  } else {
+    rank_primary(result.candidates);
+  }
   if (impl->english_reading && !reading.empty()) {
     const auto &d = *impl->english_reading;
     auto add = [&](const std::string &text, int64_t score) {
@@ -994,6 +1279,86 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       add(utf8(unicode_upper(lower)), int64_t(d.costs[token]) + 3000);
     });
   }
+  std::vector<Candidate> emoji_and_emoticon_candidates;
+  std::vector<Candidate> symbol_candidates;
+  std::vector<Candidate> single_kanji_candidates;
+  if (impl->auxiliary_dictionaries_available && !reading.empty()) {
+    auto collect_symbol_candidates = [&](const Dictionary &dictionary) {
+      std::vector<Candidate> candidates;
+      if (reading.size() > 16)
+        return candidates;
+      dictionary.prefixes(reading, 0, [&](size_t end, uint32_t token) {
+        if (end != reading.size()) return;
+        auto text = dictionary.surface(token, reading, 0, end);
+        candidates.push_back({
+            text, dictionary.costs[token],
+            {{text, dictionary.name, 0, uint32_t(end)}}});
+      });
+      // Android includes an exact symbol/emoji reading regardless of the
+      // prediction minimum, then permits up to three extra UTF-16 units when
+      // Japanese prediction is enabled (the production default).
+      if (japanese_prediction && reading.size() >= 3) {
+        const bool complete = dictionary.completion(
+            reading, 3, limit,
+            [&](size_t node, uint32_t token, size_t extra) {
+              auto yomi = dictionary.nodeReading(node);
+              const auto text = dictionary.surface(
+                  token, yomi, 0, yomi.size(), node);
+              const auto score = int64_t(dictionary.costs[token]) +
+                                 int64_t(extra) * 1000;
+              candidates.push_back(
+                  {text, score,
+                   {{text, dictionary.name, 0, uint32_t(yomi.size())}}});
+            });
+        result.complete = result.complete && complete;
+      }
+      return candidates;
+    };
+    auto emoji = collect_symbol_candidates(*impl->emoji);
+    auto emoticon = collect_symbol_candidates(*impl->emoticon);
+    emoji_and_emoticon_candidates.reserve(emoji.size() + emoticon.size());
+    emoji_and_emoticon_candidates.insert(emoji_and_emoticon_candidates.end(),
+                                         emoji.begin(), emoji.end());
+    emoji_and_emoticon_candidates.insert(emoji_and_emoticon_candidates.end(),
+                                         emoticon.begin(), emoticon.end());
+    std::stable_sort(emoji_and_emoticon_candidates.begin(),
+                     emoji_and_emoticon_candidates.end(),
+                     [](const Candidate &a, const Candidate &b) {
+                       return a.score < b.score;
+                     });
+    symbol_candidates = collect_symbol_candidates(*impl->symbol);
+    impl->single_kanji->prefixes(reading, 0,
+                                 [&](size_t end, uint32_t token) {
+      if (end != reading.size()) return;
+      auto text = impl->single_kanji->surface(token, reading, 0, end);
+      single_kanji_candidates.push_back(
+          {text, impl->single_kanji->costs[token],
+           {{text, impl->single_kanji->name, 0, uint32_t(end)}}});
+    });
+  }
+  auto append_candidates = [&](const std::vector<Candidate> &candidates) {
+    result.candidates.insert(result.candidates.end(), candidates.begin(),
+                             candidates.end());
+  };
+  // The one-character Android path places kana before emoji/symbols. Longer
+  // bunsetsu input places those auxiliary lists before kana and raw yomi parts.
+  if (bunsetsu_search && reading.size() == 1) {
+    auto katakana = hiragana_to_katakana(reading);
+    result.candidates.push_back({utf8(reading), 6000, {}});
+    result.candidates.push_back({utf8(katakana), 6000, {}});
+    result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+    append_candidates(emoji_and_emoticon_candidates);
+    append_candidates(symbol_candidates);
+  } else {
+    append_candidates(emoji_and_emoticon_candidates);
+    append_candidates(symbol_candidates);
+    if (bunsetsu_search) {
+      auto katakana = hiragana_to_katakana(reading);
+      result.candidates.push_back({utf8(reading), 6000, {}});
+      result.candidates.push_back({utf8(katakana), 6000, {}});
+      result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+    }
+  }
   // Reference dev 9506a0b yomiPartList: longest matching reading first,
   // dictionary token order within a reading; input lengths 2...16 only.
   if (prefix_candidates && reading.size() > 1 && reading.size() <= 16) {
@@ -1003,8 +1368,25 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     std::stable_sort(matches.begin(), matches.end(), [](auto a, auto b) { return a.first > b.first; });
     for (auto [end, token] : matches) {
       auto text = d.surface(token, reading, 0, end);
-      if (seen.insert(text).second)
+      // The reference app appends raw yomiPartList entries, including repeated
+      // surfaces from distinct tokens and overlaps with primary path results.
+      // Preserve that candidate count in bunsetsu mode. Keep the existing
+      // surface de-duplication behavior for the opt-in non-bunsetsu route.
+      if (bunsetsu_search || seen.insert(text).second)
         result.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}});
+    }
+  }
+  append_candidates(single_kanji_candidates);
+  if (bunsetsu_search && !impl->auxiliary_dictionaries_available)
+    result.complete = false;
+  if (bunsetsu_search) {
+    // Candidates appended after N-best (reading-prefix, English-reading and
+    // auxiliary dictionaries) use the same surface-keyed split map as Android.
+    for (auto &candidate : result.candidates) {
+      auto it = splitPatternIndex.find(candidate.text);
+      if (it != splitPatternIndex.end())
+        candidate.bunsetsu_boundaries =
+            result.split_pattern_by_candidate[it->second].positions;
     }
   }
   if (reading.empty())

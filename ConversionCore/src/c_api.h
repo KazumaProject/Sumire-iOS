@@ -29,7 +29,7 @@ typedef struct {
   uint32_t max_states;
   /* Bit 3 enables Japanese system completion: defaults 3..16 input units,
    * lookahead 3, up to 4 additional candidates. Consumes the typed input only. */
-  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates. */
+  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
 } sumire_request;
 typedef struct {
   uint64_t candidate_id;

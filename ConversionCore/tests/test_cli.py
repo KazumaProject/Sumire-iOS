@@ -8,6 +8,14 @@ CLI=sys.argv.pop(1)
 C_API=sys.argv.pop(1) if len(sys.argv)>1 else None
 INCREMENTAL=sys.argv.pop(1) if len(sys.argv)>1 else None
 
+def test_helper(filename,name):
+    helper_spec=importlib.util.spec_from_file_location(name,pathlib.Path(__file__).resolve().with_name(filename))
+    helper=importlib.util.module_from_spec(helper_spec);helper_spec.loader.exec_module(helper)
+    return helper
+
+SYSTEM_NGRAM_FIXTURE=test_helper('test_system_ngram.py','system_ngram_fixture')
+MOZC_SCORING_FIXTURE=test_helper('test_mozc_scoring_data.py','mozc_scoring_fixture')
+
 def bits(values):
     words=[0]*((len(values)+63)//64)
     for i,v in enumerate(values):
@@ -92,6 +100,22 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def install_auxiliary_dictionary_fixture(self):
+        dictionary(self.data/'emoji.sud',[
+            ('あいう','EMOJI',0,6000),('あいうえ','EMOJI-PREDICT',0,6000),
+            ('あいうえおかき','EMOJI-TOO-FAR',0,6000),
+        ])
+        dictionary(self.data/'emoticon.sud',[
+            ('あいう','EMOTICON',0,4000),('あいうえ','EMOTICON-PREDICT',0,4000),
+        ])
+        dictionary(self.data/'symbol.sud',[
+            ('あいう','SYMBOL',0,3000),('あいうえ','SYMBOL-PREDICT',0,2000),
+        ])
+        dictionary(self.data/'single_kanji.sud',[('あいう','SINGLE-KANJI',0,1900)])
+    def test_pinned_surface_utf16_conversion_keeps_pairs_and_replaces_lone_surrogates(self):
+        self.assertEqual(b.decode_surface_utf16([0xd842,0xdc00]).decode('utf-8'),'\U00020800')
+        self.assertEqual(b.decode_surface_utf16([0xd842]).decode('utf-8'),'\ufffd')
+        self.assertEqual(b.decode_surface_utf16([0xdc00]).decode('utf-8'),'\ufffd')
     def test_classified_exact_candidates_ignore_nbest_count_and_use_utf16_ties(self):
         dictionary(self.data/'system.sud',[('あい','Primary',1,-1000)])
         surfaces=['甲','乙','丙','\U00010000','\ue000']+[f'Word{i}' for i in range(12)]
@@ -321,11 +345,102 @@ class Tests(unittest.TestCase):
         emoji=json.loads(subprocess.check_output([CLI,'--data',str(self.data),'😀あ'],text=True))
         self.assertEqual(emoji['candidates'][0]['bunsetsu_boundaries_utf16'],[2])
 
+    def test_bunsetsu_split_map_keeps_paths_outside_nbest_and_clears_exact_categories(self):
+        # More than the visible N-best paths share the same input. Android
+        # keeps their per-surface split map before truncating candidates.
+        system=[]
+        for i in range(12): system.append(('あ',f'A{i:02}',1,100+i))
+        for i in range(12): system.append(('い',f'I{i:02}',2,200+i))
+        system.append(('あい','ExactPath',1,50))
+        dictionary(self.data/'system.sud',system)
+        dictionary(self.data/'medical.sud',[('あい','A00I00',1,500)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A11'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        plain=json.loads(self.run_cli('--bunsetsu','--nbest','1','あい').stdout)
+        patterns=plain['split_pattern_by_candidate']
+        self.assertGreater(len(patterns),1)
+        self.assertIn('A00I00',patterns)
+        self.assertTrue(any(surface not in {c['text'] for c in plain['candidates']} for surface in patterns))
+
+        classified=json.loads(self.run_cli('--bunsetsu','--categories','medical','--nbest','1','あい').stdout)
+        self.assertEqual(classified['split_pattern_by_candidate']['A00I00'],[])
+        selected=next(c for c in classified['candidates'] if c['text']=='A00I00')
+        self.assertEqual(selected['bunsetsu_boundaries_utf16'],[])
+
     def test_reading_prefix_candidates_keep_consumed_range(self):
         result=json.loads(self.run_cli('--prefix-candidates','--nbest','1','あい').stdout)['candidates']
         self.assertEqual([c['text'] for c in result],['AI','Whole','A','B'])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[1:]],[2,1,1])
         self.assertEqual([c['score'] for c in result[1:]],[500,100,200])
+
+    def test_bunsetsu_includes_raw_reading_prefix_and_english_candidates(self):
+        dictionary(self.data/'system.sud',[
+            ('あ','A',1,100),('あ','A',2,150),('あい','Whole',1,500),
+        ])
+        dictionary(self.data/'english_reading.sud',[('あい','eye',0,12500)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','Whole'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Whole'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        result=json.loads(self.run_cli('--bunsetsu','--english-reading','--nbest','1','あい').stdout)['candidates']
+
+        self.assertEqual([(c['text'],c['score']) for c in result[1:4]],
+                         [('eye',12500),('Eye',14000),('EYE',15500)])
+        self.assertEqual([(c['text'],c['score']) for c in result[4:7]],
+                         [('あい',6000),('アイ',6000),('ｱｲ',6000)])
+        self.assertEqual([(c['text'],c['score']) for c in result[7:]],
+                         [('Whole',500),('A',100),('A',150)])
+        self.assertEqual([c['segments'][0]['length_utf16'] for c in result[7:]],
+                         [2,1,1])
+
+    def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
+        self.install_auxiliary_dictionary_fixture()
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Primary','Secondary'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Primary'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        row=json.loads(self.run_cli('--bunsetsu','あいう').stdout)
+        candidates={(c['segments'][0]['dictionary'],c['text']):c for c in row['candidates'] if c['segments']}
+        expected={
+            ('emoji','EMOJI'):6000,
+            ('emoticon','EMOTICON'):4000,
+            ('symbol','SYMBOL'):3000,
+            ('single_kanji','SINGLE-KANJI'):1900,
+        }
+        for key,score in expected.items():
+            self.assertIn(key,candidates)
+            self.assertEqual(candidates[key]['score'],score)
+        self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in row['candidates']))
+        self.assertFalse(any(c['text'].endswith('-PREDICT') for c in row['candidates']))
+        self.assertTrue(row['complete'])
+
+        (self.data/'symbol.sud').unlink()
+        self.run_cli('--bunsetsu','あいう',ok=False)
+
+    def test_japanese_prediction_enables_auxiliary_reading_completion(self):
+        self.install_auxiliary_dictionary_fixture()
+        baseline=json.loads(self.run_cli('あいう').stdout)
+        predicted=json.loads(self.run_cli('--predict-japanese','あいう').stdout)
+        baseline_texts={c['text'] for c in baseline['candidates']}
+        predicted_candidates={(c['segments'][0]['dictionary'],c['text']):c for c in predicted['candidates'] if c['segments']}
+        for key,score in {
+            ('emoji','EMOJI-PREDICT'):7000,
+            ('emoticon','EMOTICON-PREDICT'):5000,
+            ('symbol','SYMBOL-PREDICT'):3000,
+        }.items():
+            self.assertNotIn(key[1],baseline_texts)
+            self.assertIn(key,predicted_candidates)
+            self.assertEqual(predicted_candidates[key]['score'],score)
+        self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
+
+    def test_bunsetsu_marks_legacy_generation_without_auxiliary_dictionaries_incomplete(self):
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','B'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        row=json.loads(self.run_cli('--bunsetsu','あ').stdout)
+        self.assertFalse(row['complete'])
 
     def test_kana_english_entries_append_after_primary_candidates(self):
         dictionary(self.data/'english_reading.sud',[('あい','eye',0,12500)])
@@ -450,6 +565,9 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
         standalone(self.data/'standalone.sud',['しろ'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
         result=subprocess.run([C_API,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
     def test_exhaustive_nbest(self):

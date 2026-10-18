@@ -81,7 +81,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .romaji: return "ローマ字からかなへの変換ルール"
         case .specialKeys: return "タップ・フリック・長押しの動作"
         case .flickStyle: return "二段・三段・ドーナツとガイドの操作"
-        case .conversion: return "ライブ変換、修飾キー省略、削除の区切り"
+        case .conversion: return "ライブ変換、文節ごとの変換、修飾キー省略、削除の区切り"
         case .touchFeedback: return "ポップアップ・二本指・長押し時間"
         case .appearance: return "通常キー・特殊キーとフリックガイド"
         case .theme: return "好きな色とライト・ダーク表示"
@@ -124,6 +124,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         switch self {
         case .keyboards: return "テンキー TenKey QWERTY 50音 五十音 Sumire 配列"
         case .customKeyboard: return "カスタム 配列 編集 JSON"
+        case .conversion: return "文節 文節区切り 文節ごと かな漢字変換"
         case .touchFeedback: return "フリック ポップアップ popup マルチタッチ 二本指 長押し"
         case .appearance: return "フォント ガイド フリック 通常キー 特殊キー 大きさ"
         case .theme: return "マテリアル Material ライト ダーク 色"

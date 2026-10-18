@@ -6,6 +6,26 @@ import argparse, array, collections, hashlib, json, math, pathlib, shutil, struc
 
 REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
 CATEGORIES = 'address agreement award character event facility initiative kampo lineage medical mythological_figure organization person place product station term transport_route vehicle work_anime work_book work_film work_franchise work_game work_manga work_music work_other work_periodical work_program work_stage'.split()
+AUXILIARY_DICTIONARIES = {
+    'single_kanji': ('single_kanji', 'singleKanji'),
+    'emoji': ('emoji', 'emoji'),
+    'emoticon': ('emoticon', 'emoticon'),
+    'symbol': ('symbol', 'symbol'),
+}
+AUXILIARY_ASSET_SHA256 = {
+    'single_kanji/yomi_singleKanji.dat': 'a9d02f6e81ad2e48ec187bc5c03c57660de7178f34204149ba45482178e98f76',
+    'single_kanji/tango_singleKanji.dat': '30f5a78cea54d6359a3591b741896674002b3e2bac580bc59269eb8c593f929b',
+    'single_kanji/token_singleKanji.dat': '4d60dc524cfdffdb576102429a3a5a7c625f0c3581ba248a81fbc852eaa33166',
+    'emoji/yomi_emoji.dat': 'cdd5f223ccfcb63f22a317b5a9aa97e240a98b28571fbf4905758d5205162950',
+    'emoji/tango_emoji.dat': 'f05fcb3b56aaf683910847342a33e36009676ad9a5abc2d43d3620dbc07700a4',
+    'emoji/token_emoji.dat': '1c25ddcf25f61595915f3a37e1d76665a7eeff2110d2521322817618e0f535a5',
+    'emoticon/yomi_emoticon.dat': '15f32cda380dae4581abbeef1ae0a43f12d7980cf37b84408e1920b980e5318b',
+    'emoticon/tango_emoticon.dat': 'ec102a95f3a490587940d4035ebeedfad4438fa13eb1b37c54ac544059c6ff6a',
+    'emoticon/token_emoticon.dat': 'c4c88e2f84342aa4f13b295d37947fa4d222b019325d32346333b71989c069c5',
+    'symbol/yomi_symbol.dat': '7ac99f6184ba6c20b8bad0bcf1f2386d10b45ff60138f166731b091459a93482',
+    'symbol/tango_symbol.dat': '5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca',
+    'symbol/token_symbol.dat': '22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb',
+}
 
 class JavaArrays:
     def __init__(self, data):
@@ -67,6 +87,15 @@ def le(a):
     b=array.array(a.typecode,a)
     if sys.byteorder!='little':b.byteswap()
     return b.tobytes()
+
+def decode_surface_utf16(code_units):
+    """Return strict UTF-8, replacing lone UTF-16 surrogates with U+FFFD.
+
+    Some pinned single-kanji tokens reference a lone surrogate. Such a value
+    cannot be represented by the C ABI's UTF-8 strings; replacement keeps the
+    candidate well-formed instead of failing the whole dictionary generation.
+    """
+    return le(array.array('H',code_units)).decode('utf-16-le',errors='replace').encode('utf-8')
 
 def pack_file(path,kind,dimension,sections):
     header=struct.pack('<8sIIII',b'SUMIRE01',1,kind,len(sections),dimension)
@@ -174,9 +203,14 @@ def build(source,output,english_reading=False,english=False):
     assets=source/'app/src/main/assets'
     revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
     if revision!=REVISION:raise ValueError('reference revision differs from pinned revision')
-    dictionary_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
-    if english_reading:dictionary_sources['english_reading']='english_reading'
-    paths=['pos_table.dat','connectionId.dat.zip','ngram/system_ngram_standalone_unigram.dat']+[f'{d}/{f}.dat.zip' for d in dictionary_sources.values() for f in ['yomi','tango','token']]
+    archive_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
+    dictionary_sources=dict(archive_sources)
+    dictionary_sources.update({name: directory for name, (directory, _) in AUXILIARY_DICTIONARIES.items()})
+    if english_reading:
+        archive_sources['english_reading']='english_reading'
+        dictionary_sources['english_reading']='english_reading'
+    paths=['pos_table.dat','connectionId.dat.zip','ngram/system_ngram.dat','ngram/system_ngram_unigram.dat','ngram/system_ngram_standalone_unigram.dat','mozc/segmenter.dat','mozc/node_attribute_by_lid.dat']+[f'{d}/{f}.dat.zip' for d in archive_sources.values() for f in ['yomi','tango','token']]
+    paths += list(AUXILIARY_ASSET_SHA256)
     if english:
         dictionary_sources['english']='english'
         paths += ['english/reading.dat.zip','english/word.dat','english/token.dat.zip']
@@ -185,6 +219,8 @@ def build(source,output,english_reading=False,english=False):
     hashes={}
     def read(name):
         raw=(assets/name).read_bytes();hashes[name]=hashlib.sha256(raw).hexdigest()
+        expected=AUXILIARY_ASSET_SHA256.get(name)
+        if expected is not None and hashes[name]!=expected:raise ValueError('pinned auxiliary asset hash mismatch: '+name)
         if not name.endswith('.zip'):return raw
         with zipfile.ZipFile(assets/name) as z:
             files=z.infolist()
@@ -223,6 +259,11 @@ def build(source,output,english_reading=False,english=False):
                 pos=array.array('h',[0])*len(cost)
                 if any(p < -1 for p in node):raise ValueError('invalid English surface sentinel')
                 node=array.array('i',(-2 if p==-1 else p for p in node))
+            elif name in AUXILIARY_DICTIONARIES:
+                directory,stem=AUXILIARY_DICTIONARIES[name]
+                lbs,leaf,labels,terms=JavaArrays(read(f'{directory}/yomi_{stem}.dat')).all(4)
+                tlbs,tleaf,tlabels=JavaArrays(read(f'{directory}/tango_{stem}.dat')).all(3)
+                pos,cost,node,post=JavaArrays(read(f'{directory}/token_{stem}.dat')).all(4)
             else:
                 lbs,leaf,labels,terms=JavaArrays(read(prefix+'/yomi.dat.zip')).all(4)
                 tlbs,tleaf,tlabels=JavaArrays(read(prefix+'/tango.dat.zip')).all(3)
@@ -242,7 +283,7 @@ def build(source,output,english_reading=False,english=False):
                         chars.append(tlabels[i]);previous=parent[i]
                         if previous>=i:raise ValueError('surface cycle')
                         i=previous
-                    a=array.array('H',reversed(chars));s=le(a).decode('utf-16-le').encode('utf-8')
+                    s=decode_surface_utf16(reversed(chars))
                     if s not in surface_ids:surface_ids[s]=len(offsets)-1;blob.extend(s);offsets.append(len(blob))
                     cache[p]=surface_ids[s]
                 refs.append(cache[p])
@@ -260,10 +301,25 @@ def build(source,output,english_reading=False,english=False):
             print(name,summary[name],file=sys.stderr,flush=True)
         standalone_count=pack_standalone(dest/'standalone.sud',read('ngram/system_ngram_standalone_unigram.dat'))
         summary['standalone']={'rules':standalone_count,'bytes':(dest/'standalone.sud').stat().st_size}
+        ngram_summary={}
+        for asset in ('ngram/system_ngram.dat','ngram/system_ngram_unigram.dat'):
+            payload=read(asset)
+            name=pathlib.PurePosixPath(asset).name
+            (dest/name).write_bytes(payload)
+            ngram_summary[name]={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+        summary['system_ngram_assets']=ngram_summary
+        mozc_summary={}
+        for asset in ('mozc/segmenter.dat','mozc/node_attribute_by_lid.dat'):
+            payload=read(asset)
+            target=dest/asset
+            target.parent.mkdir(parents=True,exist_ok=True)
+            target.write_bytes(payload)
+            mozc_summary[pathlib.PurePosixPath(asset).name]={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
+        summary['mozc_assets']=mozc_summary
         shutil.copytree(assets/'licenses',dest/'licenses')
         shutil.copy2(source/'LICENSE',dest/'SOURCE-LICENSE')
-        manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Lossless array and surface re-encoding; connection row defaults plus exact exceptions. See copied licenses for data terms.'}
-        manifest['output_sha256']={p.name:hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.glob('*.sud')}
+        manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Array encoding and connection costs are preserved. Surface paths are re-encoded as UTF-8; lone UTF-16 surrogates in pinned source tokens are replaced with U+FFFD so returned strings are valid Unicode. See copied licenses for data terms.'}
+        manifest['output_sha256']={p.relative_to(dest).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.rglob('*') if p.is_file() and (p.suffix=='.sud' or p.name.startswith('system_ngram') or p.parent==dest/'mozc')}
         (dest/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
         # Rename a complete generation only; never replace an existing generation.
         dest.rename(output)

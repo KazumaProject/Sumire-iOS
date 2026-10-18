@@ -39,6 +39,7 @@ final class KeyboardSurface: UIInputView {
             refreshConversion()
         }
     }
+    var bunsetsuSeparation = false
     var englishReadingEnabled = true {
         didSet {
             guard oldValue != englishReadingEnabled else { return }
@@ -259,6 +260,7 @@ final class KeyboardSurface: UIInputView {
     }
     private var composition = CompositionState()
     private var converted: [ConversionCandidate] = []
+    private var bunsetsuActionHandled = false
     private var resultGeneration: UInt64?
     private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
     var hasComposition: Bool { !composition.reading.isEmpty }
@@ -1247,6 +1249,7 @@ final class KeyboardSurface: UIInputView {
             commitComposition(); insert?(" ")
         case .convert:
             guard hasComposition else { return }
+            if startBunsetsuConversionIfNeeded() { return }
             composition.select()
             if !converted.isEmpty {
                 selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
@@ -1385,6 +1388,7 @@ final class KeyboardSurface: UIInputView {
         containsRomaji = false
         converted = []
         resultGeneration = nil
+        bunsetsuActionHandled = false
         selectedCandidate = nil
         candidateBar.candidates = []
         candidateBar.isUpdating = false
@@ -1459,6 +1463,7 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = nil
         converted = []
         resultGeneration = nil
+        bunsetsuActionHandled = false
         let reading = composition.reading
         // Preserve the last accepted frame instead of submitting an empty list
         // between keystrokes. Pending candidates cannot be selected or expanded.
@@ -1470,7 +1475,62 @@ final class KeyboardSurface: UIInputView {
         guard !reading.isEmpty else { englishComposition = false; converter.reset(); return }
         let generation = composition.generation
         let query = containsRomaji ? (romaji?.flush(reading) ?? reading) : reading
-        converter.convert(query, generation: generation, editStart: 0, omission: englishComposition ? false : omissionSearch, english: englishComposition) { [weak self] response in
+        requestConversion(query: query, generation: generation)
+    }
+    private func startBunsetsuConversion() {
+        if containsRomaji, let romaji {
+            _ = composition.flushRomaji(using: romaji)
+            containsRomaji = false
+        }
+        let reading = composition.reading
+        guard !reading.isEmpty else { return }
+        closeExpandedCandidates()
+        converted = []
+        resultGeneration = nil
+        selectedCandidate = nil
+        candidateBar.candidates = []
+        candidateBar.isUpdating = true
+        composition.optionsChanged()
+        composition.select()
+        markReading()
+        status.text = reading + " · 文節を探索中"
+        let generation = composition.generation
+        converter.convert(reading, generation: generation, editStart: 0,
+                          omission: omissionSearch, includeBunsetsu: true, bunsetsuSearch: true) { [weak self] response in
+            guard let self else { return }
+            self.beforeInput?()
+            guard self.composition.accepts(generation) else { return }
+            switch response {
+            case .success(let result):
+                guard result.generation == generation else { return }
+                let prefix = result.candidates.first.flatMap {
+                    BunsetsuProjection.firstReadingPrefix(in: $0.bunsetsu, reading: reading)
+                }
+                self.requestFollowingBunsetsu(prefix ?? reading, statusNote: prefix == nil ? " · 区切りなし" : "")
+            case .failure:
+                // Fall back to the ordinary conversion path without changing the composing text.
+                self.requestFollowingBunsetsu(reading, statusNote: " · 文節検索を通常変換に切替")
+            }
+        }
+    }
+    @discardableResult private func startBunsetsuConversionIfNeeded() -> Bool {
+        guard bunsetsuSeparation, !englishComposition, hasComposition,
+              !bunsetsuActionHandled,
+              composition.cursorUTF16 == composition.reading.utf16.count else { return false }
+        startBunsetsuConversion()
+        return true
+    }
+    private func requestFollowingBunsetsu(_ query: String, statusNote: String) {
+        composition.optionsChanged()
+        composition.select()
+        bunsetsuActionHandled = true
+        requestConversion(query: query, generation: composition.generation, statusNote: statusNote)
+    }
+    private func requestConversion(query: String, generation: UInt64, statusNote: String = "") {
+        let reading = composition.reading
+        converter.convert(query, generation: generation, editStart: 0,
+                          omission: englishComposition ? false : omissionSearch,
+                          english: englishComposition) { [weak self] response in
             guard let self else { return }
             self.beforeInput?()
             guard self.composition.accepts(generation) else { return }
@@ -1485,12 +1545,12 @@ final class KeyboardSurface: UIInputView {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
                 }
-                self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "")
+                self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "") + statusNote
             case .failure(let error):
                 // Keep every reading character; Return can still commit the reading.
                 self.candidateBar.candidates = []
                 self.candidateBar.isUpdating = false
-                self.status.text = reading + " · " + error.localizedDescription
+                self.status.text = reading + " · " + error.localizedDescription + statusNote
             }
         }
     }
@@ -1643,6 +1703,7 @@ final class KeyboardSurface: UIInputView {
             if englishComposition { commitComposition(); insert?(" "); return }
             if composition.reading.isEmpty { insert?(" ") }
             else {
+                if startBunsetsuConversionIfNeeded() { return }
                 composition.select()
                 if !converted.isEmpty {
                     selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
