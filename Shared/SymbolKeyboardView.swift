@@ -22,7 +22,12 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var onClipboardProviders: (([NSItemProvider]) -> Void)?
     var onClipboardThumbnailRequested: ((String) -> Void)?
     var clipboardAccessAllowed = true { didSet { pasteControl.isEnabled = clipboardAccessAllowed } }
-    private let pasteControl = UIPasteControl()
+    private let pasteControl: UIPasteControl = {
+        let configuration = UIPasteControl.Configuration()
+        configuration.displayMode = .iconAndLabel
+        configuration.cornerStyle = .capsule
+        return UIPasteControl(configuration: configuration)
+    }()
     var onClipboardRequested: (() -> Void)?
     var onClipboardPaste: ((String) -> Void)?
     var onClipboardPin: ((String, Bool) -> Void)?

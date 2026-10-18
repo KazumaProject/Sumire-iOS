@@ -70,7 +70,7 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         let unpin = app.buttons["ピン留めを解除"]
         XCTAssertTrue(unpin.waitForExistence(timeout: 3)); unpin.tap()
         restored.press(forDuration: 0.8)
-        app.buttons["削除"].tap()
+        app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "削除", "symbol-delete")).firstMatch.tap()
         let removed = NSPredicate(format: "exists == false")
         expectation(for: removed, evaluatedWith: restored)
         waitForExpectations(timeout: 5)
@@ -96,6 +96,32 @@ final class SymbolKeyboardIntegrationTests: XCTestCase {
         app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
         XCTAssertTrue(app.collectionViews["symbol-items"].waitForExistence(timeout: 5))
         XCTAssertFalse(current.exists)
+    }
+
+
+    func testSavedClipboardImageRestoresAfterRestartAndDeletes() {
+        let app = XCUIApplication()
+        app.launchArguments = ["--clipboard-test-image", "-symbol.initialMode", "clipboard", "-clipboard.historyEnabled", "YES", "-clipboardAutomaticPreview", "NO"]
+        app.launch()
+        app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
+        let load = app.buttons["symbol-clipboard-load"]
+        XCTAssertTrue(load.waitForExistence(timeout: 5)); load.tap()
+        let permission = app.buttons.matching(NSPredicate(format: "label == %@ OR label == %@", "Allow Paste", "ペーストを許可")).firstMatch
+        if permission.waitForExistence(timeout: 2) { permission.tap() }
+        let image = app.collectionViews["symbol-items"].descendants(matching: .any).matching(NSPredicate(format: "label == %@", "画像")).firstMatch
+        XCTAssertTrue(image.waitForExistence(timeout: 8))
+        let savedID = image.identifier
+        app.terminate(); app.launch()
+        app.textViews["入力テスト"].tap(); app.buttons["symbol-open"].tap()
+        let restored = app.descendants(matching: .any)[savedID].firstMatch
+        XCTAssertTrue(restored.waitForExistence(timeout: 5)); restored.tap()
+        XCTAssertTrue(app.staticTexts["画像をコピーしました。入力先の貼り付けメニューから挿入してください"].waitForExistence(timeout: 3))
+        XCTAssertEqual(app.textViews["入力テスト"].value as? String, "")
+        // Refresh the tab to dismiss the explanatory notice before opening the row menu.
+        app.buttons["symbol-mode-emoji"].tap(); app.buttons["symbol-mode-clipboard"].tap()
+        restored.press(forDuration: 0.8); app.buttons.matching(NSPredicate(format: "label == %@ AND identifier != %@", "削除", "symbol-delete")).firstMatch.tap()
+        expectation(for: NSPredicate(format: "exists == false"), evaluatedWith: restored)
+        waitForExpectations(timeout: 5)
     }
 
 }
