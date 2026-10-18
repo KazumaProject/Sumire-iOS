@@ -28,13 +28,20 @@ def compare(baseline, cli, data):
             str(cli), '--data', str(data), '--categories', reference['categories'], reading]))
         # Prefix candidates do not represent a complete conversion of this input.
         length = len(reading.encode('utf-16-le')) // 2
-        expected = [c['text'] for c in reference['candidates'] if c['length_utf16'] == length][:10]
-        got = [c['text'] for c in actual['candidates']][:10]
+        expected_candidates = [c for c in reference['candidates']
+                               if c['length_utf16'] == length][:10]
+        actual_candidates = actual['candidates'][:10]
+        expected = [c['text'] for c in expected_candidates]
+        got = [c['text'] for c in actual_candidates]
+        expected_scores = [c['score'] for c in expected_candidates]
+        actual_scores = [c['score'] for c in actual_candidates]
         comparisons.append(dict(reading=reading, categories=reference['categories'],
             reference=expected, cpp=got, complete=actual['complete'],
             top1_equal=bool(expected and got) and expected[0] == got[0],
             reference_top1_in_cpp10=bool(expected) and expected[0] in got,
-            top10_equal=expected == got))
+            top10_equal=expected == got,
+            reference_scores=expected_scores, cpp_scores=actual_scores,
+            top10_scores_equal=expected == got and expected_scores == actual_scores))
     return comparisons
 
 
@@ -83,7 +90,8 @@ def main():
     (output/'comparison.json').write_text(json.dumps(comparisons,ensure_ascii=False,indent=2)+'\n')
     print(json.dumps(dict(cases=len(comparisons), top1_equal=sum(r['top1_equal'] for r in comparisons),
                          reference_top1_in_cpp10=sum(r['reference_top1_in_cpp10'] for r in comparisons),
-                         top10_equal=sum(r['top10_equal'] for r in comparisons)),indent=2))
+                         top10_equal=sum(r['top10_equal'] for r in comparisons),
+                         top10_scores_equal=sum(r['top10_scores_equal'] for r in comparisons)),indent=2))
     if not comparisons or not all(r['complete'] and r['top1_equal'] for r in comparisons):
         raise SystemExit(1)
 
