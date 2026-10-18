@@ -99,6 +99,26 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
+    func testConfiguredThreeRowsSurviveFractionalCollectionHeight() {
+        withBar(rows: 3) { bar, list in
+            bar.candidates = (0..<6).map { "候補\($0)" }
+            XCTAssertEqual(list.numberOfItems(inSection: 0), 6)
+
+            // The keyboard host can report a fractional point after layout even
+            // though the saved candidate setting still requests three 44pt rows.
+            list.bounds.size.height = 131.5
+            list.collectionViewLayout.invalidateLayout()
+            list.collectionViewLayout.prepare()
+
+            let rowOrigins = (0..<6).compactMap { index -> CGFloat? in
+                list.collectionViewLayout.layoutAttributesForItem(
+                    at: IndexPath(item: index, section: 0))?.frame.minY
+            }
+            XCTAssertEqual(rowOrigins, [0, 44, 88, 0, 44, 88])
+            XCTAssertEqual(bar.rowCount, 3)
+        }
+    }
+
     func testPendingUpdateKeepsFrameAndRejectsOldCandidateSelection() {
         withBar { bar, list in
             bar.candidates = ["東京", "東京都", "東京駅"]

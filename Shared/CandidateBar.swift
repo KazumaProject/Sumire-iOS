@@ -167,9 +167,12 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     var rowCount = 1 {
         didSet {
             let count = min(3, max(1, rowCount))
-            if rowCount != count { rowCount = count }
+            if rowCount != count {
+                rowCount = count
+                return
+            }
             height.constant = displayedHeight
-            collection.collectionViewLayout.invalidateLayout()
+            (collection.collectionViewLayout as? CandidateRowsLayout)?.setRowCount(count)
         }
     }
     var displayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
@@ -362,17 +365,23 @@ private final class CandidateCell: UICollectionViewCell {
 private final class CandidateRowsLayout: UICollectionViewFlowLayout {
     private var packed: [UICollectionViewLayoutAttributes] = []
     private var packedSize = CGSize.zero
+    private var rowCount = 1
+    func setRowCount(_ value: Int) {
+        let count = min(3, max(1, value))
+        guard rowCount != count else { return }
+        rowCount = count
+        invalidateLayout()
+    }
     override func prepare() {
         guard scrollDirection == .horizontal, let collectionView else { super.prepare(); return }
-        let rows = min(3, max(1, Int(collectionView.bounds.height / 44)))
-        var ends = Array(repeating: CGFloat.zero, count: rows)
+        var ends = Array(repeating: CGFloat.zero, count: rowCount)
         packed.removeAll(keepingCapacity: true)
         let delegate = collectionView.delegate as? UICollectionViewDelegateFlowLayout
         guard collectionView.numberOfSections > 0 else { packedSize = collectionView.bounds.size; return }
         for index in 0..<collectionView.numberOfItems(inSection: 0) {
             let path = IndexPath(item: index, section: 0)
             let width = delegate?.collectionView?(collectionView, layout: self, sizeForItemAt: path).width ?? 44
-            let row = index % rows
+            let row = index % rowCount
             let attributes = UICollectionViewLayoutAttributes(forCellWith: path)
             attributes.frame = CGRect(x: ends[row], y: CGFloat(row) * 44, width: ceil(width), height: 44)
             packed.append(attributes)
