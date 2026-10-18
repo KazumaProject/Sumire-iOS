@@ -9,6 +9,10 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
     private var collectionTrailing: NSLayoutConstraint!
     private var expanded = false
     var onResize: (() -> Void)?
+    var onClipboardCaptured: ((String?, Data?) -> Void)?
+    var captureClipboardHistory = false
+    var onSymbols: (() -> Void)?
+    private let symbols = UIButton(type: .system)
     var onPasteText: ((String) -> Void)?
     var onClipboardNotice: ((String) -> Void)?
     var automaticallyPreviewClipboard = false {
@@ -66,11 +70,17 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
         let generation = UIPasteboard.general.changeCount
         clipboardRequest = UUID()
         let request = clipboardRequest
+        let captureHistory = captureClipboardHistory
         if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
             provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] url, error in
                 var thumbnail: CGImage?
+                var encoded: Data?
                 if let url, url.isFileURL, let size = try? url.resourceValues(forKeys: [.fileSizeKey]).fileSize,
                    size <= 16 * 1024 * 1024, let source = CGImageSourceCreateWithURL(url as CFURL, nil) {
+                    if captureHistory, size <= 4 * 1024 * 1024, let handle = try? FileHandle(forReadingFrom: url) {
+                        encoded = try? handle.read(upToCount: 4 * 1024 * 1024 + 1)
+                        try? handle.close()
+                    }
                     thumbnail = CGImageSourceCreateThumbnailAtIndex(source, 0, [
                         kCGImageSourceCreateThumbnailFromImageAlways: true,
                         kCGImageSourceThumbnailMaxPixelSize: 80,
@@ -82,6 +92,7 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
                     guard let self, self.window != nil, self.clipboardAccessAllowed, self.clipboardRequest == request,
                           (insertText || self.automaticallyPreviewClipboard),
                           UIPasteboard.general.changeCount == generation else { return }
+                    if self.captureClipboardHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
                     if let thumbnail {
                         self.clipboard.setImage(UIImage(cgImage: thumbnail).withRenderingMode(.alwaysOriginal), for: .normal)
                         self.clipboard.setTitle("入力欄で貼り付け", for: .normal)
@@ -98,6 +109,7 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
                     guard let text = object as? String, !text.isEmpty else {
                         self.onClipboardNotice?("クリップボードを読み込めませんでした"); return
                     }
+                    if self.captureClipboardHistory { self.onClipboardCaptured?(text, nil) }
                     if insertText {
                         self.onPasteText?(text)
                         self.dismissedGeneration = generation
@@ -109,13 +121,14 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
             }
         }
     }
-    var showsShortcuts = true { didSet { if showsShortcuts != oldValue { clipboardRequest = UUID() }; collection.isHidden = showsShortcuts; resize.isHidden = !showsShortcuts; updateExpansionButton(); refreshClipboard() } }
+    var showsShortcuts = true { didSet { if showsShortcuts != oldValue { clipboardRequest = UUID() }; collection.isHidden = showsShortcuts; resize.isHidden = !showsShortcuts; symbols.isHidden = !showsShortcuts; updateExpansionButton(); refreshClipboard() } }
     private let resize = UIButton(type: .system)
     var onSelect: ((Int) -> Void)?
     private var palette = KeyboardPalette(hue: 0.73, dark: false)
     var selectedIndex: Int? { didSet { collection.reloadData() } }
     func applyPalette(_ value: KeyboardPalette) {
         palette = value
+        symbols.tintColor = value.foreground
         expand.tintColor = value.foreground
         resize.tintColor = value.foreground
         clipboard.tintColor = value.foreground
@@ -168,13 +181,23 @@ final class CandidateBar: UIView, UICollectionViewDataSource, UICollectionViewDe
                                      resize.topAnchor.constraint(equalTo: topAnchor),
                                      resize.widthAnchor.constraint(equalToConstant: 44),
                                      resize.heightAnchor.constraint(equalToConstant: 44)])
+        symbols.setImage(UIImage(systemName: "face.smiling"), for: .normal)
+        symbols.accessibilityLabel = "絵文字・顔文字・記号・クリップボード"
+        symbols.accessibilityIdentifier = "symbol-open"
+        symbols.addAction(UIAction { [weak self] _ in self?.onSymbols?() }, for: .touchUpInside)
+        symbols.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(symbols)
+        NSLayoutConstraint.activate([symbols.leadingAnchor.constraint(equalTo: resize.trailingAnchor),
+                                     symbols.topAnchor.constraint(equalTo: topAnchor),
+                                     symbols.widthAnchor.constraint(equalToConstant: 44),
+                                     symbols.heightAnchor.constraint(equalToConstant: 44)])
         pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.text.identifier, UTType.image.identifier])
         pasteControl.target = self
         pasteControl.accessibilityIdentifier = "clipboard-preview"
         pasteControl.translatesAutoresizingMaskIntoConstraints = false
         addSubview(pasteControl)
         NSLayoutConstraint.activate([
-            pasteControl.leadingAnchor.constraint(equalTo: resize.trailingAnchor, constant: 8),
+            pasteControl.leadingAnchor.constraint(equalTo: symbols.trailingAnchor, constant: 8),
             pasteControl.topAnchor.constraint(equalTo: topAnchor),
             pasteControl.widthAnchor.constraint(equalToConstant: 100),
             pasteControl.heightAnchor.constraint(equalToConstant: 44)

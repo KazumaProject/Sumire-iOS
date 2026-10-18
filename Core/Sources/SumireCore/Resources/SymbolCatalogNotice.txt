@@ -1,0 +1,41 @@
+Symbol keyboard catalog
+Source: KazumaProject/JapaneseKeyboard
+Revision: 9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93
+
+Changes: decoded token surface nodes, stable deduplication, category grouping and emoji ordering following KanaKanjiEngine.getSymbol*Candidates. Stored as UTF-8 JSON for offline UIKit display. Android version-specific hentaigana filtering is not applied.
+Unicode category metadata identifies Unicode Emoji 17.0. Underlying data acquisition revision and per-entry attribution are unconfirmed in the preserved upstream notices. Source code MIT does not replace data terms. See SymbolDataLicenses.html.
+
+Source SHA-256:
+{
+  "app/src/main/assets/emoji/tango_emoji.dat": "f05fcb3b56aaf683910847342a33e36009676ad9a5abc2d43d3620dbc07700a4",
+  "app/src/main/assets/emoji/token_emoji.dat": "1c25ddcf25f61595915f3a37e1d76665a7eeff2110d2521322817618e0f535a5",
+  "app/src/main/assets/emoticon/tango_emoticon.dat": "ec102a95f3a490587940d4035ebeedfad4438fa13eb1b37c54ac544059c6ff6a",
+  "app/src/main/assets/emoticon/token_emoticon.dat": "c4c88e2f84342aa4f13b295d37947fa4d222b019325d32346333b71989c069c5",
+  "app/src/main/assets/symbol/tango_symbol.dat": "5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca",
+  "app/src/main/assets/symbol/token_symbol.dat": "22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb",
+  "symbol_keyboard/src/main/java/com/kazumaproject/domain/Emoji.kt": "ea8b8a7e1f343db193677e21139da5a9971582c8f5c83216d561d3195fbfc5fa",
+  "symbol_keyboard/src/main/java/com/kazumaproject/domain/EmojiCategoryMetadata.kt": "901e51922551329b116e6b10ecf3cf13bca893a9e94a734aeef471585eb00fcf",
+  "symbol_keyboard/src/main/java/com/kazumaproject/symbol_keyboard/CustomSymbolKeyboardView.kt": "780a77c796cd6f9e8f248a467f4a8697540ebc7add8cf50eae711eec2f9135cc"
+}
+
+MIT License
+
+Copyright (c) 2024 Kazuma Naka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

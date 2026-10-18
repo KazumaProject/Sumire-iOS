@@ -21,9 +21,9 @@ enum KeyboardSettings {
         let migrationKey = "internal.appGroupSettingsMigrated.v1"
         guard !shared.bool(forKey: migrationKey) else { return }
         // Preserve the existing diagnostic app's setting on first group-enabled launch.
-        let keys = ["clipboardAutomaticPreview", "candidateRowCount", "liveConversion", "omissionSearch", "categoryMask", "englishReadingEnabled", "customRomaji.library", "customKeyboard.library", "learningEnabled", "learnFirstCandidate", "sumire.keyArrangement", "keyboard.selection", "keyboard.lastUsed", "editing.deleteBoundarySymbols"] +
+        let keys = ["clipboardAutomaticPreview", "candidateRowCount", "liveConversion", "omissionSearch", "categoryMask", "englishReadingEnabled", "customRomaji.library", "customKeyboard.library", "learningEnabled", "learnFirstCandidate", "sumire.keyArrangement", "sumire.specialKeyActions", "keyboard.selection", "keyboard.lastUsed", "editing.deleteBoundarySymbols"] +
             source.dictionaryRepresentation().keys.filter {
-                $0.hasPrefix("appearance.") || $0.hasPrefix("keyboardSize.") || $0.hasPrefix("theme.") || $0.hasPrefix("qwerty.")
+                $0.hasPrefix("appearance.") || $0.hasPrefix("keyboardSize.") || $0.hasPrefix("theme.") || $0.hasPrefix("qwerty.") || $0.hasPrefix("symbol.") || $0.hasPrefix("clipboard.")
             }
         for key in keys {
             if shared.object(forKey: key) == nil, let value = source.object(forKey: key) {

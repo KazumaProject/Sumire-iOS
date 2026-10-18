@@ -1,6 +1,42 @@
 import XCTest
 @testable import SumireCore
 final class CompositionStateTests: XCTestCase {
+    func testHostUTF16CaretRejectsSplitGraphemesAndPreservesGeneration() {
+        var state = CompositionState()
+        XCTAssertFalse(state.moveCursor(toUTF16: 0))
+        state.append("か\u{3099}👩‍💻い")
+        let previous = state.generation
+        for offset in [-1, 1, 3, 4, 5, 6, 9] {
+            XCTAssertFalse(state.moveCursor(toUTF16: offset))
+            XCTAssertEqual(state.generation, previous)
+            XCTAssertEqual(state.cursor, 3)
+        }
+        XCTAssertTrue(state.moveCursor(toUTF16: 2))
+        XCTAssertEqual(state.cursor, 1)
+        XCTAssertGreaterThan(state.generation, previous)
+        state.append("あ")
+        XCTAssertEqual(state.reading, "か\u{3099}あ👩‍💻い")
+    }
+    func testHostSelectionRequiresUnchangedMarkedReadingAndCaret() {
+        var state = CompositionState()
+        state.append("あい")
+        let generation = state.generation
+        for (marked, range) in [("愛", NSRange(location: 1, length: 0)),
+                                ("あいう", NSRange(location: 1, length: 0)),
+                                ("あい", NSRange(location: 0, length: 2)),
+                                ("あい", NSRange(location: 3, length: 0))] {
+            XCTAssertFalse(state.synchronizeCursor(markedText: marked, selection: range))
+            XCTAssertEqual(state.generation, generation)
+            XCTAssertEqual(state.cursor, 2)
+        }
+        XCTAssertTrue(state.synchronizeCursor(markedText: "あい", selection: NSRange(location: 1, length: 0)))
+        XCTAssertFalse(state.accepts(generation))
+        state.deleteBackward()
+        XCTAssertEqual(state.reading, "い")
+        var decomposed = CompositionState()
+        decomposed.append("か\u{3099}")
+        XCTAssertFalse(decomposed.synchronizeCursor(markedText: "が", selection: NSRange(location: 1, length: 0)))
+    }
     func testCursorEditsRemainComposingAndRespectGraphemes() {
         var state = CompositionState()
         state.append("あ👩‍💻い")
