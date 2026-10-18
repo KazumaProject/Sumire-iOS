@@ -112,7 +112,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                 }
                 DispatchQueue.main.async {
                     guard let self, self.acceptClipboardResult(request: request, insertText: insertText, generation: generation) else { return }
-                    if self.captureClipboardHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
+                    if captureHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
                     if let thumbnail {
                         self.clipboard.setImage(UIImage(cgImage: thumbnail).withRenderingMode(.alwaysOriginal), for: .normal)
                         self.clipboard.setTitle("入力欄で貼り付け", for: .normal)
@@ -128,7 +128,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                     guard let text = object as? String, !text.isEmpty else {
                         self.onClipboardNotice?("クリップボードを読み込めませんでした"); return
                     }
-                    if self.captureClipboardHistory { self.onClipboardCaptured?(text, nil) }
+                    if captureHistory { self.onClipboardCaptured?(text, nil) }
                     if insertText {
                         self.onPasteText?(text)
                         if let generation {

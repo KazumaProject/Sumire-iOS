@@ -33,10 +33,14 @@ final class CandidateBarTests: XCTestCase {
             window.rootViewController = controller
             let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
             bar.clipboardAccessAllowed = false
+            bar.captureClipboardHistory = true
             controller.view.addSubview(bar)
             window.isHidden = false
+            var capturedHistory = false
+            bar.onClipboardCaptured = { _, _ in capturedHistory = true }
             bar.onPasteText = { text in
                 XCTAssertEqual(text, "explicit paste text")
+                XCTAssertFalse(capturedHistory)
                 window.isHidden = true
                 finished.fulfill()
             }
