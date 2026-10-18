@@ -9,8 +9,66 @@
       exit(1);                                                                 \
     }                                                                          \
   } while (0)
+static int same_string(sumire_string a, sumire_string b) {
+  return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
+}
+static void compare_results(sumire_result *actual, sumire_result *fresh) {
+  sumire_metrics actual_metrics, fresh_metrics;
+  CHECK(sumire_result_metrics(actual,&actual_metrics) == 0 && sumire_result_metrics(fresh,&fresh_metrics) == 0);
+  CHECK(actual_metrics.complete == fresh_metrics.complete && actual_metrics.generation == fresh_metrics.generation);
+  CHECK(sumire_result_count(actual) == sumire_result_count(fresh));
+  for (size_t i = 0; i < sumire_result_count(actual); ++i) {
+    sumire_candidate a, b;
+    CHECK(sumire_result_candidate(actual, i, &a) == 0 && sumire_result_candidate(fresh, i, &b) == 0);
+    CHECK(a.candidate_id == b.candidate_id && a.score == b.score && same_string(a.text,b.text));
+    CHECK(a.start_utf16 == b.start_utf16 && a.length_utf16 == b.length_utf16 && a.segment_count == b.segment_count);
+    for (size_t j = 0; j < a.segment_count; ++j) {
+      sumire_segment x, y;
+      CHECK(sumire_result_segment(actual,i,j,&x) == 0 && sumire_result_segment(fresh,i,j,&y) == 0);
+      CHECK(same_string(x.text,y.text) && same_string(x.dictionary,y.dictionary) && x.start_utf16 == y.start_utf16 && x.length_utf16 == y.length_utf16);
+    }
+    size_t count = sumire_result_bunsetsu_count(actual,i);
+    CHECK(count == sumire_result_bunsetsu_count(fresh,i));
+    for (size_t j = 0; j < count; ++j) {
+      uint32_t x,y;
+      CHECK(sumire_result_bunsetsu_boundary(actual,i,j,&x) == 0 && sumire_result_bunsetsu_boundary(fresh,i,j,&y) == 0 && x == y);
+    }
+  }
+}
+static void test_edit_reuse(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *reused = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory,0,1,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&reused,error,sizeof error) == 0);
+  const char *readings[] = {"あいあい", "あいあいあ", "あいあい", "あいあい", "あいあい", "hel", "あいあい", "😀あい", "😁あい", "があい", "かあい"};
+  unsigned flags[] = {12,12,12,12,13,2,12,12,12,12,12};
+  size_t hits = 0;
+  for (size_t i = 0; i < sizeof flags / sizeof flags[0]; ++i) {
+    sumire_session *fresh = NULL;
+    sumire_result *a = NULL, *b = NULL;
+    CHECK(sumire_session_create(engine,&fresh,error,sizeof error) == 0);
+    // Production Swift replaces its learning overlay for each input. Identical
+    // empty overlays must not turn every dictionary cache lookup into a miss.
+    CHECK(sumire_session_set_learning(reused,NULL,0,error,sizeof error) == 0);
+    CHECK(sumire_session_set_learning(fresh,NULL,0,error,sizeof error) == 0);
+    sumire_request request = {i+1,readings[i],strlen(readings[i]),0,20,200000,flags[i]};
+    CHECK(sumire_session_update(reused,&request,&a,error,sizeof error) == 0);
+    CHECK(sumire_session_update(fresh,&request,&b,error,sizeof error) == 0);
+    compare_results(a,b);
+    size_t reused_rows, searched_rows;
+    CHECK(sumire_result_search_rows(a,&reused_rows,&searched_rows) == 0);
+    hits += reused_rows;
+    if (i == 6) CHECK(reused_rows == 0); // English transition invalidates.
+    if (i == 3) CHECK(reused_rows > 0);
+    sumire_result_destroy(a); sumire_result_destroy(b); sumire_session_destroy(fresh);
+  }
+  CHECK(hits > 0);
+  sumire_session_destroy(reused); sumire_engine_close(engine);
+}
 int main(int argc, char **argv) {
   CHECK(argc == 2);
+  test_edit_reuse(argv[1]);
   char error[256];
   sumire_engine *engine = NULL;
   sumire_session *session = NULL;
