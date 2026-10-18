@@ -1,0 +1,37 @@
+Vector paths copied from JapaneseKeyboard/core/src/main/res/drawable
+Revision: df1f38315bf56d860d32919a3eaed6a75499e91e
+Converted to UIKit path commands; original geometry preserved.
+content_paste_24px.xml SHA-256 ab1b297f31fd20c85d437b4da3d98a9260bb83dd3be2e0c69c4cea7e5db3855a
+baseline_arrow_left_24.xml SHA-256 79066f96c92b3089b3cb41935b3b72a2448e84b4254faddc4a538b624c83780c
+language_24dp.xml SHA-256 b4574130ce250a3fd86f791f101affd3f02044b0fc3066600a0037212a1692e1
+backspace_24px.xml SHA-256 f5b42c5071c68d5382d14f50c10bb83c043a7cf04648e13bccca1ab111a4db19
+baseline_keyboard_return_24.xml SHA-256 82086c3d60186728152c913e7d5509e51b87ee54683699cd15c07ff13f7fa9f3
+keyboard_24px.xml SHA-256 df1d4e7472bebc50d2874c975f0e8ccfc28136a96123139426ef3ea581a8ca8d
+baseline_check_24.xml SHA-256 84aa955206b01c12ae65f5801aa8f952e8d8a96a397b925e70f959172a5b902e
+input_mode_english_custom.xml SHA-256 67c1a6f34ab7cd25e198d44427037e8d28648234dcb83c0bd6c06a087525c1a6
+baseline_space_bar_24.xml SHA-256 2a9d9d1c77669f318c3593591f95e71373ec63282b983afdbaca7ad7a63398ca
+shift_24px.xml SHA-256 f56790f5f923d438c7892e09f146f596160e5b8dea93e55372265dff8b5ccb23
+baseline_arrow_right_24.xml SHA-256 9718e097ac23c4d0dd4732b1c280e9558f50c993099fb3adccd97485f8ea8241
+undo_24px.xml SHA-256 640246df692878d51ba94ab4da16f144376ae64014bc79fbcba17d2ae690629f
+
+MIT License
+
+Copyright (c) 2024 Kazuma Naka
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.

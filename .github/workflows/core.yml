@@ -1,0 +1,43 @@
+name: Core tests
+
+on:
+  pull_request:
+    branches: [dev, main]
+  push:
+    branches: [dev, main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: core-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  conversion-core:
+    name: C++ conversion core
+    runs-on: macos-15
+    timeout-minutes: 20
+    env:
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Configure C++20 core
+        run: cmake -S ConversionCore -B "$RUNNER_TEMP/sumire-conversion" -DCMAKE_BUILD_TYPE=Release
+      - name: Build CLI and test executables
+        run: cmake --build "$RUNNER_TEMP/sumire-conversion" --parallel 3
+      - name: Run generated-fixture tests
+        run: ctest --test-dir "$RUNNER_TEMP/sumire-conversion" --output-on-failure
+
+  swift-core:
+    name: Swift input core
+    runs-on: macos-15
+    timeout-minutes: 20
+    steps:
+      - name: Check out source
+        uses: actions/checkout@v4
+      - name: Check offline shipping sources
+        run: python3 Scripts/check_offline.py
+      - name: Run Swift package tests
+        run: swift test --package-path Core --scratch-path "$RUNNER_TEMP/sumire-swift-core"

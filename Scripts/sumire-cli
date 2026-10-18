@@ -1,0 +1,30 @@
+#!/bin/sh
+# Build and run the local C++ CLI. Generated assets and builds stay outside the source tree.
+# Examples:
+#   Scripts/sumire-cli --categories all --nbest 5 'わたしはにほんごをにゅうりょくします'
+#   Scripts/sumire-cli --categories medical,kampo --lookup 'かっこんとう'
+#   printf '%s\n' 'にほんご' 'とうきょうえき' | Scripts/sumire-cli --stdin
+set -eu
+sumire_root=$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)
+sumire_build=${SUMIRE_CLI_BUILD_DIR:-"$HOME/sumire-build/cli-release"}
+sumire_data=${SUMIRE_CLI_DATA_DIR:-"$HOME/sumire-data/cli-english-v1"}
+mkdir -p "$sumire_build"
+sumire_log="$sumire_build/build.log"
+if ! cmake -S "$sumire_root/ConversionCore" -B "$sumire_build" -DCMAKE_BUILD_TYPE=Release > "$sumire_log" 2>&1; then
+    cat "$sumire_log" >&2; exit 1
+fi
+if ! cmake --build "$sumire_build" -j 4 >> "$sumire_log" 2>&1; then
+    cat "$sumire_log" >&2; exit 1
+fi
+sumire_needs_data=true
+for sumire_arg in "$@"; do
+    case "$sumire_arg" in --help|-h|--list-categories|--data) sumire_needs_data=false;; esac
+done
+if [ "$sumire_needs_data" = true ] && [ ! -d "$sumire_data" ]; then
+    python3 "$sumire_root/Scripts/build_dictionary.py" --english --english-reading --output "$sumire_data"
+fi
+if [ "${1:-}" = --setup ]; then
+    printf 'CLI: %s\nDictionary: %s\n' "$sumire_build/sumire-cli" "$sumire_data"
+    exit 0
+fi
+exec "$sumire_build/sumire-cli" --data "$sumire_data" "$@"

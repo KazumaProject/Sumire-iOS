@@ -1,0 +1,94 @@
+import SwiftUI
+import UniformTypeIdentifiers
+import SumireCore
+
+private struct PersonalBackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: Data
+    init(data: Data) { self.data = data }
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else { throw PersonalDataError("ファイルを読み込めません") }
+        self.data = data
+    }
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
+struct PersonalBackupSettings: View {
+    @ObservedObject var library: PersonalLibrary
+    var onRestore: () -> Void = {}
+    @Environment(\.dismiss) private var dismiss
+    @State private var document: PersonalBackupDocument?
+    @State private var exporting = false
+    @State private var importing = false
+    @State private var staged: PersonalBackup.Contents?
+    @State private var confirming = false
+    @State private var message: String?
+    @State private var processing = false
+    var body: some View {
+        NavigationStack {
+            Form {
+                Text("ユーザー辞書・定型文と入力設定をJSONファイルに保存します。配色、キーサイズ、配列・ローマ字、辞書の有効設定を含みます。学習データも含みます。標準・外部辞書の本体は含みません。")
+                Text("単語：\(library.lexicon.words.count)件／定型文：\(library.lexicon.templates.count)件")
+                Button("バックアップを保存") {
+                    processing = true; message = nil
+                    library.exportBackup { result in
+                        processing = false
+                        switch result {
+                        case .success(let data): document = PersonalBackupDocument(data: data); exporting = true
+                        case .failure(let error): message = error.localizedDescription
+                        }
+                    }
+                }.disabled(!library.writable || processing)
+                Button("バックアップから復元") { importing = true }.disabled(processing)
+                if processing { ProgressView("バックアップを処理中…") }
+                if let notice = library.notice { Text(notice).foregroundStyle(.red) }
+                if let message { Text(message).foregroundStyle(.secondary) }
+            }
+            .navigationTitle("辞書のバックアップ")
+            .toolbar { Button("完了") { dismiss() }.disabled(processing) }
+            .interactiveDismissDisabled(processing)
+            .fileExporter(isPresented: $exporting, document: document, contentType: .json,
+                          defaultFilename: "Sumire-backup") { result in
+                switch result {
+                case .success: message = "バックアップを保存しました"
+                case .failure(let error): message = error.localizedDescription
+                }
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+                switch result {
+                case .success(let url):
+                    processing = true; message = nil
+                    PersonalLibrary.readBackup(url) { result in
+                        processing = false
+                        switch result {
+                        case .success(let contents): staged = contents; confirming = true
+                        case .failure(let error): staged = nil; message = error.localizedDescription
+                        }
+                    }
+                case .failure(let error): staged = nil; message = error.localizedDescription
+                }
+            }
+            .alert("辞書を復元しますか？", isPresented: $confirming) {
+                Button("キャンセル", role: .cancel) { staged = nil }
+                Button("置き換えて復元", role: .destructive) {
+                    guard let staged else { return }
+                    processing = true; message = nil
+                    library.restoreBackup(staged) { result in
+                        processing = false
+                        switch result {
+                        case .success:
+                            onRestore()
+                            message = "ユーザー辞書・定型文を復元しました" + (staged.settings == nil ? "（設定は変更していません）" : "（入力設定を含む）") + (staged.learning == nil ? "" : "（学習データを含む）")
+                        case .failure(let error): message = error.localizedDescription
+                        }
+                    }
+                    self.staged = nil
+                }
+            } message: {
+                Text("現在の登録を、単語\(staged?.lexicon.words.count ?? 0)件・定型文\(staged?.lexicon.templates.count ?? 0)件に置き換えます。\(staged?.settings == nil ? "設定は変更しません。" : "入力設定もバックアップの内容に置き換えます。")\(staged?.learning == nil ? "学習データは変更しません。" : "学習データも置き換えます。")必要な場合は先に現在のバックアップを保存してください。")
+            }
+        }
+    }
+}

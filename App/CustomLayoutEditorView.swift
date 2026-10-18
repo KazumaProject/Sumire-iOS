@@ -1,0 +1,209 @@
+import SwiftUI
+import SumireCore
+
+struct CustomLayoutEditorView: View {
+    @Environment(\.dismiss) private var dismiss
+    @State private var editor: CustomLayoutEditor
+    @State private var name: String
+    @State private var rows: Int
+    @State private var columns: Int
+    @State private var romaji: Bool
+    @State private var direct: Bool
+    @State private var error: String?
+    @State private var keyEditor: KeyDraft?
+    let allLayouts: [ImportedCustomLayout]
+    let save: (ImportedCustomLayout) -> Bool
+    init(layout: ImportedCustomLayout?, allLayouts: [ImportedCustomLayout], save: @escaping (ImportedCustomLayout) -> Bool) {
+        _editor = State(initialValue: layout.map(CustomLayoutEditor.init(layout:)) ?? CustomLayoutEditor())
+        _name = State(initialValue: layout?.name ?? "新しい配列")
+        _rows = State(initialValue: layout?.rows ?? 4)
+        _columns = State(initialValue: layout?.columns ?? 5)
+        _romaji = State(initialValue: layout?.source["layout"]?["isRomaji"] == .bool(true))
+        _direct = State(initialValue: layout?.source["layout"]?["isDirectMode"] == .bool(true))
+        self.allLayouts = allLayouts
+        self.save = save
+    }
+    private var layout: ImportedCustomLayout? { try? editor.validated() }
+    var body: some View {
+        Form {
+            if let error { Text(error).foregroundStyle(.red) }
+            TextField("配列名", text: $name)
+            Stepper("行数：\(rows)", value: $rows, in: 1...64)
+            Stepper("列数：\(columns)", value: $columns, in: 1...64)
+            Toggle("ローマ字をかなに変換", isOn: $romaji).disabled(direct)
+            Toggle("直接入力する", isOn: $direct)
+            if direct { Text("変換せず、確定した文字として挿入します。").font(.caption).foregroundStyle(.secondary) }
+            if let layout {
+                Section("プレビュー・キーを選んで編集") {
+                    GeometryReader { geometry in
+                        ForEach(layout.placements.filter { !$0.isSpacer }, id: \.id) { key in
+                            CustomEditablePreviewKey(key: key, containerWidth: geometry.size.width,
+                                                     rows: rows, columns: columns) { keyEditor = KeyDraft(key) }
+                        }
+                    }.frame(height: 220)
+                }
+                Section("キー") {
+                    ForEach(layout.placements.filter { !$0.isSpacer }, id: \.id) { key in
+                        Button(key.source["key"]?["label"]?.string ?? key.id) { keyEditor = KeyDraft(key) }
+                    }
+                    Button("キーを追加") { keyEditor = KeyDraft() }
+                }
+            }
+            Text("位置と幅・高さは半キー単位です。取り込んだ追加ジェスチャーは保持します。未対応の入力方式を通常キーへ自動変更しません。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
+        .navigationTitle("配列を編集")
+        .toolbar {
+            ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
+            ToolbarItem(placement: .confirmationAction) {
+                Button("保存") {
+                    do {
+                        var next = editor; next.configure(name: name, rows: rows, columns: columns)
+                        next.setInputMode(romaji: romaji, direct: direct)
+                        if save(try next.validated()) { dismiss() }
+                        else { error = "保存できませんでした。配列一覧のエラーを確認してください。" }
+                    } catch { self.error = error.localizedDescription }
+                }
+            }
+        }
+        .sheet(item: $keyEditor) { draft in
+            CustomKeyEditor(draft: draft, rows: rows, columns: columns, allLayouts: allLayouts, apply: { draft in
+                if draft.type == "NORMAL", draft.action.hasPrefix("MoveToCustomKeyboard:"),
+                   case .unsupported = CustomKeyAction.tap(draft.action, targets: CustomLayoutTargets(layouts: allLayouts)) {
+                    throw PersonalDataError("切替先の配列を選択してください")
+                }
+                var next = editor
+                next.configure(name: name, rows: rows, columns: columns)
+                next.putKey(id: draft.id, label: draft.label, action: draft.action, special: draft.special,
+                            row: draft.row, column: draft.column, height: draft.height, width: draft.width)
+                if draft.type != draft.originalType { try next.setKeyType(id: draft.id, type: draft.type) }
+                if draft.type == "STANDARD_FLICK", draft.flickValues != draft.originalFlickValues || draft.type != draft.originalType {
+                    try next.setStandardFlick(id: draft.id, values: draft.flickValues)
+                }
+                _ = try next.validated()
+                editor = next
+            }, remove: {
+                editor.removeKey(id: draft.id)
+            })
+        }
+    }
+}
+
+private struct KeyDraft: Identifiable {
+    var id = UUID().uuidString
+    var label = "あ", action = "Text:あ", special = false
+    var row = 0, column = 0, height = 2, width = 2
+    var type = "NORMAL", originalType = "NORMAL"
+    var flickValues = ["あ", "", "", "", ""]
+    var originalFlickValues = ["あ", "", "", "", ""]
+    var flickError: String?
+    var existing = false
+    init() {}
+    init(_ key: ImportedCustomLayout.Placement) {
+        id = key.id; label = key.source["key"]?["label"]?.string ?? ""
+        action = key.source["key"]?["action"]?.string ?? "Text:" + label
+        special = key.source["key"]?["isSpecialKey"] == .bool(true)
+        row = key.row; column = key.column; height = key.height; width = key.width; existing = true
+        type = key.source["key"]?["keyType"]?.string ?? "NORMAL"; originalType = type
+        if type == "STANDARD_FLICK" {
+            do { flickValues = try CustomStandardFlick(placement: key).values; originalFlickValues = flickValues }
+            catch { flickError = error.localizedDescription }
+        }
+    }
+}
+private struct CustomKeyEditor: View {
+    @Environment(\.dismiss) private var dismiss
+    @State var draft: KeyDraft
+    let rows: Int, columns: Int
+    let allLayouts: [ImportedCustomLayout]
+    let apply: (KeyDraft) throws -> Void
+    let remove: () -> Void
+    @State private var error: String?
+    var body: some View {
+        NavigationStack {
+            Form {
+                if let error { Text(error).foregroundStyle(.red) }
+                TextField("表示文字", text: $draft.label)
+                Picker("入力方式", selection: $draft.type) {
+                    Text("通常キー").tag("NORMAL")
+                    Text("標準フリック").tag("STANDARD_FLICK")
+                    if !["NORMAL", "STANDARD_FLICK"].contains(draft.type) {
+                        Text("取り込み済みの方式を保持").tag(draft.type)
+                    }
+                }.accessibilityIdentifier("customKeyInputType")
+                if draft.type == "STANDARD_FLICK" {
+                    if let error = draft.flickError { Text(error).foregroundStyle(.red) }
+                    ForEach(0..<5, id: \.self) { index in
+                        TextField(["タップの文字", "左の文字", "上の文字", "右の文字", "下の文字"][index], text: $draft.flickValues[index])
+                            .textInputAutocapitalization(.never).autocorrectionDisabled()
+                    }
+                    Text("空欄の方向は入力しません。").font(.caption).foregroundStyle(.secondary)
+                } else {
+                Picker("操作", selection: Binding(get: {
+                    draft.action.hasPrefix("Text:") ? "Text" : draft.action.hasPrefix("MoveToCustomKeyboard:") ? "SwitchLayout" : draft.action
+                }, set: { draft.action = $0 == "Text" ? "Text:" + draft.label : $0 == "SwitchLayout" ? "MoveToCustomKeyboard:" : $0 })) {
+                    Text("文字入力").tag("Text")
+                    Text("削除").tag("Delete")
+                    Text("空白").tag("Space")
+                    Text("改行").tag("Enter")
+                    Text("確定").tag("Confirm")
+                    Text("カーソルを左へ").tag("MoveCursorLeft")
+                    Text("次のキーボード").tag("SwitchToNextIme")
+                    Text("カスタム配列に切り替え").tag("SwitchLayout")
+                    if !draft.action.hasPrefix("Text:"), !draft.action.hasPrefix("MoveToCustomKeyboard:"), !["Delete", "Space", "Enter", "Confirm", "MoveCursorLeft", "SwitchToNextIme"].contains(draft.action) {
+                        Text("取り込み済みの操作を保持").tag(draft.action)
+                    }
+                }.pickerStyle(.navigationLink).accessibilityIdentifier("customKeyAction")
+                if draft.action.hasPrefix("MoveToCustomKeyboard:") {
+                    Picker("切替先の配列", selection: Binding(get: { String(draft.action.dropFirst(21)) }, set: { draft.action = "MoveToCustomKeyboard:" + $0 })) {
+                        Text("選択してください").tag("")
+                        ForEach(allLayouts) { layout in Text(layout.name).tag(layout.id) }
+                        let current = String(draft.action.dropFirst(21))
+                        if !current.isEmpty, !allLayouts.contains(where: { $0.id == current }) {
+                            Text("取り込み済みの切替先").tag(current)
+                        }
+                    }.pickerStyle(.navigationLink).accessibilityIdentifier("customKeyLayoutTarget")
+                }
+                if draft.action.hasPrefix("Text:") {
+                    TextField("入力する文字", text: Binding(get: { String(draft.action.dropFirst(5)) }, set: { draft.action = "Text:" + $0 }))
+                        .textInputAutocapitalization(.never).autocorrectionDisabled()
+                }
+                }
+                Toggle("特殊キーの色・サイズを使う", isOn: $draft.special)
+                Stepper("上から：\(draft.row) 半キー", value: $draft.row, in: 0...(rows * 2 - 1))
+                Stepper("左から：\(draft.column) 半キー", value: $draft.column, in: 0...(columns * 2 - 1))
+                Stepper("高さ：\(draft.height) 半キー", value: $draft.height, in: 1...(rows * 2))
+                Stepper("幅：\(draft.width) 半キー", value: $draft.width, in: 1...(columns * 2))
+                if draft.existing { Button("キーを削除", role: .destructive) { remove(); dismiss() } }
+            }
+            .navigationTitle("キーを編集")
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) { Button("キャンセル") { dismiss() } }
+                ToolbarItem(placement: .confirmationAction) { Button("適用") {
+                    do { try apply(draft); dismiss() } catch { self.error = error.localizedDescription }
+                } }
+            }
+        }
+    }
+}
+
+private struct CustomEditablePreviewKey: View {
+    let key: ImportedCustomLayout.Placement
+    let containerWidth: CGFloat
+    let rows: Int, columns: Int
+    let select: () -> Void
+    var body: some View {
+        let unitWidth: CGFloat = containerWidth / CGFloat(columns * 2)
+        let unitHeight: CGFloat = 220 / CGFloat(rows * 2)
+        let width: CGFloat = max(1, unitWidth * CGFloat(key.width) - 3)
+        let height: CGFloat = max(1, unitHeight * CGFloat(key.height) - 3)
+        let x: CGFloat = unitWidth * (CGFloat(key.column) + CGFloat(key.width) / 2)
+        let y: CGFloat = unitHeight * (CGFloat(key.row) + CGFloat(key.height) / 2)
+        Button(key.source["key"]?["label"]?.string ?? "", action: select)
+            .buttonStyle(.plain)
+            .font(.caption).lineLimit(2)
+            .frame(width: width, height: height)
+            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
+            .position(x: x, y: y)
+    }
+}
