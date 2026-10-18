@@ -9,7 +9,7 @@ struct SymbolClipboardItem {
 }
 
 /// An overlay owned by the keyboard. Closing invokes a callback; it never switches the underlying layout.
-final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout {
+final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollectionViewDelegateFlowLayout, UIGestureRecognizerDelegate {
     var onInsert: ((String) -> Void)?
     var onClose: (() -> Void)?
     var onDelete: (() -> Void)?
@@ -18,6 +18,21 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var onClipboardPin: ((String, Bool) -> Void)?
     var onClipboardDelete: ((String) -> Void)?
     var onClipboardHistoryChanged: ((Bool) -> Void)?
+    var onDefaultSkinToneChanged: ((EmojiSkinTone) -> Void)?
+    var defaultSkinTone: EmojiSkinTone {
+        didSet {
+            guard defaultSkinTone != oldValue else { return }
+            defaultSkinTone.save(defaults: defaults)
+            if mode == .emoji { reloadItems() }
+        }
+    }
+    private var skinTonePopup: UIView?
+    private lazy var skinToneHold: UILongPressGestureRecognizer = {
+        let gesture = UILongPressGestureRecognizer(target: self, action: #selector(showSkinTones(_:)))
+        gesture.minimumPressDuration = 0.4
+        gesture.delegate = self
+        return gesture
+    }()
     var clipboardHistoryEnabled = false { didSet { clipboardSwitch.isOn = clipboardHistoryEnabled } }
     private(set) var mode: SymbolKeyboardMode
     private let defaults: UserDefaults
@@ -39,6 +54,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         self.defaults = defaults; self.catalog = catalog
         mode = initialMode ?? .initialMode(defaults: defaults)
         history = SymbolKeyboardHistory(defaults: defaults)
+        defaultSkinTone = EmojiSkinTone.load(defaults: defaults)
         let layout = UICollectionViewFlowLayout()
         layout.minimumInteritemSpacing = 4; layout.minimumLineSpacing = 6
         layout.sectionInset = UIEdgeInsets(top: 6, left: 6, bottom: 6, right: 6)
@@ -48,6 +64,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         collection.register(SymbolCell.self, forCellWithReuseIdentifier: "symbol")
         collection.register(SymbolHeader.self, forSupplementaryViewOfKind: UICollectionView.elementKindSectionHeader, withReuseIdentifier: "header")
         collection.dataSource = self; collection.delegate = self
+        collection.addGestureRecognizer(skinToneHold)
         collection.alwaysBounceVertical = true
         collection.accessibilityIdentifier = "symbol-items"
         categoryStack.spacing = 8; categoryStack.alignment = .fill
@@ -113,6 +130,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     }
 
     func selectMode(_ mode: SymbolKeyboardMode) {
+        dismissSkinTones()
         self.mode = mode; selectedCategory = 0
         categories = catalog.filter { $0.mode == mode }
         let recent = history.symbols(for: mode)
@@ -171,9 +189,13 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
             button.accessibilityTraits = selected ? [.button, .selected] : .button
         }
     }
-    private var symbols: [String] { categories.indices.contains(selectedCategory) ? categories[selectedCategory].symbols : [] }
+    private var isHistory: Bool { categories.indices.contains(selectedCategory) && categories[selectedCategory].id == "history" }
+    private var symbols: [String] = []
     private func clipboardSection(_ section: Int) -> [SymbolClipboardItem] { clipboardItems.filter { $0.pinned == (section == 0) } }
     private func reloadItems() {
+        dismissSkinTones()
+        let values = categories.indices.contains(selectedCategory) ? categories[selectedCategory].symbols : []
+        symbols = mode == .emoji && !isHistory ? values.map { EmojiSkinToneVariants.applying(defaultSkinTone, to: $0) } : values
         collection.reloadData(); collection.setContentOffset(.zero, animated: false)
         emptyLabel.isHidden = mode == .clipboard ? !clipboardItems.isEmpty : !symbols.isEmpty
         emptyLabel.text = mode == .clipboard ? "コピーした内容はここに表示します。\n上の更新ボタンで読み込みます。" : "このカテゴリには項目がありません。"
@@ -187,9 +209,11 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         if mode == .clipboard {
             let item = clipboardSection(indexPath.section)[indexPath.item]
             cell.set(text: item.text ?? "画像", image: item.image, size: 16, palette: palette)
+            cell.showSkinToneIndicator(false)
             cell.accessibilityIdentifier = "symbol-clipboard-" + item.id
         } else {
             cell.set(text: symbols[indexPath.item], image: nil, size: mode == .emoji ? (traitCollection.verticalSizeClass == .compact ? 30 : 36) : (mode == .emoticon ? 14 : 13), palette: palette)
+            cell.showSkinToneIndicator(mode == .emoji && !isHistory && !EmojiSkinToneVariants.variants(for: symbols[indexPath.item]).isEmpty)
             cell.accessibilityIdentifier = "symbol-item-" + String(indexPath.item)
         }
         return cell
@@ -212,6 +236,60 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         let view = collectionView.dequeueReusableSupplementaryView(ofKind: kind, withReuseIdentifier: "header", for: indexPath) as! SymbolHeader
         view.label.text = indexPath.section == 0 ? "ピン留め" : "ピン留めなし"; view.label.textColor = palette.foreground
         return view
+    }
+    override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
+        guard gestureRecognizer === skinToneHold else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
+        guard mode == .emoji, !isHistory,
+              let index = collection.indexPathForItem(at: gestureRecognizer.location(in: collection)),
+              symbols.indices.contains(index.item) else { return false }
+        return !EmojiSkinToneVariants.variants(for: symbols[index.item]).isEmpty
+    }
+    @objc private func showSkinTones(_ gesture: UILongPressGestureRecognizer) {
+        guard gesture.state == .began, mode == .emoji, !isHistory,
+              let index = collection.indexPathForItem(at: gesture.location(in: collection)),
+              symbols.indices.contains(index.item), let cell = collection.cellForItem(at: index) else { return }
+        let variants = EmojiSkinToneVariants.variants(for: symbols[index.item])
+        guard !variants.isEmpty else { return }
+        dismissSkinTones()
+        let overlay = UIView(frame: bounds)
+        overlay.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.accessibilityViewIsModal = true
+        overlay.accessibilityIdentifier = "symbol-skin-tone-popup"
+        let outside = button("肌色選択を閉じる") { [weak self] in self?.dismissSkinTones() }
+        outside.setTitle(nil, for: .normal)
+        outside.frame = overlay.bounds; outside.autoresizingMask = [.flexibleWidth, .flexibleHeight]
+        overlay.addSubview(outside)
+        let anchor = cell.convert(cell.bounds, to: self)
+        let width = min(max(1, bounds.width - 12), CGFloat(variants.count) * 44 + 12)
+        let x = max(6, min(bounds.width - width - 6, anchor.midX - width / 2))
+        let y = max(0, min(bounds.height - 56, anchor.minY >= 56 ? anchor.minY - 56 : anchor.maxY))
+        let scroll = UIScrollView(frame: CGRect(x: x, y: y, width: width, height: 56))
+        scroll.backgroundColor = palette.key; scroll.layer.cornerRadius = 12
+        scroll.showsHorizontalScrollIndicator = false
+        scroll.contentSize = CGSize(width: CGFloat(variants.count) * 44 + 12, height: 56)
+        for (position, variant) in variants.enumerated() {
+            let choice = button(variant) { [weak self] in
+                guard let self else { return }
+                self.dismissSkinTones()
+                let tone = EmojiSkinTone.tone(in: variant)
+                self.defaultSkinTone = tone; self.onDefaultSkinToneChanged?(tone)
+                self.history.record(variant, mode: .emoji, defaults: self.defaults)
+                self.onInsert?(variant)
+            }
+            choice.accessibilityLabel = variant + "、" + EmojiSkinTone.tone(in: variant).title
+            choice.accessibilityIdentifier = "symbol-skin-tone-" + EmojiSkinTone.tone(in: variant).rawValue
+            choice.titleLabel?.font = .systemFont(ofSize: 30)
+            choice.frame = CGRect(x: 6 + CGFloat(position) * 44, y: 6, width: 44, height: 44)
+            scroll.addSubview(choice)
+        }
+        overlay.addSubview(scroll); addSubview(overlay); skinTonePopup = overlay
+        UIAccessibility.post(notification: .layoutChanged, argument: scroll.subviews.first)
+    }
+    private func dismissSkinTones() {
+        skinTonePopup?.removeFromSuperview(); skinTonePopup = nil
+    }
+    func scrollViewWillBeginDragging(_ scrollView: UIScrollView) {
+        if scrollView === collection { dismissSkinTones() }
     }
     func collectionView(_ collectionView: UICollectionView, contextMenuConfigurationForItemAt indexPath: IndexPath, point: CGPoint) -> UIContextMenuConfiguration? {
         if mode == .clipboard {
@@ -237,6 +315,7 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
 private final class SymbolCell: UICollectionViewCell {
     private let label = UILabel()
     private let image = UIImageView()
+    private let indicator = UILabel()
     override init(frame: CGRect) {
         super.init(frame: frame)
         label.textAlignment = .center; label.numberOfLines = 2; label.adjustsFontSizeToFitWidth = true; label.minimumScaleFactor = 0.6
@@ -245,13 +324,22 @@ private final class SymbolCell: UICollectionViewCell {
             contentView.addSubview(view); view.translatesAutoresizingMaskIntoConstraints = false
             NSLayoutConstraint.activate([view.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 4), view.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -4), view.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 4), view.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -4)])
         }
+        indicator.text = "▾"; indicator.font = .systemFont(ofSize: 9); indicator.isHidden = true
+        contentView.addSubview(indicator)
+        indicator.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([indicator.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -2), indicator.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -1)])
         isAccessibilityElement = true; accessibilityTraits = .button
         contentView.layer.cornerRadius = 6
     }
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+    func showSkinToneIndicator(_ visible: Bool) {
+        indicator.isHidden = !visible
+        accessibilityHint = visible ? "長押しして肌色を選択" : nil
+    }
     func set(text: String, image: UIImage?, size: CGFloat, palette: KeyboardPalette) {
         label.text = text; label.font = .systemFont(ofSize: size); label.textColor = palette.foreground
         self.image.image = image; label.isHidden = image != nil
+        indicator.textColor = palette.foreground
         contentView.backgroundColor = palette.key; accessibilityLabel = text
     }
 }
