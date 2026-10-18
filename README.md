@@ -59,6 +59,17 @@ printf '%s\n' にほんご とうきょう | ./Scripts/sumire-cli --categories a
 
 C ABI の所有権・世代番号・結果の有効期間は `ConversionCore/src/c_api.h` を参照してください。
 
+変換コアのhost benchmarkは同一の辞書・入力で実行し、集計値と入力別のp50/p95/p99、辞書manifestとCLIのSHA-256を出力します。`--categories none|all` で分類辞書を切り替え、`--disable-standalone-priority` で優先候補テーブルの効果を分けられます。`--omission` と `--predict-japanese` はそれぞれ省略入力・予測経路を測ります。
+
+```sh
+python3 ConversionCore/tests/benchmark.py \
+  --cli "$HOME/sumire-build/release/sumire-cli" \
+  --data "$HOME/sumire-data/cli-priority-v1" \
+  --categories all --iterations 500
+```
+
+この測定はhost上の変換コア時間です。iOSのキーボード拡張、実機の入力遅延、OS cold-cacheや`phys_footprint`の測定値として扱いません。
+
 ## ビルドとテスト
 
 iOS の開発環境は Xcode 27.1 / XcodeGen 2.46.0 です。Xcode プロジェクトは `project.yml` から生成し、生成物はコミットしません。

@@ -160,6 +160,19 @@ class Tests(unittest.TestCase):
         short=json.loads(self.run_cli('--predict-japanese','あい').stdout)
         self.assertNotIn('Next',[c['text'] for c in short['candidates']])
 
+    def test_japanese_prediction_deduplicates_against_final_primary_list(self):
+        entries=[('あいう','あいうえ',1,-25000)]
+        entries.extend(('あいう',f'候補{i:02}',1,-24000+i*100) for i in range(15))
+        entries.extend([('あいう','あいう',1,30000), ('あいうえ','あいうえ',1,10)])
+        dictionary(self.data/'system.sud',entries)
+        standalone(self.data/'standalone.sud',['あいう'])
+
+        result=json.loads(self.run_cli('--nbest','1','--predict-japanese','あいう').stdout)
+        texts=[candidate['text'] for candidate in result['candidates']]
+
+        self.assertEqual(texts[0],'あいう')
+        self.assertIn('あいうえ',texts)
+
     def test_japanese_completion_utf16_surface_penalty_and_budget(self):
         dictionary(self.data/'system.sud', [('あいうえおかき',-2,1,100), ('あいうえおかく',-1,1,200)])
         result=json.loads(self.run_cli('--predict-japanese','あいうえおか').stdout)

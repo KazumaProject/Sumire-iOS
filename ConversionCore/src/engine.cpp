@@ -501,6 +501,43 @@ size_t Workspace::retained_bytes() const noexcept { return impl->bytes(); }
 
 static void rank_primary(std::vector<Candidate> &candidates,
                          size_t limit = std::numeric_limits<size_t>::max()) {
+  const auto primary_order = [](const Candidate &a, const Candidate &b) {
+    if (a.standalone_unigram_matched != b.standalone_unigram_matched)
+      return a.standalone_unigram_matched;
+    return a.score < b.score;
+  };
+  // The lattice k-best traversal already emits candidates in score order.
+  // When no later source disturbed that order, preserve it and sort only
+  // equal-priority/equal-score runs by Kotlin's UTF-16 surface order.
+  if (limit >= candidates.size() && std::is_sorted(candidates.begin(), candidates.end(), primary_order)) {
+    size_t begin = 0;
+    while (begin < candidates.size()) {
+      size_t end = begin + 1;
+      while (end < candidates.size() &&
+             candidates[end].standalone_unigram_matched == candidates[begin].standalone_unigram_matched &&
+             candidates[end].score == candidates[begin].score) {
+        ++end;
+      }
+      if (end - begin > 1) {
+        std::vector<std::pair<std::u16string, size_t>> tied;
+        tied.reserve(end - begin);
+        for (size_t i = begin; i < end; ++i)
+          tied.emplace_back(utf16(candidates[i].text), i);
+        std::sort(tied.begin(), tied.end());
+        bool changed = false;
+        for (size_t i = 0; i < tied.size(); ++i) changed |= tied[i].second != begin + i;
+        if (changed) {
+          std::vector<Candidate> ranked;
+          ranked.reserve(tied.size());
+          for (const auto &entry : tied) ranked.push_back(std::move(candidates[entry.second]));
+          for (size_t i = 0; i < ranked.size(); ++i) candidates[begin + i] = std::move(ranked[i]);
+        }
+      }
+      begin = end;
+    }
+    return;
+  }
+
   std::vector<std::u16string> surfaces;
   surfaces.reserve(candidates.size());
   for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
@@ -741,29 +778,32 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     rank_primary(result.candidates, count);
   }
   seen.clear();
-  std::unordered_map<std::string, size_t> primary;
-  for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
-  // Category exact matches are independent of the N-best search limit. Keep
-  // every homophone, but merge duplicate origins without fabricating segments.
-  for (size_t id : exactCategoryNodes) {
-    const auto &node = nodes[id];
-    Candidate exact;
-    exact.text = node.dict->surface(node.token, reading, 0, reading.size());
-    exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
-    exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
-    exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
-    const bool exactMatched = exact.standalone_unigram_matched;
-    auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
-    if (inserted) result.candidates.push_back(std::move(exact));
-    auto &winner = result.candidates[position->second];
-    const bool matched = winner.standalone_unigram_matched || exactMatched;
-    if (!inserted && exact.score < winner.score) {
-      exact.classified_categories = std::move(winner.classified_categories);
-      winner = std::move(exact);
+  if (!exactCategoryNodes.empty()) {
+    std::unordered_map<std::string, size_t> primary;
+    primary.reserve(result.candidates.size() + exactCategoryNodes.size());
+    for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
+    // Category exact matches are independent of the N-best search limit. Keep
+    // every homophone, but merge duplicate origins without fabricating segments.
+    for (size_t id : exactCategoryNodes) {
+      const auto &node = nodes[id];
+      Candidate exact;
+      exact.text = node.dict->surface(node.token, reading, 0, reading.size());
+      exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
+      exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
+      exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
+      const bool exactMatched = exact.standalone_unigram_matched;
+      auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
+      if (inserted) result.candidates.push_back(std::move(exact));
+      auto &winner = result.candidates[position->second];
+      const bool matched = winner.standalone_unigram_matched || exactMatched;
+      if (!inserted && exact.score < winner.score) {
+        exact.classified_categories = std::move(winner.classified_categories);
+        winner = std::move(exact);
+      }
+      winner.standalone_unigram_matched = matched;
+      if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
+        winner.classified_categories.push_back(node.dict->name);
     }
-    winner.standalone_unigram_matched = matched;
-    if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
-      winner.classified_categories.push_back(node.dict->name);
   }
   for (const auto &candidate : result.candidates) seen.insert(candidate.text);
   if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
