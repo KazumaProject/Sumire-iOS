@@ -1175,6 +1175,20 @@ final class KeyboardHarnessTests: XCTestCase {
         custom.name = "Sumire native input harness"
         custom.lifetime = .keepAlways
         add(custom)
+        let brackets = app.buttons["gojuon-0-0"]
+        let bracketTitle = brackets.staticTexts.firstMatch
+        XCTAssertTrue(bracketTitle.exists)
+        XCTAssertGreaterThanOrEqual(bracketTitle.frame.minY, brackets.frame.minY - 0.5)
+        XCTAssertLessThanOrEqual(bracketTitle.frame.maxY, brackets.frame.maxY + 0.5)
+        let originalKeyHeight = key.frame.height
+        for name in ["Sumire", "テンキー", "ローマ字", "ABC", "50音"] {
+            selectKeyboard(name, in: app)
+            let appearance = XCTAttachment(screenshot: app.screenshot())
+            appearance.name = "Default key typography " + name
+            appearance.lifetime = .keepAlways
+            add(appearance)
+        }
+        XCTAssertEqual(key.frame.height, originalKeyHeight, accuracy: 0.5)
         // SwiftUI exposes a labelled container and the actual UISwitch separately.
         // Tapping the container's centre hits its label, leaving the value unchanged.
         app.switches["Sumire の入力面を試す"].switches.firstMatch.tap()

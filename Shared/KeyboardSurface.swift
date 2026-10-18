@@ -386,11 +386,7 @@ final class KeyboardSurface: UIInputView {
                                           horizontalGap: geometry.keySpacing, verticalGap: geometry.rowSpacing,
                                           makeKey: { [weak self] definition in
             guard let self else { return UIView() }
-            var appearance = self.keyAppearance(special: definition.action != .text)
-            if definition.action == .text, self.settingsDefaults.object(forKey: "appearance.tenKey.keyFontSize") == nil {
-                if self.tenKeyMode == .english { appearance.keyFontSize = 12 }
-                if self.tenKeyMode == .number { appearance.keyFontSize = 16 }
-            }
+            let appearance = self.keyAppearance(special: definition.action != .text)
             let key: UIButton
             if definition.action == .text {
                 let flickKey = FlickKey(type: .custom)
