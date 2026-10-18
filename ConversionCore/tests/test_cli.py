@@ -102,6 +102,10 @@ class Tests(unittest.TestCase):
         self.assertFalse(disabled[0]['standalone_unigram_matched'])
         compound=json.loads(self.run_cli('--nbest','10','しろあ').stdout)['candidates']
         self.assertFalse(any(c['standalone_unigram_matched'] for c in compound))
+        dictionary(self.data/'system.sud',entries[:3])  # Literal output exists only as two nodes.
+        multi=json.loads(self.run_cli('--nbest','1','しろ').stdout)['candidates']
+        self.assertEqual(multi[0]['text'],'城')
+        self.assertFalse(multi[0]['standalone_unigram_matched'])
         dictionary(self.data/'system.sud',[('ごと','ごと',1,-100)])
         corrected=json.loads(self.run_cli('--omission','こと').stdout)['candidates']
         self.assertFalse(any(c['standalone_unigram_matched'] for c in corrected))
