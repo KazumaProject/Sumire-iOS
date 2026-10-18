@@ -47,7 +47,11 @@ struct SymbolKeyboardSettings: View {
                     let url = PersonalDataLocation.clipboardURL(allowShared: true)
                     DispatchQueue.global(qos: .userInitiated).async {
                         let message: String
-                        do { try ClipboardHistoryStore(url: url).clear(); message = "履歴を削除しました" }
+                        do {
+                            try ClipboardHistoryStore(url: url).clear()
+                            KeyboardSettings.appDefaults.set(UUID().uuidString, forKey: "clipboard.resetToken")
+                            message = "本体の履歴を削除しました。キーボード側は次回表示時に削除します。"
+                        }
                         catch { message = error.localizedDescription }
                         DispatchQueue.main.async { notice = message; clearing = false }
                     }

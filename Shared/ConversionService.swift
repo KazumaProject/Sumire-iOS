@@ -76,12 +76,18 @@ final class ConversionService {
         let state = state
         queue.async { state.close(); state.personal = value }
     }
-    func setLearning(url: URL?) {
-        guard learningURL != url else { return }
+    func setLearning(url: URL?, localReset: LocalDataReset? = nil) {
+        guard learningURL != url || localReset != nil else { return }
         learningURL = url
         _ = pending.advance()
         let state = state
-        queue.async { state.learningURL = url; state.learning = nil; state.learningFailure = nil }
+        queue.async {
+            state.learning = nil; state.learningURL = nil; state.learningFailure = nil
+            do {
+                try localReset?.apply()
+                state.learningURL = url
+            } catch { state.learningFailure = "学習データの削除を再試行します: " + error.localizedDescription }
+        }
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false, includeBunsetsu: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
