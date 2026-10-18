@@ -42,7 +42,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             for suffix in ["flickUp", "flickDown"] { result["qwerty.\(kind).\(suffix)"] = .boolean }
         }
         for suffix in ["halfWidthNumbers", "halfWidthSymbols"] { result["qwerty.romaji.\(suffix)"] = .boolean }
-        for key in [KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
+        for key in [SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
             result[key] = .data
         }
         return result
@@ -85,7 +85,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case (.boundedText(let limit), .text(let text)):
                 guard text.utf8.count <= limit else { throw Self.invalid(key) }
             case (.data, .data(let data)):
-                if key == KeyboardSelection.storageKey {
+                if key == SumireSpecialKeySettings.storageKey {
+                    _ = try SumireSpecialKeySettings.decode(data)
+                } else if key == KeyboardSelection.storageKey {
                     guard data.count <= 300_000 else { throw Self.invalid(key) }
                     try JSONDecoder().decode(KeyboardSelection.self, from: data).validate()
                 } else if key == RomajiLibrary.storageKey {
