@@ -9,6 +9,19 @@ struct ConversionCandidate {
     let score: Int64
     let range: NSRange
     let dictionaries: [String]
+    /// Owned Swift values projected from this candidate's path only. Ranges are
+    /// UTF-16 offsets within the consumed reading (currently a prefix at zero).
+    let bunsetsu: [BunsetsuSegment]
+
+    init(id: UInt64, text: String, score: Int64, range: NSRange,
+         dictionaries: [String], bunsetsu: [BunsetsuSegment] = []) {
+        self.id = id
+        self.text = text
+        self.score = score
+        self.range = range
+        self.dictionaries = dictionaries
+        self.bunsetsu = bunsetsu
+    }
 }
 struct ConversionResponse {
     let generation: UInt64
@@ -68,7 +81,7 @@ final class ConversionService {
         let state = state
         queue.async { state.learningURL = url; state.learning = nil; state.learningFailure = nil }
     }
-    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
+    func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false, includeBunsetsu: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directory = directory, mask = categoryMask, englishReading = englishReadingEnabled
         let pending = pending, ticket = pending.advance()
@@ -86,7 +99,7 @@ final class ConversionService {
                     var request = sumire_request(generation: generation, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,
                                                  edit_start_utf16: UInt32(max(0, editStart)),
-                                                 candidate_count: 20, max_states: 200_000, flags: english ? 2 : (omission ? 1 : 0) | 4)
+                                                 candidate_count: 20, max_states: 200_000, flags: english ? 2 : (omission ? 1 : 0) | 12)
                     return sumire_session_update(state.session, &request, &result, &error, error.count)
                 }
                 guard status == 0, let result else { throw NativeError(String(cString: error)) }
@@ -98,16 +111,43 @@ final class ConversionService {
                     var candidate = sumire_candidate()
                     guard sumire_result_candidate(result, index, &candidate) == 0 else { throw NativeError("候補を取得できません") }
                     var dictionaries: [String] = []
+                    var tokens: [BunsetsuToken] = []
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
+                        if includeBunsetsu {
+                            tokens.append(BunsetsuToken(
+                                readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
+                                text: Self.copy(segment.text)))
+                        }
                         let name = Self.copy(segment.dictionary)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
                     }
-                    candidates.append(ConversionCandidate(id: candidate.candidate_id, text: Self.copy(candidate.text),
-                                                          score: candidate.score,
-                                                          range: NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16)),
-                                                          dictionaries: dictionaries))
+                    let text = Self.copy(candidate.text)
+                    let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
+                    var bunsetsu: [BunsetsuSegment] = []
+                    if includeBunsetsu {
+                        var boundaries: [Int] = []
+                        for boundaryIndex in 0..<sumire_result_bunsetsu_count(result, index) {
+                            var offset: UInt32 = 0
+                            guard sumire_result_bunsetsu_boundary(result, index, boundaryIndex, &offset) == 0 else {
+                                throw NativeError("文節の範囲が不正です")
+                            }
+                            boundaries.append(Int(offset))
+                        }
+                        guard range.location == 0, let consumedRange = Range(range, in: reading) else {
+                            throw NativeError("候補の読み範囲が不正です")
+                        }
+                        // Partial matches project only their consumed prefix. A completion
+                        // spans the typed prefix, not the longer predicted reading.
+                        // All text is owned before the native snapshot is destroyed.
+                        bunsetsu = try BunsetsuProjection.project(
+                            reading: String(reading[consumedRange]), candidate: text,
+                            tokens: tokens, boundaries: boundaries)
+                    }
+                    candidates.append(ConversionCandidate(id: candidate.candidate_id, text: text,
+                                                          score: candidate.score, range: range,
+                                                          dictionaries: dictionaries, bunsetsu: bunsetsu))
                 }
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
