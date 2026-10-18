@@ -49,6 +49,16 @@ final class FlickStyleIntegrationUITests: XCTestCase {
         XCTAssertEqual(input.value as? String, "きく")
         key.tap(); XCTAssertEqual(input.value as? String, "きくか")
     }
+    func testRepeatedCenterTapsFollowEachReferenceController() {
+        let app = XCUIApplication()
+        for (style, expected) in [("default", "き"), ("circle", "かか"), ("second-flick", "き"),
+                                  ("third-flick", "かか"), ("center-guide-flick", "き"), ("sumire", "き")] {
+            let input = launch(app, style: style)
+            app.buttons["sumire-ka"].tap(); app.buttons["sumire-ka"].tap()
+            XCTAssertEqual(input.value as? String, expected, style)
+            app.terminate()
+        }
+    }
     func testMultiStageDirectionsDeliveredByUIKit() {
         let app = XCUIApplication()
         for (style, dx, expected) in [("second-flick", -65.0, "き"), ("third-flick", -65.0, "き"), ("sumire", 65.0, "け")] {

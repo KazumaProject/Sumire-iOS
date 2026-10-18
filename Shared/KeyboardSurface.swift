@@ -1001,8 +1001,13 @@ final class KeyboardSurface: UIInputView {
                 key.setTitleColor(palette.foreground, for: .normal)
                 key.backgroundColor = palette.key
                 key.layer.cornerRadius = geometry.keyCornerRadius
+                // The reference STANDARD/HIERARCHICAL listeners always dispatch
+                // as flick input, including a center release (FlickKeyboardView).
+                // Other built-in controllers classify their final direction;
+                // a hold or an earlier excursion does not itself force flick input.
+                let supportsTapCycle = reference?.keyType != "STANDARD_FLICK" && reference?.keyType != "HIERARCHICAL_FLICK"
                 key.onCommit = { [weak self] event in
-                    self?.sumireStyleOutput(event.output, index: index, pureTap: event.isPureTap)
+                    self?.sumireStyleOutput(event.output, index: index, tapInput: event.isTap && supportsTapCycle)
                 }
                 if !appearance.guidesVisible, title.contains("\n") {
                     let label = title as NSString
@@ -1095,15 +1100,16 @@ final class KeyboardSurface: UIInputView {
         minimum.isActive = true
         updateSumireKeys()
     }
-    private func sumireStyleOutput(_ output: CircularFlickOutput, index: Int, pureTap: Bool) {
+    private func sumireStyleOutput(_ output: CircularFlickOutput, index: Int, tapInput: Bool) {
         switch output {
         case .text(let text, _):
             guard !text.isEmpty else { tapCycle.reset(); return }
             beforeInput?(); katakanaCycle.reset()
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
             containsRomaji = false
-            if pureTap && sumireMode != .number {
-                let choice = tapCycle.choose(sumireMode.tapCycle(at: index), direction: .tap,
+            let cycle = sumireMode.tapCycle(at: index)
+            if tapInput && sumireMode != .number && text == String(cycle.prefix(1)) {
+                let choice = tapCycle.choose(cycle, direction: .tap,
                     generation: composition.generation, time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
                 if choice.replacing { _ = composition.replaceLast(choice.text) }
                 else { composition.append(choice.text) }
@@ -1125,7 +1131,7 @@ final class KeyboardSurface: UIInputView {
                 if let previous = composition.characterBeforeCursor, let changed = marker.applying(to: previous) {
                     _ = composition.replaceLast(String(changed)); refreshConversion()
                 }
-            } else if !text.isEmpty { sumireStyleOutput(.text(text), index: 0, pureTap: false) }
+            } else if !text.isEmpty { sumireStyleOutput(.text(text), index: 0, tapInput: false) }
             return
         }
         let actions: [String: SumireSpecialKeyAction] = [

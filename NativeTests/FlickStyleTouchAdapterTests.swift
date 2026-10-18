@@ -63,6 +63,16 @@ final class FlickStyleTouchAdapterTests: XCTestCase {
         XCTAssertEqual(host.popupCount, 0)
         key.touchesEnded([touch], with: nil) // A duplicate end cannot commit twice.
     }
+    func testRepeatedCenterTapsUseActualKeyTypeAcrossArrangements() throws {
+        for arrangement in SumireKeyArrangement.allCases {
+            for style in SumireFlickStyle.allCases {
+                let host = Host(style: style, arrangement: arrangement); defer { host.cleanup() }
+                try trace(host, []); try trace(host, [])
+                let expected = style == .circle || style == .threeStep ? "かか" : "き"
+                XCTAssertEqual(host.reading, expected, "\(arrangement)/\(style)")
+            }
+        }
+    }
     func testTwoStageVoicingAndReturnAcrossAllArrangements() throws {
         for arrangement in SumireKeyArrangement.allCases {
             let host = Host(style: .twoStep, arrangement: arrangement); defer { host.cleanup() }
@@ -74,12 +84,30 @@ final class FlickStyleTouchAdapterTests: XCTestCase {
             XCTAssertEqual(host.reading, "きぎか", "\(arrangement)")
         }
     }
+    func testReturnToCenterUsesReferenceFinalDirection() throws {
+        for style in [SumireFlickStyle.standard, .twoStep, .centerGuide, .donut] {
+            let host = Host(style: style, arrangement: .toggle); defer { host.cleanup() }
+            try trace(host, [])
+            try trace(host, [.init(x: -65, y: 0), .zero])
+            XCTAssertEqual(host.reading, "き", "\(style)")
+        }
+    }
     func testThreeStageContractedSoundAcrossAllArrangements() throws {
         for arrangement in SumireKeyArrangement.allCases {
             let host = Host(style: .threeStep, arrangement: arrangement); defer { host.cleanup() }
             try trace(host, [.init(x: -40, y: 0), .init(x: 0, y: -60), .init(x: -60, y: -100)])
             XCTAssertEqual(host.reading, "きゅう", "\(arrangement)")
         }
+    }
+    func testHierarchyReleaseDoesNotInventAnUndeliveredMove() throws {
+        let host = Host(style: .threeStep, arrangement: .toggle); defer { host.cleanup() }
+        let key = try host.key(), touch = SampleTouch()
+        touch.sample = CGPoint(x: key.bounds.midX, y: key.bounds.midY)
+        key.touchesBegan([touch], with: nil)
+        touch.sample.x -= 65
+        key.touchesEnded([touch], with: nil)
+        XCTAssertEqual(host.reading, "か")
+        XCTAssertEqual(host.popupCount, 0)
     }
     func testDonutDirectionsAndConfiguredMapSwitch() throws {
         for arrangement in SumireKeyArrangement.allCases {
@@ -95,7 +123,7 @@ final class FlickStyleTouchAdapterTests: XCTestCase {
             XCTAssertEqual(switched.reading, "が", "\(arrangement)")
         }
     }
-    func testLongPressTimerAndCancelCleanUpWithoutTapCycling() async throws {
+    func testLongPressTimerAndCancelFollowReferenceTapClassification() async throws {
         let host = Host(style: .twoStep, arrangement: .toggle); defer { host.cleanup() }
         try trace(host, [])
         XCTAssertEqual(host.reading, "か")
@@ -107,13 +135,13 @@ final class FlickStyleTouchAdapterTests: XCTestCase {
         await fulfillment(of: [fired], timeout: 2)
         XCTAssertEqual(host.popupCount, 1)
         key.touchesEnded([touch], with: nil)
-        XCTAssertEqual(host.reading, "かか")
+        XCTAssertEqual(host.reading, "き")
         XCTAssertEqual(host.popupCount, 0)
         key.touchesBegan([touch], with: nil)
         key.touchesCancelled([touch], with: nil)
         XCTAssertEqual(host.popupCount, 0)
         key.touchesEnded([touch], with: nil)
-        XCTAssertEqual(host.reading, "かか")
+        XCTAssertEqual(host.reading, "き")
     }
 }
 
