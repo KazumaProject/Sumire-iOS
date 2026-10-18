@@ -76,6 +76,7 @@ final class KeyboardViewController: UIInputViewController {
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
         surface.candidateBar.automaticallyPreviewClipboard = defaults.bool(forKey: "clipboardAutomaticPreview")
         surface.settingsDefaults = defaults
+        surface.configureClipboard(accessAllowed: hasFullAccess, allowShared: hasFullAccess)
         surface.reloadTheme()
         surface.reloadRomaji()
         surface.reloadCustomLayouts()

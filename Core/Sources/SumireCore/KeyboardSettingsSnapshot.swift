@@ -20,6 +20,11 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
             result[key] = .boolean
         }
+        result[SymbolKeyboardMode.initialModeKey] = .text(Set(SymbolKeyboardMode.allCases.map(\.rawValue)))
+        result[EmojiSkinTone.settingsKey] = .text(Set(EmojiSkinTone.allCases.map(\.rawValue)))
+        result[ClipboardHistorySettings.enabledKey] = .boolean
+        result["clipboard.expirationEnabled"] = .boolean
+        result["clipboard.retentionHours"] = .number(1...72, integer: true)
         result["keyboard.lastUsed"] = .boundedText(256)
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)

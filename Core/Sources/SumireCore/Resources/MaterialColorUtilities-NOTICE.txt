@@ -1,0 +1,13 @@
+Material Color Utilities — Swift
+Copyright Google LLC (individual file copyright notices retained)
+License: Apache License, Version 2.0 (included as MaterialColorUtilities-LICENSE.txt)
+Source: https://github.com/material-foundation/material-color-utilities
+Pinned revision: dd62982dfdefdfc9232ce8d76e122fb1c6d188ae
+Included subset: HCT/CAM16, color/contrast math, tonal palettes, temperature/dislike,
+SchemeContent and DynamicColor role calculation. No image extraction or networking.
+Changes: upstream Swift source files are unmodified; packaged as a local target.
+Sumire's role adapter and HSV seed compatibility layer are separate original files.
+Compatibility oracle: com.google.android.material:material:1.13.0 source JAR,
+SHA-256 7b8a89701918165bfa45e9137e07192c02ac85a8d52bbf16b3dec0c329a76045.
+Android Sumire reference: 9506a0baa7f2b56a74f85f2e3e776fe22f6b6e93 (MIT).
+No Android source code is copied into this adapter.
