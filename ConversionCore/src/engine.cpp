@@ -1,5 +1,6 @@
 #include "engine.hpp"
 #include "dictionary_format.hpp"
+#include "standalone_dictionary.hpp"
 #include "bunsetsu.hpp"
 #include "unicode_case.hpp"
 #include <algorithm>
@@ -7,14 +8,18 @@
 #include <chrono>
 #include <cstring>
 #include <fcntl.h>
+#include <filesystem>
 #include <limits>
+#include <numeric>
 #include <queue>
 #include <span>
+#include <string_view>
 #include <stdexcept>
 #include <sys/mman.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <unordered_set>
+#include <unordered_map>
 #include <zlib.h>
 namespace sumire {
 namespace {
@@ -23,6 +28,67 @@ using detail::File;
 using detail::Bits;
 using detail::Dictionary;
 constexpr int64_t INF = std::numeric_limits<int64_t>::max() / 4;
+constexpr uint16_t MOZC_UNKNOWN_POS_ID = 1841;
+constexpr int32_t MOZC_MAX_WORD_COST = 32767;
+constexpr bool is_ascii_alphabet(char16_t c) {
+  return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z');
+}
+constexpr size_t ANDROID_FORWARD_BEAM_WIDTH = 20;
+constexpr int64_t ANDROID_DIGIT_OUTPUT_PENALTY = 2000;
+bool has_digit(std::u16string_view value) {
+  return std::any_of(value.begin(), value.end(), unicode_is_digit);
+}
+bool has_digit(std::string_view value) {
+  bool found = false;
+  for (size_t i = 0; i < value.size();) {
+    uint32_t scalar = static_cast<unsigned char>(value[i++]);
+    size_t continuation_count = 0;
+    uint32_t minimum = 0;
+    if (scalar < 0x80) {
+      if (scalar >= '0' && scalar <= '9') found = true;
+    } else if (scalar >= 0xc2 && scalar <= 0xdf) {
+      scalar &= 31;
+      continuation_count = 1;
+      minimum = 0x80;
+    } else if (scalar >= 0xe0 && scalar <= 0xef) {
+      scalar &= 15;
+      continuation_count = 2;
+      minimum = 0x800;
+    } else if (scalar >= 0xf0 && scalar <= 0xf4) {
+      scalar &= 7;
+      continuation_count = 3;
+      minimum = 0x10000;
+    } else {
+      throw std::runtime_error("invalid UTF-8 surface");
+    }
+    while (continuation_count--) {
+      require(i < value.size(), "truncated UTF-8 surface");
+      const auto byte = static_cast<unsigned char>(value[i++]);
+      require((byte & 0xc0) == 0x80, "invalid UTF-8 surface continuation");
+      scalar = (scalar << 6) | (byte & 63);
+    }
+    require(scalar >= minimum && scalar <= 0x10ffff &&
+                !(scalar >= 0xd800 && scalar <= 0xdfff),
+            "invalid Unicode surface scalar");
+    if (scalar <= 0xffff && unicode_is_digit(static_cast<char16_t>(scalar)))
+      found = true;
+  }
+  return found;
+}
+bool dictionary_surface_has_digit(const Dictionary &dictionary, uint32_t token,
+                                 const std::u16string &reading, size_t start,
+                                 size_t end, size_t corrected_node) {
+  const auto reference = dictionary.refs[token];
+  if (reference >= 0xfffffffeU) {
+    if (corrected_node)
+      return has_digit(dictionary.nodeReading(corrected_node));
+    return has_digit(std::u16string_view(reading).substr(start, end - start));
+  }
+  const auto *bytes = reinterpret_cast<const char *>(
+      dictionary.strings.data() + dictionary.offsets[reference]);
+  return has_digit(std::string_view(
+      bytes, dictionary.offsets[reference + 1] - dictionary.offsets[reference]));
+}
 struct Connection {
   File file;
   std::span<const uint16_t> left, right, ranks;
@@ -168,9 +234,13 @@ struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
   std::unique_ptr<Dictionary> english_reading, english_words;
+  std::unique_ptr<detail::StandaloneDictionary> standalone;
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
-  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words)
+  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority)
       : connection(dir) {
+    const auto path = dir + "/standalone.sud";
+    if (standalone_priority && std::filesystem::exists(path))
+      standalone = std::make_unique<detail::StandaloneDictionary>(path);
     if (words) english_words = std::make_unique<Dictionary>(dir, "english");
     if (english) english_reading = std::make_unique<Dictionary>(dir, "english_reading");
     if (english_reading)
@@ -190,11 +260,13 @@ struct Engine::Impl {
         require(p < connection.left.size(), "token POS outside table");
   }
 };
-Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words)
-    : impl(std::make_unique<Impl>(dir, c, english, words)) {}
+Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority)
+    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority)) {}
 Engine::~Engine() = default;
+bool Engine::standalone_priority_available() const { return impl->standalone != nullptr; }
 size_t Engine::mapped_bytes() const {
   size_t n = impl->connection.file.size;
+  if (impl->standalone) n += impl->standalone->file.size;
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
   for (auto &d : impl->dictionaries)
@@ -423,6 +495,9 @@ struct Workspace::Impl {
     int64_t cost;
     size_t correctedNode = 0;
     int64_t tail = INF;
+    int64_t forward = INF;
+    bool beam_kept = true;
+    bool contains_digit = false;
     const PersonalEntry *personal = nullptr;
   };
   // Cache only immutable dictionary nodes. Overlay pointers and Viterbi tails
@@ -438,9 +513,11 @@ struct Workspace::Impl {
   bool cache_valid = false;
   std::vector<Node> nodes;
   std::vector<std::vector<size_t>> at;
+  std::vector<std::vector<size_t>> ending;
   struct State {
     size_t node, parent;
     int64_t cost; // The bound is cost + nodes[node].tail; only the heap stores it.
+    bool contains_digit = false;
   };
   std::vector<State> states;
   struct Item {
@@ -455,9 +532,11 @@ struct Workspace::Impl {
   std::vector<Dictionary::OmissionState> omission_pending;
   size_t bytes() const noexcept {
     size_t total = nodes.capacity() * sizeof(Node) + states.capacity() * sizeof(State) +
-        heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) + at.capacity() * sizeof(at[0]) +
+        heap.capacity() * sizeof(Item) + path.capacity() * sizeof(size_t) +
+        at.capacity() * sizeof(at[0]) + ending.capacity() * sizeof(ending[0]) +
         omission_pending.capacity() * sizeof(Dictionary::OmissionState);
     for (const auto &row : at) total += row.capacity() * sizeof(size_t);
+    for (const auto &row : ending) total += row.capacity() * sizeof(size_t);
     total += search_rows.capacity() * sizeof(SearchRow);
     // String small-buffer capacity is inline storage, not retained allocation.
     if (previous_reading.capacity() > std::u16string().capacity())
@@ -475,12 +554,14 @@ struct Workspace::Impl {
     std::vector<Item>().swap(heap);
     std::vector<size_t>().swap(path);
     std::vector<std::vector<size_t>>().swap(at);
+    std::vector<std::vector<size_t>>().swap(ending);
     std::vector<Dictionary::OmissionState>().swap(omission_pending);
   }
   void finish() noexcept {
     nodes.clear(); states.clear(); heap.clear(); path.clear();
     omission_pending.clear();
     for (auto &row : at) row.clear();
+    for (auto &row : ending) row.clear();
     if (bytes() > 4 * 1024 * 1024) purge();
   }
 };
@@ -488,6 +569,71 @@ Workspace::Workspace() : impl(std::make_unique<Impl>()) {}
 Workspace::~Workspace() = default;
 void Workspace::purge() noexcept { impl->purge(); }
 size_t Workspace::retained_bytes() const noexcept { return impl->bytes(); }
+
+static void rank_primary(std::vector<Candidate> &candidates,
+                         size_t limit = std::numeric_limits<size_t>::max()) {
+  const auto primary_order = [](const Candidate &a, const Candidate &b) {
+    if (a.standalone_unigram_matched != b.standalone_unigram_matched)
+      return a.standalone_unigram_matched;
+    return a.score < b.score;
+  };
+  // The lattice k-best traversal already emits candidates in score order.
+  // When no later source disturbed that order, preserve it and sort only
+  // equal-priority/equal-score runs by Kotlin's UTF-16 surface order.
+  if (limit >= candidates.size() && std::is_sorted(candidates.begin(), candidates.end(), primary_order)) {
+    size_t begin = 0;
+    while (begin < candidates.size()) {
+      size_t end = begin + 1;
+      while (end < candidates.size() &&
+             candidates[end].standalone_unigram_matched == candidates[begin].standalone_unigram_matched &&
+             candidates[end].score == candidates[begin].score) {
+        ++end;
+      }
+      if (end - begin > 1) {
+        std::vector<std::pair<std::u16string, size_t>> tied;
+        tied.reserve(end - begin);
+        for (size_t i = begin; i < end; ++i)
+          tied.emplace_back(utf16(candidates[i].text), i);
+        std::sort(tied.begin(), tied.end());
+        bool changed = false;
+        for (size_t i = 0; i < tied.size(); ++i) changed |= tied[i].second != begin + i;
+        if (changed) {
+          std::vector<Candidate> ranked;
+          ranked.reserve(tied.size());
+          for (const auto &entry : tied) ranked.push_back(std::move(candidates[entry.second]));
+          for (size_t i = 0; i < ranked.size(); ++i) candidates[begin + i] = std::move(ranked[i]);
+        }
+      }
+      begin = end;
+    }
+    return;
+  }
+
+  std::vector<std::u16string> surfaces;
+  surfaces.reserve(candidates.size());
+  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
+  std::vector<size_t> order(candidates.size());
+  std::iota(order.begin(), order.end(), 0);
+  const auto less = [&](size_t a, size_t b) {
+    if (candidates[a].standalone_unigram_matched != candidates[b].standalone_unigram_matched)
+      return candidates[a].standalone_unigram_matched;
+    if (candidates[a].score != candidates[b].score) return candidates[a].score < candidates[b].score;
+    if (surfaces[a] != surfaces[b])
+      return surfaces[a] < surfaces[b]; // Kotlin String.compareTo uses UTF-16.
+    // Reproduce stable_sort's original-order behavior if two entries compare
+    // equal, while making the comparator total for nth_element.
+    return a < b;
+  };
+  if (limit < order.size()) {
+    std::nth_element(order.begin(), order.begin() + limit, order.end(), less);
+    order.resize(limit);
+  }
+  std::sort(order.begin(), order.end(), less);
+  std::vector<Candidate> ranked;
+  ranked.reserve(order.size());
+  for (auto index : order) ranked.push_back(std::move(candidates[index]));
+  candidates = std::move(ranked);
+}
 
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
@@ -511,6 +657,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   using Node = Workspace::Impl::Node;
   auto &nodes = work.nodes;
   auto &at = work.at;
+  auto &ending = work.ending;
+  std::vector<size_t> exactCategoryNodes;
   at.resize(reading.size() + 1);
   const auto &conn = impl->connection;
   require((!personal || personal->context_count == conn.n) &&
@@ -533,11 +681,25 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   for (size_t i = 0; i < reading.size(); ++i) {
     if (reading[i] >= 0xdc00 && reading[i] <= 0xdfff)
       continue;
+    bool foundInAnyDictionary = false;
     auto add = [&](Node node) {
       require(nodes.size() < 2000000,
               "lattice limit exceeded (input not truncated)");
-      at[i].push_back(nodes.size());
+      if (node.personal) {
+        node.contains_digit = has_digit(node.personal->text);
+      } else if (!node.dict) {
+        node.contains_digit = has_digit(
+            std::u16string_view(reading).substr(node.start, node.end - node.start));
+      }
+      node.tail = INF;
+      node.forward = INF;
+      node.beam_kept = true;
+      const size_t id = nodes.size();
+      at[i].push_back(id);
       nodes.push_back(node);
+      if (node.start == 0 && node.end == reading.size() && node.dict &&
+          node.dict != impl->dictionaries.front().get() && !node.correctedNode)
+        exactCategoryNodes.push_back(id);
     };
     auto &cached = work.search_rows[i];
     if (compatible && cached.horizon && (same || cached.horizon <= common)) {
@@ -554,6 +716,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           auto p = d->pos[token];
           Node node{i, end, d.get(), token, conn.left[p], conn.right[p],
                     d->costs[token] + (correctedNode ? 1900 : 0), correctedNode};
+          node.contains_digit = dictionary_surface_has_digit(
+              *d, token, reading, i, end, correctedNode);
           cached.nodes.push_back(node);
           add(node);
         };
@@ -565,6 +729,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           }));
       }
     }
+    foundInAnyDictionary = !cached.nodes.empty();
     for (const auto *overlay : {personal, learned}) {
       if (!overlay) continue;
       auto first = overlay->entries.begin(), last = overlay->entries.end();
@@ -587,6 +752,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           const auto &entry = it->entry;
           if (entry.exact_only && (i != 0 || j + 1 != reading.size()))
             continue;
+          foundInAnyDictionary = true;
           uint16_t context = entry.exact_only ? 0 : entry.context_id;
           int64_t cost = entry.score;
           if (entry.exact_only)
@@ -598,10 +764,61 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         first = terminal;
       }
     }
+    const bool asciiAlphabet = is_ascii_alphabet(reading[i]);
+    if (!asciiAlphabet && foundInAnyDictionary) continue;
     size_t end = i + ((reading[i] >= 0xd800 && reading[i] <= 0xdbff) ? 2 : 1);
-    add({i, end, nullptr, 0, 0, 0, 16000});
+    uint16_t unknownPos = 0;
+    int32_t unknownCost = 10000;
+    if (asciiAlphabet) {
+      while (end < reading.size() && is_ascii_alphabet(reading[end])) ++end;
+      require(MOZC_UNKNOWN_POS_ID < conn.n,
+              "connection matrix lacks Mozc ASCII unknown POS 1841");
+      unknownPos = MOZC_UNKNOWN_POS_ID;
+      unknownCost = end - i > 1 ? MOZC_MAX_WORD_COST / 2 : MOZC_MAX_WORD_COST;
+    }
+    add({i, end, nullptr, 0, unknownPos, unknownPos, unknownCost});
   }
-  // Backward Viterbi gives the exact best remaining cost for each token.
+  // Match Android's ordinary conversion path: forward-DP costs prune each
+  // reading end position to its 20 cheapest nodes before N-best search.
+  ending.resize(reading.size() + 1);
+  for (auto &row : ending) row.clear();
+  for (size_t id = 0; id < nodes.size(); ++id) {
+    auto &node = nodes[id];
+    node.forward = INF;
+    node.beam_kept = true;
+    require(node.end > 0 && node.end <= reading.size(),
+            "lattice node end outside input");
+    ending[node.end].push_back(id);
+  }
+  for (size_t position = 1; position <= reading.size(); ++position) {
+    auto &row = ending[position];
+    for (size_t id : row) {
+      auto &node = nodes[id];
+      if (node.start == 0) {
+        node.forward = int64_t(conn.cost(0, node.left)) + node.cost;
+      } else if (node.start < ending.size()) {
+        for (size_t previous_id : ending[node.start]) {
+          const auto &previous = nodes[previous_id];
+          if (previous.forward == INF) continue;
+          node.forward = std::min(
+              node.forward,
+              previous.forward + conn.cost(previous.right, node.left) + node.cost);
+        }
+      }
+    }
+    if (row.size() > ANDROID_FORWARD_BEAM_WIDTH) {
+      std::stable_sort(row.begin(), row.end(), [&](size_t left, size_t right) {
+        return nodes[left].forward < nodes[right].forward;
+      });
+      for (size_t i = ANDROID_FORWARD_BEAM_WIDTH; i < row.size(); ++i)
+        nodes[row[i]].beam_kept = false;
+      row.resize(ANDROID_FORWARD_BEAM_WIDTH);
+    }
+  }
+  for (auto &row : at)
+    std::erase_if(row, [&](size_t id) { return !nodes[id].beam_kept; });
+
+  // Backward Viterbi gives the exact best remaining cost for each retained token.
   // The lattice is acyclic, so negative word/connection costs are supported.
   for (size_t i = reading.size(); i-- > 0;)
     for (size_t id : at[i]) {
@@ -626,15 +843,30 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       result.complete = false;
       return;
     }
+    const bool containsDigit = nodes[id].contains_digit ||
+        (parent != none && states[parent].contains_digit);
     size_t index = states.size();
-    states.push_back({id, parent, cost});
-    heap.push_back({cost + nodes[id].tail, index});
+    states.push_back({id, parent, cost, containsDigit});
+    heap.push_back({cost + nodes[id].tail +
+                        (containsDigit ? ANDROID_DIGIT_OUTPUT_PENALTY : 0),
+                    index});
     std::push_heap(heap.begin(), heap.end(), std::greater<Workspace::Impl::Item>());
   };
   for (auto id : at[0])
     push(id, none, int64_t(conn.cost(0, nodes[id].left)) + nodes[id].cost);
+  auto literal = [&](const Node &node) {
+    if (node.start != 0 || node.end != reading.size() || node.correctedNode) return false;
+    return node.personal ? node.personal->text == input
+        : node.dict ? node.dict->surface(node.token, reading, 0, reading.size()) == input
+        : true;
+  };
+  const bool standaloneMayMatch = impl->standalone && impl->standalone->contains(input) &&
+      std::any_of(at[0].begin(), at[0].end(), [&](size_t i) { return literal(nodes[i]); });
+  // Preserve N even when callers request more than Android's safety window.
+  const size_t searchCount = standaloneMayMatch ? std::max(count, std::min(size_t(64), std::max(count * 4, size_t(32)))) : count;
+  bool standaloneFound = false;
   std::unordered_set<std::string> seen;
-  while (!heap.empty() && result.candidates.size() < count) {
+  while (!heap.empty() && result.candidates.size() < searchCount) {
     auto index = heap.front().index;
     std::pop_heap(heap.begin(), heap.end(), std::greater<Workspace::Impl::Item>());
     heap.pop_back();
@@ -643,7 +875,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     ++result.expanded_states;
     if (node.end == reading.size()) {
       Candidate c;
-      c.score = state.cost + node.tail;
+      c.score = state.cost + node.tail +
+          (state.contains_digit ? ANDROID_DIGIT_OUTPUT_PENALTY : 0);
       auto &path = work.path;
       path.clear();
       for (size_t p = index; p != none; p = states[p].parent)
@@ -663,15 +896,60 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              : n.dict   ? n.dict->name
                         : "unknown",
              uint32_t(n.start), uint32_t(n.end - n.start)});
+        if (n.dict && n.dict != impl->dictionaries.front().get() &&
+            std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
+          c.classified_categories.push_back(n.dict->name);
+      }
+      require(state.contains_digit == has_digit(c.text),
+              "candidate digit state differs from materialized surface");
+      c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
+      if (c.standalone_unigram_matched) {
+        standaloneFound = true;
+        // A later single-node path can promote an earlier cheaper duplicate.
+        for (auto &existing : result.candidates)
+          if (existing.text == c.text) existing.standalone_unigram_matched = true;
       }
       if (seen.insert(c.text).second)
         result.candidates.push_back(std::move(c));
+      if (standaloneFound && result.candidates.size() >= count) break;
     } else
       for (size_t id : at[node.end])
         push(id, index,
              state.cost + conn.cost(node.right, nodes[id].left) +
                  nodes[id].cost);
   }
+  if (result.candidates.size() > count) {
+    rank_primary(result.candidates, count);
+  }
+  seen.clear();
+  if (!exactCategoryNodes.empty()) {
+    std::unordered_map<std::string, size_t> primary;
+    primary.reserve(result.candidates.size() + exactCategoryNodes.size());
+    for (size_t i = 0; i < result.candidates.size(); ++i) primary.emplace(result.candidates[i].text, i);
+    // Category exact matches are independent of the N-best search limit. Keep
+    // every homophone, but merge duplicate origins without fabricating segments.
+    for (size_t id : exactCategoryNodes) {
+      const auto &node = nodes[id];
+      Candidate exact;
+      exact.text = node.dict->surface(node.token, reading, 0, reading.size());
+      exact.score = conn.cost(0, node.left) + int64_t(node.cost) + conn.cost(node.right, 0);
+      exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
+      exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
+      const bool exactMatched = exact.standalone_unigram_matched;
+      auto [position, inserted] = primary.emplace(exact.text, result.candidates.size());
+      if (inserted) result.candidates.push_back(std::move(exact));
+      auto &winner = result.candidates[position->second];
+      const bool matched = winner.standalone_unigram_matched || exactMatched;
+      if (!inserted && exact.score < winner.score) {
+        exact.classified_categories = std::move(winner.classified_categories);
+        winner = std::move(exact);
+      }
+      winner.standalone_unigram_matched = matched;
+      if (std::find(winner.classified_categories.begin(), winner.classified_categories.end(), node.dict->name) == winner.classified_categories.end())
+        winner.classified_categories.push_back(node.dict->name);
+    }
+  }
+  for (const auto &candidate : result.candidates) seen.insert(candidate.text);
   if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.
@@ -687,16 +965,14 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       if (best.size() > 4) best.pop_back();
     });
     result.complete = result.complete && complete;
-    const size_t full_count = result.candidates.size();
     for (const auto &prediction : best) {
       auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
       if (seen.insert(text).second)
         result.candidates.push_back({text, prediction.score,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
-    std::inplace_merge(result.candidates.begin(), result.candidates.begin() + full_count,
-                       result.candidates.end(), [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
   }
+  rank_primary(result.candidates);
   if (impl->english_reading && !reading.empty()) {
     const auto &d = *impl->english_reading;
     auto add = [&](const std::string &text, int64_t score) {

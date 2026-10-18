@@ -49,8 +49,10 @@ final class ConversionService {
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
-        let locations = [bundle.appendingPathComponent("cli-english-v1", isDirectory: true),
-                         bundle.appendingPathComponent("PlugIns/SumireKeyboard.appex/cli-english-v1", isDirectory: true)]
+        let locations = ["cli-priority-v1", "cli-english-v1"].flatMap { name in
+            [bundle.appendingPathComponent(name, isDirectory: true),
+             bundle.appendingPathComponent("PlugIns/SumireKeyboard.appex/" + name, isDirectory: true)]
+        }
         return locations.first { FileManager.default.fileExists(atPath: $0.appendingPathComponent("system.sud").path) }
     }
     func setEnglishReading(_ enabled: Bool) {
@@ -98,7 +100,9 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(directory: directory, mask: mask, english: english, englishReading: englishReading)
-                let warning = try state.prepareLearning(reading: reading)
+                let warnings = [try state.prepareLearning(reading: reading),
+                    !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
+                let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
                 var error = [CChar](repeating: 0, count: 1024)
                 var result: OpaquePointer?
                 let status = reading.utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
@@ -127,6 +131,14 @@ final class ConversionService {
                                 text: Self.copy(segment.text)))
                         }
                         let name = Self.copy(segment.dictionary)
+                        if !dictionaries.contains(name) { dictionaries.append(name) }
+                    }
+                    for categoryIndex in 0..<sumire_result_category_count(result, index) {
+                        var category = sumire_string()
+                        guard sumire_result_category(result, index, categoryIndex, &category) == 0 else {
+                            throw NativeError("候補の辞書分類が不正です")
+                        }
+                        let name = Self.copy(category)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
                     }
                     let text = Self.copy(candidate.text)
@@ -222,6 +234,7 @@ final class ConversionService {
         var learningURL: URL?
         var learning: LearningStore?
         var learningFailure: String?
+        var standaloneAvailable = false
         var lastReading = ""
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         func prepareLearning(reading: String) throws -> String? {
@@ -267,6 +280,7 @@ final class ConversionService {
             guard sumire_engine_open_with_dictionaries(directory.path, mask, (english ? 1 : 0) | (englishReading ? 2 : 0), &engine, &error, error.count) == 0, let engine else {
                 throw NativeError(String(cString: error))
             }
+            standaloneAvailable = sumire_engine_has_standalone_priority(engine) != 0
             defer { sumire_engine_close(engine) }
             guard sumire_session_create(engine, &session, &error, error.count) == 0 else { throw NativeError(String(cString: error)) }
             do { try installPersonal(); englishLoaded = english } catch { close(); throw error }

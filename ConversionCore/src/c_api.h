@@ -25,7 +25,7 @@ typedef struct {
   const char *reading;
   size_t reading_bytes;
   uint32_t edit_start_utf16;
-  uint32_t candidate_count; /* Primary N-best limit, not total result limit. Japanese predictions merge by score; enabled auxiliary candidates may add results. */
+  uint32_t candidate_count; /* N-best limit, not total result limit: exact category matches, Japanese predictions and auxiliaries may add results. */
   uint32_t max_states;
   /* Bit 3 enables Japanese system completion: defaults 3..16 input units,
    * lookahead 3, up to 4 additional candidates. Consumes the typed input only. */
@@ -83,7 +83,10 @@ const char *sumire_category_name(size_t index);
 int sumire_engine_open(const char *directory, uint32_t category_mask,
                        sumire_engine **out, char *error, size_t error_size);
 /* Additive ABI v1 entry point. Dictionary flags: bit 0 loads English words,
- * bit 1 loads kana-to-English readings. Missing/corrupt requested files fail
+ * bit 1 loads kana-to-English readings; bit 2 disables standalone priority.
+ * Otherwise an optional standalone.sud is loaded when present. A corrupt
+ * present file fails; older dictionaries without this file remain supported.
+ * Missing/corrupt requested files fail
  * atomically. Zero has the same behavior as sumire_engine_open.
  * English mode uses locale-independent Unicode casing. User words match a
  * case-sensitive reading prefix; templates and learning require exact input.
@@ -93,6 +96,8 @@ int sumire_engine_open_with_dictionaries(const char *directory, uint32_t categor
                                         uint32_t dictionary_flags, sumire_engine **out,
                                         char *error, size_t error_size);
 void sumire_engine_close(sumire_engine *engine);
+/* 1 if the optional standalone table was loaded and enabled, otherwise 0. */
+int sumire_engine_has_standalone_priority(const sumire_engine *engine);
 int sumire_session_create(sumire_engine *engine, sumire_session **out,
                           char *error, size_t error_size);
 void sumire_session_destroy(sumire_session *session);
@@ -116,6 +121,11 @@ int sumire_result_segment(const sumire_result *result, size_t candidate_index,
  * existing structs are unchanged. Invalid result/candidate returns count 0.
  */
 size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidate_index);
+/* Category origins from selected paths and exact duplicates, separate from segments.
+ * Strings retain result lifetime. Existing ABI structs remain unchanged. */
+size_t sumire_result_category_count(const sumire_result *result, size_t candidate_index);
+int sumire_result_category(const sumire_result *result, size_t candidate_index,
+                          size_t category_index, sumire_string *out);
 /* Returns 0 on success, -1 for invalid arguments/index. Copies an offset. */
 int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidate_index,
                                    size_t boundary_index, uint32_t *out_utf16);

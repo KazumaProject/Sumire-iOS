@@ -31,6 +31,14 @@ bool unicode_is_letter(char16_t value) {
   return u_isalpha(value);
 #endif
 }
+bool unicode_is_digit(char16_t value) {
+  if (value < 128) return value >= u'0' && value <= u'9';
+#ifdef __APPLE__
+  return CFCharacterSetIsCharacterMember(CFCharacterSetGetPredefined(kCFCharacterSetDecimalDigit), value);
+#else
+  return u_isdigit(value);
+#endif
+}
 char16_t unicode_simple_upper(char16_t value) {
   if (value < 128) return value >= u'a' && value <= u'z' ? value - (u'a' - u'A') : value;
 #ifdef __APPLE__

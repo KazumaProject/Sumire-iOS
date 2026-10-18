@@ -31,12 +31,14 @@ git -C .reference/JapaneseKeyboard checkout --detach df1f38315bf56d860d32919a3ea
 ./Scripts/sumire-cli --setup
 ```
 
-標準生成先は `$HOME/sumire-data/cli-english-v1`、ビルド先は `$HOME/sumire-build/cli-release` です。`SUMIRE_CLI_DATA_DIR` / `SUMIRE_CLI_BUILD_DIR` で変更できます。生成先に既存の辞書がある場合、CLI ラッパーは再生成しません。別世代を作る場合は、空の出力先を指定します。
+標準生成先は `$HOME/sumire-data/cli-priority-v1`、ビルド先は `$HOME/sumire-build/cli-release` です。`SUMIRE_CLI_DATA_DIR` / `SUMIRE_CLI_BUILD_DIR` で変更できます。生成先に既存の辞書がある場合、CLI ラッパーは再生成しません。別世代を作る場合は、空の出力先を指定します。
 
 ```sh
 python3 Scripts/build_dictionary.py --english --english-reading \
   --output "$HOME/sumire-data/cli-next"
 ```
+
+v5の単独読み優先辞書も検証して`standalone.sud`へ変換します。優先フラグはスコアと独立しており、分類辞書の完全一致はN-best件数とは別に統合します。同点の主候補はUTF-16の表記順です。CLIの`standalone_priority_available`で搭載を確認できます。旧辞書は読めますが、この値がfalseのとき単独読み優先は利用できません。システムv3/v4の文節経路優先と数値N-gram補正は未実装です。
 
 入力・出力のハッシュ、出典とライセンス通知は生成先の `manifest.json` と `licenses/` に保存します。各辞書の条件はプログラムのライセンスと別に確認が必要です。特に英語データの適用ライセンスには未確認事項があり、配布条件の確認完了を意味しません。
 
@@ -57,6 +59,17 @@ printf '%s\n' にほんご とうきょう | ./Scripts/sumire-cli --categories a
 
 C ABI の所有権・世代番号・結果の有効期間は `ConversionCore/src/c_api.h` を参照してください。
 
+変換コアのhost benchmarkは同一の辞書・入力で実行し、集計値と入力別のp50/p95/p99、辞書manifestとCLIのSHA-256を出力します。`--categories none|all` で分類辞書を切り替え、`--disable-standalone-priority` で優先候補テーブルの効果を分けられます。`--omission` と `--predict-japanese` はそれぞれ省略入力・予測経路を測ります。
+
+```sh
+python3 ConversionCore/tests/benchmark.py \
+  --cli "$HOME/sumire-build/release/sumire-cli" \
+  --data "$HOME/sumire-data/cli-priority-v1" \
+  --categories all --iterations 500
+```
+
+この測定はhost上の変換コア時間です。iOSのキーボード拡張、実機の入力遅延、OS cold-cacheや`phys_footprint`の測定値として扱いません。
+
 ## ビルドとテスト
 
 iOS の開発環境は Xcode 27.1 / XcodeGen 2.46.0 です。Xcode プロジェクトは `project.yml` から生成し、生成物はコミットしません。
@@ -67,7 +80,7 @@ xcodebuild -project Sumire.xcodeproj -scheme Sumire -sdk iphonesimulator \
   -derivedDataPath "$HOME/sumire-build/ios" CODE_SIGNING_ALLOWED=NO build
 ```
 
-`project.yml` はチェックアウトの隣の `../sumire-data/cli-english-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
+`project.yml` はチェックアウトの隣の `../sumire-data/cli-priority-v1` を辞書リソースとして参照します。`$HOME` 以外へチェックアウトした場合は、その場所に生成資産へのシンボリックリンクを用意するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
 

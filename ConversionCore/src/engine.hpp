@@ -14,6 +14,9 @@ struct Candidate {
   std::vector<Segment> segments;
   // Interior reading offsets (UTF-16), from the selected complete path.
   std::vector<uint32_t> bunsetsu_boundaries{};
+  bool standalone_unigram_matched = false;
+  // Origin labels do not replace the selected path's segment boundaries.
+  std::vector<std::string> classified_categories{};
 };
 struct Result {
   std::vector<Candidate> candidates;
@@ -64,7 +67,8 @@ class Engine {
 
 public:
   Engine(const std::string &directory,
-         const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false);
+         const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false,
+         bool standalone_priority = true);
   ~Engine();
   Result convert(const std::string &reading, size_t count = 10,
                  size_t state_limit = 200000, bool omission = false,
@@ -78,6 +82,7 @@ public:
                          const PersonalDictionary *personal = nullptr,
                          const PersonalDictionary *learned = nullptr) const;
   size_t mapped_bytes() const;
+  bool standalone_priority_available() const;
   std::shared_ptr<const PersonalDictionary>
       personal_dictionary(std::vector<PersonalEntry>) const;
 };

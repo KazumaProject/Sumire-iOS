@@ -11,6 +11,7 @@ void equal(const Result &a, const Result &b) {
   for (size_t i = 0; i < a.candidates.size(); ++i) {
     const auto &x = a.candidates[i], &y = b.candidates[i];
     check(x.text == y.text && x.score == y.score && x.bunsetsu_boundaries == y.bunsetsu_boundaries &&
+          x.standalone_unigram_matched == y.standalone_unigram_matched && x.classified_categories == y.classified_categories &&
           x.segments.size() == y.segments.size(), "candidate order/surface/score/path changed");
     for (size_t j = 0; j < x.segments.size(); ++j) {
       const auto &p = x.segments[j], &q = y.segments[j];
@@ -37,7 +38,8 @@ int main(int argc, char **argv) {
   };
   for (bool omission : {false,true}) {
     for (const std::string &s : {"あ", "あい", "あいあ", "あいあい", "あいあいあ", "あいあい", "あいあ", "あああ", "あああ",
-                               "😀あいあい", "😁あいあい", "があい", "かあい", "👩‍💻あい", "👩‍💻あ", ""})
+                               "😀あいあい", "😁あいあい", "があい", "かあい", "👩‍💻あい", "👩‍💻あ",
+                               "し", "しろ", "しろい", "しろ", ""})
       run(s,omission,true,true,20,200000);
   }
   check(hits > 0, "no dictionary search rows reused");
