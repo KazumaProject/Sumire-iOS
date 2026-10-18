@@ -13,6 +13,8 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set(true, forKey: "qwerty.english.flickUp")
         defaults.set(0.2, forKey: "theme.hue")
         defaults.set("dark", forKey: "theme.mode")
+        defaults.set(0.35, forKey: "theme.saturation")
+        defaults.set(0.65, forKey: "theme.brightness")
         for kind in KeyboardKind.allCases {
             var appearance = KeyboardAppearance.load(kind, defaults: defaults)
             appearance.keyFontSize = 23; appearance.guideFontSize = 14
@@ -31,6 +33,8 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set("must not export", forKey: "unrelated.account")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         XCTAssertNil(original.values["unrelated.account"])
+        XCTAssertEqual(original.values["theme.saturation"], .number(0.35))
+        XCTAssertEqual(original.values["theme.brightness"], .number(0.65))
         let restored = try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(original))
         defaults.removePersistentDomain(forName: name)
         defaults.set("keep", forKey: "unrelated.account")
@@ -52,7 +56,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         let invalid: [(String, KeyboardSettingsSnapshot.Value)] = [
             ("candidateRowCount", .number(1.5)), ("categoryMask", .number(-1)),
-            ("theme.hue", .number(.nan)), ("theme.mode", .text("invalid")),
+            ("theme.hue", .number(.nan)), ("theme.saturation", .number(1.1)), ("theme.brightness", .number(-0.1)), ("theme.mode", .text("invalid")),
             ("englishReadingEnabled", .number(0)), ("unknown.key", .boolean(true)),
             ("appearance.english.keyScale", .number(0.1)),
             ("customRomaji.library", .data(Data("{}".utf8))),
