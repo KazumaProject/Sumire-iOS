@@ -77,6 +77,65 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
+    func testDisplayMergePreservesFirstBehaviorAndUnionsDictionaryLabels() {
+        let first = ConversionCandidate(id: 11, text: "橋", score: 90,
+            range: NSRange(location: 0, length: 1), dictionaries: ["system"], isReadingPrefix: true)
+        let duplicate = ConversionCandidate(id: 12, text: "橋", score: 1,
+            range: NSRange(location: 0, length: 2), dictionaries: ["category", "system"])
+        let distinct = ConversionCandidate(id: 13, text: "箸", score: 2,
+            range: NSRange(location: 0, length: 2), dictionaries: [])
+        let merged = ConversionCandidate.mergedForDisplay([first, distinct, duplicate])
+        XCTAssertEqual(merged.map(\.id), [11, 13])
+        XCTAssertEqual(merged[0].score, 90)
+        XCTAssertEqual(merged[0].range, first.range)
+        XCTAssertEqual(merged[0].displayAnnotation, "[部]")
+        XCTAssertEqual(merged[0].dictionaries, ["system", "category"])
+    }
+
+    func testMergedCandidatesSelectFirstIdentityInNormalAndExpandedBars() {
+        let candidates = ConversionCandidate.mergedForDisplay([
+            ConversionCandidate(id: 41, text: "橋", score: 0,
+                range: NSRange(location: 0, length: 1), dictionaries: [], isReadingPrefix: true),
+            ConversionCandidate(id: 42, text: "橋", score: 1,
+                range: NSRange(location: 0, length: 2), dictionaries: []),
+            ConversionCandidate(id: 43, text: "橋", score: 2,
+                range: NSRange(location: 0, length: 2), dictionaries: [],
+                rawText: "橋\tはし", correctedReading: "はし")])
+        for expanded in [false, true] {
+            withBar(rows: 3) { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                bar.setCandidates(candidates.map { .init(text: $0.text, annotation: $0.displayAnnotation) })
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                XCTAssertEqual(list.numberOfItems(inSection: 0), 2)
+                var selected: ConversionCandidate?
+                bar.onSelect = { selected = candidates[$0] }
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(selected?.id, 41)
+                XCTAssertEqual(selected?.range.length, 1)
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 1, section: 0))
+                XCTAssertEqual(selected?.id, 43)
+                XCTAssertEqual(selected?.text, "橋")
+                XCTAssertEqual(selected?.correctedReading, "はし")
+            }
+        }
+    }
+
+    func testDisplayMergeKeepsCorrectionRawIdentityAndCanonicalDistinctStrings() {
+        func candidate(_ id: UInt64, _ text: String, raw: String? = nil, correction: String? = nil) -> ConversionCandidate {
+            ConversionCandidate(id: id, text: text, score: 0,
+                range: NSRange(location: 0, length: 2), dictionaries: [],
+                rawText: raw, correctedReading: correction)
+        }
+        let merged = ConversionCandidate.mergedForDisplay([
+            candidate(1, "橋"), candidate(2, "橋", raw: "橋\tはし", correction: "はし"),
+            candidate(3, "橋", raw: "橋\tはし", correction: "はし"),
+            candidate(4, "が"), candidate(5, "か\u{3099}")])
+        XCTAssertEqual(merged.map(\.id), [1, 2, 4, 5])
+        XCTAssertEqual(merged[1].text, "橋")
+        XCTAssertEqual(merged[1].displayAnnotation, "[読] はし")
+        XCTAssertEqual(Array(merged[3].text.utf16), [0x304B, 0x3099])
+    }
+
     func testCorrectionAnnotationDoesNotChangeCommitText() {
         let candidate = ConversionCandidate(id: 1, text: "雰囲気", score: 0,
             range: NSRange(location: 0, length: 4), dictionaries: [],
