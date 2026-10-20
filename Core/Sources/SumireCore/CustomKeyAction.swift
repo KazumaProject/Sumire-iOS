@@ -18,6 +18,7 @@ public enum CustomKeyAction: Codable, Equatable {
         case commitAndSpace = "CommitAndInsertSpace"
         case deleteUntilBoundary = "DeleteUntilSymbol", openSymbols = "ShowEmojiKeyboard"
         case switchKana = "SwitchToKanaLayout", switchEnglish = "SwitchToEnglishLayout", switchNumber = "SwitchToNumberLayout"
+        case switchDirect = "SwitchDirectMode", switchRomaji = "SwitchRomajiEnglish"
     }
     /// Pinned IMEService InputText actions; ordinary Text payloads stay literal.
     public static func supportsInputText(_ token: String) -> Bool {

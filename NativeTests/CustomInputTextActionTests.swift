@@ -40,6 +40,11 @@ final class CustomInputTextActionTests: XCTestCase {
                 self?.inserted += text
                 self?.reading = ""
             }
+            surface.finishMarkedText = { [weak self] in
+                guard let self else { return }
+                self.inserted += self.reading
+                self.reading = ""
+            }
             surface.commitRawTextAndSpace = { [weak self] left, tail in
                 self?.rawParts.append((left, tail))
                 self?.inserted += left + " " + tail
@@ -290,6 +295,154 @@ final class CustomInputTextActionTests: XCTestCase {
         XCTAssertEqual(fixture.rawParts.first?.left, "にほんご")
         XCTAssertEqual(fixture.reading, "")
         XCTAssertTrue(fixture.surface.candidateBar.candidates.isEmpty)
+    }
+
+    func testRomajiTogglePreservesPendingReadingWithoutFlushing() throws {
+        let fixture = try Fixture(actions: [("n", "Text:n"), ("a", "Text:a"),
+            ("toggle", "SwitchRomajiEnglish")], romaji: true)
+        try fixture.tap("n"); try fixture.tap("toggle")
+        XCTAssertEqual(fixture.reading, "n")
+        XCTAssertEqual(fixture.inserted, "")
+        try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "na")
+        try fixture.tap("toggle"); try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "なあ")
+    }
+
+    func testDirectToggleFinishesCurrentPreviewWithoutRomajiFlush() throws {
+        let fixture = try Fixture(actions: [("n", "Text:n"), ("x", "Text:x"),
+            ("direct", "SwitchDirectMode")], romaji: true)
+        try fixture.tap("n"); try fixture.tap("direct")
+        XCTAssertEqual(fixture.inserted, "n")
+        XCTAssertEqual(fixture.reading, "")
+        try fixture.tap("x")
+        XCTAssertEqual(fixture.inserted, "nx")
+        try fixture.tap("direct"); try fixture.tap("n")
+        XCTAssertEqual(fixture.reading, "n")
+    }
+
+    func testDirectReplacementOptInReplacesRatherThanCommitsPendingReading() throws {
+        let fixture = try Fixture(actions: [("word", "Text:あ"), ("x", "Text:x"),
+            ("direct", "SwitchDirectMode"), ("full", "ForceFullWidthSpace"),
+            ("rawspace", "CommitAndInsertSpace")])
+        fixture.defaults.set(true, forKey: CustomInputModeStore.replaceKey)
+        try fixture.tap("word"); try fixture.tap("direct")
+        XCTAssertEqual(fixture.reading, "あ")
+        XCTAssertEqual(fixture.inserted, "")
+        try fixture.tap("x")
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertEqual(fixture.inserted, "x")
+        try fixture.tap("direct"); try fixture.tap("word"); try fixture.tap("direct"); try fixture.tap("full")
+        XCTAssertEqual(fixture.inserted, "x ")
+        XCTAssertEqual(fixture.reading, "")
+        try fixture.tap("rawspace")
+        XCTAssertEqual(fixture.inserted, "x  ")
+        XCTAssertTrue(fixture.rawParts.isEmpty, "Direct space bypasses raw split commit")
+    }
+
+    func testRememberedRuntimeModeRestoresOnlyWhenEnabledAndReachesNumberProxy() throws {
+        for remember in [false, true] {
+            let fixture = try Fixture(actions: [("direct", "SwitchDirectMode"), ("x", "Text:x"),
+                ("number", "SwitchToNumber")])
+            fixture.defaults.set(remember, forKey: CustomInputModeStore.rememberKey)
+            try fixture.tap("direct")
+            let library = try CustomKeyboardLibrary.load(defaults: fixture.defaults)
+            let owner = try XCTUnwrap(library.layouts().first)
+            let stored = try CustomInputModeStore.load(defaults: fixture.defaults)
+            XCTAssertEqual(stored.state(for: owner, remember: true).direct, remember)
+            let next = Sumire.KeyboardSurface()
+            next.settingsDefaults = fixture.defaults
+            next.reloadCustomLayouts(); next.reloadAppearance()
+            let saved = try XCTUnwrap(nextValue(next, id: "custom-direct"))
+            XCTAssertEqual(saved, remember ? "直接入力" : "変換入力")
+            try fixture.tap("number"); try fixture.numberFlick("number-1", .tap)
+            XCTAssertEqual(fixture.inserted, "1")
+            XCTAssertEqual(fixture.reading, "")
+        }
+    }
+    private func nextValue(_ view: UIView, id: String) -> String? {
+        if view.accessibilityIdentifier == id { return view.accessibilityValue }
+        return view.subviews.compactMap { nextValue($0, id: id) }.first
+    }
+
+    func testDirectEntryThroughLayoutReloadFinishesPendingPreviewByDefault() throws {
+        for replace in [false, true] {
+            let fixture = try Fixture(actions: [("word", "Text:あ")])
+            fixture.defaults.set(replace, forKey: CustomInputModeStore.replaceKey)
+            try fixture.tap("word")
+            var editor = CustomLayoutEditor(name: "Direct replacement", rows: 1, columns: 1)
+            editor.setInputMode(romaji: false, direct: true)
+            editor.putKey(id: "x", label: "x", action: "Text:x", special: false,
+                          row: 0, column: 0, height: 2, width: 2)
+            var library = CustomKeyboardLibrary(); try library.append([editor.validated()])
+            library.activeID = try XCTUnwrap(library.layouts().first?.id)
+            try library.save(defaults: fixture.defaults)
+            try KeyboardSelection(ids: ["custom:" + library.activeID!]).save(defaults: fixture.defaults)
+            fixture.surface.reloadCustomLayouts(); fixture.surface.reloadAppearance()
+            XCTAssertEqual(fixture.inserted, replace ? "" : "あ")
+            XCTAssertEqual(fixture.reading, replace ? "あ" : "")
+            try fixture.tap("x")
+            XCTAssertEqual(fixture.inserted, replace ? "x" : "あx")
+            XCTAssertEqual(fixture.reading, "")
+        }
+    }
+
+    func testDirectToggleUnmarksSelectedPreviewInRealTextView() throws {
+        let fixture = try Fixture(actions: [("word", "Text:にほんご"), ("convert", "Convert"),
+            ("direct", "SwitchDirectMode"), ("x", "Text:x")])
+        let field = UITextView()
+        fixture.surface.updateMarkedSelection = { [weak field] in field?.setMarkedText($0, selectedRange: $1) }
+        fixture.surface.updateMarkedText = { [weak field] in field?.setMarkedText($0, selectedRange: NSRange(location: $0.utf16.count, length: 0)) }
+        fixture.surface.finishMarkedText = { [weak field] in field?.unmarkText() }
+        fixture.surface.insert = { [weak field] in field?.insertText($0) }
+        try fixture.tap("word")
+        let ready = expectation(for: NSPredicate { _, _ in
+            fixture.surface.candidateBar.candidates.contains("日本語")
+        }, evaluatedWith: nil)
+        wait(for: [ready], timeout: 10)
+        try fixture.tap("convert")
+        XCTAssertEqual(field.text, "日本語")
+        XCTAssertNotNil(field.markedTextRange)
+        try fixture.tap("direct")
+        XCTAssertEqual(field.text, "日本語")
+        XCTAssertNil(field.markedTextRange)
+        XCTAssertFalse(fixture.surface.hasComposition)
+        try fixture.tap("x")
+        XCTAssertEqual(field.text, "日本語x")
+    }
+
+    func testRestoredModeMemoryAppliesWhenLayoutDefinitionIsUnchanged() throws {
+        let fixture = try Fixture(actions: [("word", "Text:あ"), ("direct", "SwitchDirectMode")])
+        fixture.defaults.set(true, forKey: CustomInputModeStore.rememberKey)
+        try fixture.tap("word")
+        let library = try CustomKeyboardLibrary.load(defaults: fixture.defaults)
+        let owner = try XCTUnwrap(library.layouts().first)
+        var restored = CustomInputModeStore()
+        try restored.set(state: CustomInputMode(direct: true, romaji: false), for: owner.id)
+        try restored.save(defaults: fixture.defaults)
+        fixture.surface.reloadCustomLayouts()
+        XCTAssertEqual(fixture.inserted, "あ")
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertEqual(nextValue(fixture.surface, id: "custom-direct"), "直接入力")
+        try CustomInputModeStore().save(defaults: fixture.defaults)
+        fixture.surface.reloadCustomLayouts()
+        XCTAssertEqual(nextValue(fixture.surface, id: "custom-direct"), "変換入力")
+    }
+
+    func testRestoredRomajiOffPreservesPendingLettersWithoutFlush() throws {
+        let fixture = try Fixture(actions: [("n", "Text:n"), ("a", "Text:a")], romaji: true)
+        fixture.defaults.set(true, forKey: CustomInputModeStore.rememberKey)
+        try fixture.tap("n")
+        let owner = try XCTUnwrap(CustomKeyboardLibrary.load(defaults: fixture.defaults).layouts().first)
+        var restored = CustomInputModeStore()
+        try restored.set(state: CustomInputMode(direct: false, romaji: false), for: owner.id)
+        try restored.save(defaults: fixture.defaults)
+        fixture.surface.reloadCustomLayouts()
+        XCTAssertEqual(fixture.reading, "n")
+        XCTAssertEqual(fixture.inserted, "")
+        try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "na")
+        XCTAssertEqual(fixture.inserted, "")
     }
 
     func testKanaMarkersModifyPriorKanaWithoutInsertingTheirNames() throws {

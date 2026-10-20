@@ -278,6 +278,9 @@ struct InputHarness: UIViewRepresentable {
                 text.insertText(value)
             }
         }
+        surface.finishMarkedText = { [weak text, weak coordinator] in
+            coordinator?.perform { text?.unmarkText() }
+        }
         surface.commitRawTextAndSpace = { [weak text, weak coordinator] left, tail in
             coordinator?.perform {
                 guard let text else { return }

@@ -6,7 +6,7 @@ SOURCE = ROOT / '.reference/JapaneseKeyboard'
 REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
 ICONS = {'paste':'content_paste_24px', 'left':'baseline_arrow_left_24', 'globe':'language_24dp',
          'delete':'backspace_24px', 'enter':'baseline_keyboard_return_24', 'resize':'keyboard_24px',
-         'done':'baseline_check_24', 'mode':'input_mode_english_custom', 'space':'baseline_space_bar_24', 'shift':'shift_24px', 'right':'baseline_arrow_right_24', 'undo':'undo_24px'}
+         'done':'baseline_check_24', 'mode':'input_mode_english_custom', 'space':'baseline_space_bar_24', 'shift':'shift_24px', 'right':'baseline_arrow_right_24', 'undo':'undo_24px', 'directOn':'language_japanese_kana_right_24px', 'directOff':'language_japanese_kana_left_24px', 'romajiOn':'language_japanese_kana_left_bold_24px', 'romajiOff':'language_japanese_kana_right_bold_24px'}
 A = '{http://schemas.android.com/apk/res/android}'
 
 def translate(data):
@@ -54,13 +54,28 @@ def main():
     notices=[]
     for key,name in ICONS.items():
         file=SOURCE/'core/src/main/res/drawable'/(name+'.xml');root=ET.parse(file).getroot()
-        if any(e.tag not in ('vector','path') for e in root.iter()): raise ValueError('Unsupported vector group')
+        if any(e.tag not in ('vector','path','group') for e in root.iter()): raise ValueError('Unsupported vector element')
         notices.append(f'{name}.xml SHA-256 {hashlib.sha256(file.read_bytes()).hexdigest()}')
         lines += [f'            case .{key}:',f'                context.cgContext.scaleBy(x: 24 / {root.attrib[A+"viewportWidth"]}.0, y: 24 / {root.attrib[A+"viewportHeight"]}.0)']
-        for path in root.iter('path'):
-            lines += ['                do {','                    let p = CGMutablePath()']
-            lines += ['                    '+line for line in translate(path.attrib[A+'pathData'])]
-            lines += ['                    context.cgContext.addPath(p)','                    context.cgContext.fillPath()', '                }']
+        def emit(parent):
+            result=[]
+            for child in parent:
+                if child.tag == 'group':
+                    if set(child.attrib) - {A+'translateX', A+'translateY'}:
+                        raise ValueError('Unsupported vector group transform')
+                    x=float(child.attrib.get(A+'translateX', '0'));y=float(child.attrib.get(A+'translateY', '0'))
+                    if not __import__('math').isfinite(x) or not __import__('math').isfinite(y):
+                        raise ValueError('Non-finite vector translation')
+                    result += ['                context.cgContext.saveGState()',
+                               f'                context.cgContext.translateBy(x: {x:g}, y: {y:g})']
+                    result += emit(child)
+                    result += ['                context.cgContext.restoreGState()']
+                elif child.tag == 'path':
+                    result += ['                do {','                    let p = CGMutablePath()']
+                    result += ['                    '+line for line in translate(child.attrib[A+'pathData'])]
+                    result += ['                    context.cgContext.addPath(p)','                    context.cgContext.fillPath()', '                }']
+            return result
+        lines += emit(root)
     lines += ['            }','        }.withRenderingMode(.alwaysTemplate)','    }','}']
     (ROOT/'Shared/KeyboardIcon.swift').write_text('\n'.join(lines)+'\n')
     dest=ROOT/'Shared/Resources';dest.mkdir(exist_ok=True)

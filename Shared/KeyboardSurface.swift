@@ -17,6 +17,7 @@ final class KeyboardSurface: UIInputView {
     var updateMarkedSelection: ((String, NSRange) -> Void)?
     var commitMarkedText: ((String) -> Void)?
     var commitRawTextAndSpace: ((String, String) -> Void)?
+    var finishMarkedText: (() -> Void)?
     var liveConversion = false {
         didSet {
             guard oldValue != liveConversion else { return }
@@ -368,14 +369,75 @@ final class KeyboardSurface: UIInputView {
             composition.optionsChanged(); refreshConversion()
         }
     }
+    private var customInputModeStore = CustomInputModeStore()
+    private var customModeOverrides: [String: CustomInputMode] = [:]
+    private func customInputMode(for layout: ImportedCustomLayout) -> CustomInputMode {
+        customModeOverrides[layout.id] ?? customInputModeStore.state(for: layout,
+            remember: settingsDefaults.bool(forKey: CustomInputModeStore.rememberKey))
+    }
+    private func toggleCustomInputMode(layout: ImportedCustomLayout, direct: Bool) {
+        var mode = customInputMode(for: layout)
+        if direct {
+            if !mode.direct && !finishCustomCompositionForDirectInput() { return }
+            mode.direct.toggle()
+        } else {
+            mode.romaji.toggle()
+            if !mode.romaji { containsRomaji = false }
+        }
+        customModeOverrides[layout.id] = mode
+        var notice: String?
+        if settingsDefaults.bool(forKey: CustomInputModeStore.rememberKey) {
+            do {
+                customInputModeStore.retain(layoutIDs: Set(customLayouts.map(\.id)))
+                try customInputModeStore.set(state: mode, for: layout.id)
+                try customInputModeStore.save(defaults: writableSettings)
+                onSettingsWritten?([CustomInputModeStore.storageKey])
+            } catch { notice = error.localizedDescription }
+        }
+        rebuild()
+        if let notice { showDataNotice(notice) }
+    }
+    private func finishCustomCompositionForDirectInput() -> Bool {
+        guard hasComposition, !settingsDefaults.bool(forKey: CustomInputModeStore.replaceKey) else { return true }
+        guard let finishMarkedText else {
+            showDataNotice("この入力先では未確定表示を確定できません")
+            return false
+        }
+        // Finish the displayed preview without rewriting it, flushing pending
+        // romaji or recording a candidate selection in learning.
+        invalidateComposition()
+        finishMarkedText()
+        return true
+    }
+    private func insertCustomDirect(_ text: String) {
+        guard finishCustomCompositionForDirectInput() else { return }
+        if hasComposition {
+            guard let commitMarkedText else {
+                showDataNotice("この入力先では未確定文字を置換できません")
+                return
+            }
+            invalidateComposition()
+            commitMarkedText(text)
+        } else { insert?(text) }
+    }
     private var customLayouts: [ImportedCustomLayout] = []
     private var activeCustomID: String?
     private var storedCustomID: String?
     func reloadCustomLayouts() {
         do {
+            let restoredModeStore = try CustomInputModeStore.load(defaults: settingsDefaults)
+            let memoryChanged = restoredModeStore != customInputModeStore
+            customInputModeStore = restoredModeStore
+            if memoryChanged { customModeOverrides.removeAll() }
             let library = try CustomKeyboardLibrary.load(defaults: settingsDefaults)
             let layouts = try library.layouts()
-            guard layouts != customLayouts || library.activeID != storedCustomID else { return }
+            guard layouts != customLayouts || library.activeID != storedCustomID else {
+                if memoryChanged { rebuild() }
+                return
+            }
+            customModeOverrides = customModeOverrides.filter { id, _ in
+                layouts.first(where: { $0.id == id }) == customLayouts.first(where: { $0.id == id })
+            }
             customLayouts = layouts
             storedCustomID = library.activeID
             activeCustomID = library.activeID ?? layouts.first?.id
@@ -515,6 +577,16 @@ final class KeyboardSurface: UIInputView {
         view.subviews.forEach { configureTouchInput(in: $0) }
     }
     private func rebuild() {
+        var customNotice: String?
+        if inputMode == .custom, !customEnglishVisible,
+           let layout = customLayouts.first(where: { $0.id == activeCustomID }) {
+            let mode = customInputMode(for: layout)
+            if !mode.romaji { containsRomaji = false }
+            if mode.direct && !finishCustomCompositionForDirectInput() {
+                customNotice = "この入力先では未確定表示を確定できません"
+            }
+        }
+        defer { if let customNotice { showDataNotice(customNotice) } }
         touchRouter.cancelAll()
         customTapController?.deactivate(); customTapController = nil
         touchFeedback = TouchFeedbackSettings.load(defaults: settingsDefaults)
@@ -993,6 +1065,16 @@ final class KeyboardSurface: UIInputView {
                 tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
             let normalAction = tapAction
+            if case .command(let command) = normalAction, command == .switchDirect || command == .switchRomaji {
+                let mode = self.customInputMode(for: ownerLayout)
+                let icon: KeyboardIcon = command == .switchDirect
+                    ? (mode.direct ? .directOn : .directOff) : (mode.romaji ? .romajiOn : .romajiOff)
+                key.setTitle(nil, for: .normal)
+                key.setImage(icon.image, for: .normal)
+                key.tintColor = palette.foreground
+                key.accessibilityValue = command == .switchDirect
+                    ? (mode.direct ? "直接入力" : "変換入力") : (mode.romaji ? "ローマ字" : "かな")
+            }
             if presentation != nil {
                 let icons: [CustomKeyAction.Command: KeyboardIcon] = [
                     .nextKeyboard: .globe, .space: .space, .delete: .delete, .newLine: .enter]
@@ -1017,7 +1099,7 @@ final class KeyboardSurface: UIInputView {
                 [normalAction] + (doubleTap.map { [$0.action] } ?? [])
             let needsExclusiveTouch = actions.contains { action in
                 switch action {
-                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
+                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.switchDirect), .command(.switchRomaji), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
                 default: return false
                 }
             }
@@ -1026,7 +1108,7 @@ final class KeyboardSurface: UIInputView {
                 repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft), .command(.cursorRight)].contains(normalAction)
                 switch normalAction {
-                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
+                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.switchDirect), .command(.switchRomaji), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
                 default: break
                 }
@@ -1117,7 +1199,9 @@ final class KeyboardSurface: UIInputView {
         beforeInput?(); tapCycle.reset()
         switch action {
         case .unsupported(_, let reason): status.text = reason
-        case .switchLayout(let id): activeCustomID = id; rememberKeyboard(); rebuild()
+        case .switchLayout(let id):
+            customModeOverrides.removeValue(forKey: id)
+            activeCustomID = id; rememberKeyboard(); rebuild()
         case .inputText(let token):
             if let marker = SumireFlickMarker(rawValue: token) {
                 applyCustomInputMarker(marker)
@@ -1133,10 +1217,10 @@ final class KeyboardSurface: UIInputView {
             switch command {
             case .doNothing: break
             case .delete, .backspace: pressed("⌫")
-            case .space: pressed("空白")
-            case .convert: pressed("空白")
-            case .enter, .newLine: pressed("改行")
-            case .confirm: pressed("改行")
+            case .space, .convert:
+                if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { pressed("空白") }
+            case .enter, .newLine, .confirm:
+                if customInputMode(for: layout).direct { insertCustomDirect("\n") } else { pressed("改行") }
             case .paste: sumireAction(.paste)
             case .cursorLeft: sumireAction(.cursorLeft)
             case .cursorRight: moveCompositionCursor(by: 1)
@@ -1148,18 +1232,23 @@ final class KeyboardSurface: UIInputView {
             case .switchKana: setCustomEnglishPresentation(false)
             case .switchEnglish: setCustomEnglishPresentation(true)
             case .switchNumber: showCustomNumberPresentation()
+            case .switchDirect: toggleCustomInputMode(layout: layout, direct: true)
+            case .switchRomaji: toggleCustomInputMode(layout: layout, direct: false)
             case .moveCustomKeyboardTab:
                 guard !customLayouts.isEmpty else { status.text = "切り替え先のカスタム配列がありません"; return }
                 let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
                 activeCustomID = customLayouts[(currentIndex + 1) % customLayouts.count].id
+                if let id = activeCustomID { customModeOverrides.removeValue(forKey: id) }
                 rememberKeyboard(); rebuild()
             case .forceNewLine:
-                if hasComposition { commitComposition() } else { insert?("\n") }
+                if customInputMode(for: layout).direct { insertCustomDirect("\n") }
+                else if hasComposition { commitComposition() } else { insert?("\n") }
             case .halfSpace, .fullSpace:
-                if layout.source["layout"]?["isDirectMode"] == .bool(true) { insert?(" ") }
+                if customInputMode(for: layout).direct { insertCustomDirect(" ") }
                 else if hasComposition { pressed("空白") }
                 else { insert?(command == .fullSpace ? "　" : " ") }
-            case .commitAndSpace: commitRawAtCursorAndSpace()
+            case .commitAndSpace:
+                if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { commitRawAtCursorAndSpace() }
             }
         }
     }
@@ -1170,8 +1259,8 @@ final class KeyboardSurface: UIInputView {
         refreshConversion()
     }
     private func insertCustomInputPunctuation(_ text: String, layout: ImportedCustomLayout) {
-        if layout.source["layout"]?["isDirectMode"] == .bool(true) {
-            commitComposition(); insert?(text)
+        if customInputMode(for: layout).direct {
+            insertCustomDirect(text)
         } else {
             // InputText punctuation bypasses romaji conversion in the reference.
             // Preserve any pending roman prefix rather than flushing it here.
@@ -1180,9 +1269,9 @@ final class KeyboardSurface: UIInputView {
     }
     private func insertCustomText(_ text: String, layout: ImportedCustomLayout) {
         guard !text.isEmpty else { return }
-        if layout.source["layout"]?["isDirectMode"] == .bool(true) {
-            commitComposition(); insert?(text)
-        } else if layout.source["layout"]?["isRomaji"] == .bool(true), let romaji {
+        if customInputMode(for: layout).direct {
+            insertCustomDirect(text)
+        } else if customInputMode(for: layout).romaji, let romaji {
             containsRomaji = true; composition.appendRomaji(text, using: romaji); refreshConversion()
         } else {
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
@@ -1899,6 +1988,7 @@ final class KeyboardSurface: UIInputView {
         beforeInput?(); tapCycle.reset()
         let previousEnglishComposition = englishComposition
         customPresentationOwner = nil
+        if mode == .custom, let customID { customModeOverrides.removeValue(forKey: customID) }
         inputMode = mode
         if let customID { activeCustomID = customID }
         rememberKeyboard()
