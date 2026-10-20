@@ -1053,18 +1053,17 @@ final class KeyboardSurface: UIInputView {
         switch action {
         case .unsupported(_, let reason): status.text = reason
         case .switchLayout(let id): activeCustomID = id; rememberKeyboard(); rebuild()
-        case .inputText:
-            status.text = "本家の特殊文字操作は移植中です"
+        case .inputText(let token):
+            if let marker = SumireFlickMarker(rawValue: token) {
+                applyCustomInputMarker(marker)
+            } else if token == "^_^" {
+                if hasComposition { applyCustomInputMarker(.small) }
+                else { showSymbolKeyboard() }
+            } else if token == ":" || token == "-" {
+                insertCustomInputPunctuation(token, layout: layout)
+            } else { showDataNotice("このInputText操作は未対応です: " + token) }
         case .text(let text):
-            guard !text.isEmpty else { return }
-            if layout.source["layout"]?["isDirectMode"] == .bool(true) {
-                commitComposition(); insert?(text)
-            } else if layout.source["layout"]?["isRomaji"] == .bool(true), let romaji {
-                containsRomaji = true; composition.appendRomaji(text, using: romaji); refreshConversion()
-            } else {
-                if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
-                containsRomaji = false; composition.append(text); refreshConversion()
-            }
+            insertCustomText(text, layout: layout)
         case .command(let command):
             switch command {
             case .doNothing: break
@@ -1087,6 +1086,32 @@ final class KeyboardSurface: UIInputView {
             case .halfSpace, .commitAndSpace: commitComposition(); insert?(" ")
             case .fullSpace: commitComposition(); insert?("　")
             }
+        }
+    }
+    private func applyCustomInputMarker(_ marker: SumireFlickMarker) {
+        guard let previous = composition.characterBeforeCursor,
+              let changed = marker.applying(to: previous) else { return }
+        _ = composition.replaceLast(String(changed))
+        refreshConversion()
+    }
+    private func insertCustomInputPunctuation(_ text: String, layout: ImportedCustomLayout) {
+        if layout.source["layout"]?["isDirectMode"] == .bool(true) {
+            commitComposition(); insert?(text)
+        } else {
+            // InputText punctuation bypasses romaji conversion in the reference.
+            // Preserve any pending roman prefix rather than flushing it here.
+            composition.append(text); refreshConversion()
+        }
+    }
+    private func insertCustomText(_ text: String, layout: ImportedCustomLayout) {
+        guard !text.isEmpty else { return }
+        if layout.source["layout"]?["isDirectMode"] == .bool(true) {
+            commitComposition(); insert?(text)
+        } else if layout.source["layout"]?["isRomaji"] == .bool(true), let romaji {
+            containsRomaji = true; composition.appendRomaji(text, using: romaji); refreshConversion()
+        } else {
+            if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
+            containsRomaji = false; composition.append(text); refreshConversion()
         }
     }
     private func addSumireGrid(palette: KeyboardPalette) {
