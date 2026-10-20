@@ -221,6 +221,12 @@ final class KeyboardSurface: UIInputView {
             inputMode = first.mode
             if let id = first.customID { activeCustomID = id }
         }
+        if !isAppearancePreview,
+           let saved = settingsDefaults.string(forKey: "keyboard.lastUsed"),
+           !choices.contains(where: { selectionID(mode: $0.mode, customID: $0.customID) == saved }) {
+            // Persist the replacement so re-enabling a removed layout cannot restore a stale selection.
+            rememberKeyboard()
+        }
         rebuild()
     }
     var personalLexicon = PersonalLexicon() {
