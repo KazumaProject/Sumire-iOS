@@ -29,7 +29,9 @@ typedef struct {
   uint32_t max_states;
   /* Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
    * lookahead 3, up to 4 system and 4 per enabled category candidates.
-   * Consumes the typed input only. */
+   * Also includes kana forms and optional reading-correction completions
+   * (3..16 input units, lookahead 3, no four-candidate cap). All consume only
+   * the typed input. Correction metadata is queried separately below. */
   uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
 } sumire_request;
 typedef struct {
@@ -117,6 +119,11 @@ void sumire_result_destroy(sumire_result *result);
 size_t sumire_result_count(const sumire_result *result);
 int sumire_result_candidate(const sumire_result *result, size_t index,
                             sumire_candidate *out);
+/* Optional reading-correction metadata, owned by the result. Non-correction
+ * candidates return empty strings. Display/commit only candidate.text; raw
+ * payload may contain a TAB delimiter. Returns -1 for invalid arguments. */
+int sumire_result_reading_correction(const sumire_result *result, size_t index,
+                                     sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
 /* Interior UTF-16 reading offsets from this candidate's own path. No

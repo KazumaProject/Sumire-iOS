@@ -288,7 +288,7 @@ std::vector<std::string> category_names() {
 struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
-  std::unique_ptr<Dictionary> english_reading, english_words;
+  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction;
   std::unique_ptr<Dictionary> single_kanji, emoji, emoticon, symbol;
   bool auxiliary_dictionaries_available = false;
   std::unique_ptr<detail::StandaloneDictionary> standalone;
@@ -318,6 +318,11 @@ struct Engine::Impl {
     if (english_reading)
       for (auto p : english_reading->pos)
         require(p < connection.left.size(), "English reading POS outside table");
+    if (std::filesystem::exists(dir + "/reading_correction.sud")) {
+      reading_correction = std::make_unique<Dictionary>(dir, "reading_correction");
+      for (auto p : reading_correction->pos)
+        require(p < connection.left.size(), "reading correction POS outside table");
+    }
     auto valid = category_names();
     std::unordered_set<std::string> used;
     for (const auto &n : cats)
@@ -362,6 +367,7 @@ size_t Engine::mapped_bytes() const {
   if (impl->mozc_scoring_data) n += impl->mozc_scoring_data->mapped_bytes();
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
+  if (impl->reading_correction) n += impl->reading_correction->file.size;
   if (impl->single_kanji) n += impl->single_kanji->file.size;
   if (impl->emoji) n += impl->emoji->file.size;
   if (impl->emoticon) n += impl->emoticon->file.size;
@@ -694,7 +700,7 @@ static void rank_primary(std::vector<Candidate> &candidates,
         std::vector<std::pair<std::u16string, size_t>> tied;
         tied.reserve(end - begin);
         for (size_t i = begin; i < end; ++i)
-          tied.emplace_back(utf16(candidates[i].text), i);
+          tied.emplace_back(utf16(candidates[i].raw_text.empty() ? candidates[i].text : candidates[i].raw_text), i);
         std::sort(tied.begin(), tied.end());
         bool changed = false;
         for (size_t i = 0; i < tied.size(); ++i) changed |= tied[i].second != begin + i;
@@ -712,7 +718,7 @@ static void rank_primary(std::vector<Candidate> &candidates,
 
   std::vector<std::u16string> surfaces;
   surfaces.reserve(candidates.size());
-  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
+  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.raw_text.empty() ? candidate.text : candidate.raw_text));
   std::vector<size_t> order(candidates.size());
   std::iota(order.begin(), order.end(), 0);
   const auto less = [&](size_t a, size_t b) {
@@ -1229,6 +1235,29 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
+  if (japanese_prediction && !bunsetsu_search && impl->reading_correction &&
+      reading.size() >= 3 && reading.size() <= 16) {
+    const auto &d = *impl->reading_correction;
+    const bool complete = d.completion(reading, 3, limit,
+        [&](size_t node, uint32_t token, size_t extra) {
+      auto raw = d.surface(token, reading, 0, reading.size(), node);
+      const auto tab = raw.find('\t');
+      // Invalid correction metadata is never offered as literal document text.
+      if (tab == std::string::npos || tab == 0 || tab + 1 == raw.size() ||
+          raw.find('\t', tab + 1) != std::string::npos ||
+          raw.find('\0') != std::string::npos) {
+        result.complete = false;
+        return;
+      }
+      auto text = raw.substr(0, tab);
+      Candidate candidate{text, int64_t(d.costs[token]) + int64_t(extra) * 8000,
+          {{text, d.name, 0, uint32_t(reading.size())}}};
+      candidate.corrected_reading = raw.substr(tab + 1);
+      candidate.raw_text = std::move(raw);
+      result.candidates.push_back(std::move(candidate));
+    });
+    result.complete = result.complete && complete;
+  }
   if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.

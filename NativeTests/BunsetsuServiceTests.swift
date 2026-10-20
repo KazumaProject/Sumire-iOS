@@ -72,6 +72,23 @@ final class BunsetsuServiceTests: XCTestCase {
         }
     }
 
+    func testReadingCorrectionSeparatesOwnedMetadataFromDocumentText() throws {
+        var service: ConversionService? = ConversionService()
+        let response = try convert(service!, "きしゃ", generation: 1)
+        let candidate = try XCTUnwrap(response.candidates.first {
+            $0.rawText == "着尺\tきじゃく"
+        })
+        _ = try convert(service!, "あした", generation: 2)
+        service = nil
+        XCTAssertEqual(candidate.text, "着尺")
+        XCTAssertEqual(candidate.correctedReading, "きじゃく")
+        XCTAssertEqual(candidate.rawText, "着尺\tきじゃく")
+        XCTAssertEqual(candidate.range, NSRange(location: 0, length: 3))
+        XCTAssertTrue(candidate.dictionaries.contains("reading_correction"))
+        XCTAssertFalse(candidate.text.contains("\t"))
+        XCTAssertTrue(response.candidates.allSatisfy { $0.rawText == nil || !$0.text.contains("\t") })
+    }
+
     func testBunsetsuSearchRouteSelectsTheFirstProjectedReadingPrefix() throws {
         let reading = "きょうはとうきょうにいきます"
         let response = try convert(ConversionService(), reading, generation: 1, bunsetsuSearch: true)

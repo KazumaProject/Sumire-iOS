@@ -18,6 +18,10 @@ struct Candidate {
   // Origin labels do not replace the selected path's segment boundaries.
   std::vector<std::string> classified_categories{};
   bool system_ngram_matched = false;
+  // Reading-correction source payload is surface<TAB>corrected reading. The
+  // display/commit text above never contains this metadata delimiter.
+  std::string raw_text{};
+  std::string corrected_reading{};
 };
 struct CandidateSplitPattern {
   std::string surface;

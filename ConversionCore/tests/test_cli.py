@@ -483,6 +483,68 @@ class Tests(unittest.TestCase):
         (self.data/'symbol.sud').unlink()
         self.run_cli('--bunsetsu','あいう',ok=False)
 
+    def test_reading_correction_metadata_and_prediction_gates(self):
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+        corrections=[('あいうえ',f'訂正{i}\tていせい{i}',1,i) for i in range(6)]
+        corrections += [('あいう','EXACT\tよみ',1,-20000),
+                        ('あいうえおかき','TOO-FAR\tよみ',1,-20000),
+                        ('あいうえ','NO-TAB',1,0), ('あいうえ','\tよみ',1,0),
+                        ('あいうえ','EMPTY\t',1,0), ('あいうえ','MULTI\tよみ\t余分',1,0),
+                        ('あいうえ','NUL\x00\tよみ',1,0)]
+        dictionary(self.data/'reading_correction.sud',corrections)
+        plain=json.loads(self.run_cli(reading).stdout)
+        predicted=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertFalse(any(c['raw_text'] for c in plain['candidates']))
+        self.assertFalse(predicted['complete'], 'skipped malformed metadata must report incompleteness')
+        correction=[c for c in predicted['candidates'] if c['raw_text']]
+        self.assertEqual([c['text'] for c in correction],[f'訂正{i}' for i in range(6)])
+        self.assertEqual([c['score'] for c in correction],list(range(8000,8006)))
+        self.assertEqual([c['corrected_reading'] for c in correction],[f'ていせい{i}' for i in range(6)])
+        self.assertTrue(all(c['raw_text']==c['text']+'\t'+c['corrected_reading'] for c in correction))
+        self.assertTrue(all(c['segments']==[{'text':c['text'],'dictionary':'reading_correction','start_utf16':0,'length_utf16':3}] for c in correction))
+        self.assertTrue(all('\t' not in c['text'] for c in predicted['candidates']))
+        (self.data/'reading_correction.sud').unlink()
+        absent=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertFalse(any(c['raw_text'] for c in absent['candidates']))
+
+    def test_reading_correction_utf16_limits_order_and_budget(self):
+        for reading, allowed in [('あい',False),('あ😀',True),('あ'*16,True),('あ'*17,False)]:
+            dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+            dictionary(self.data/'reading_correction.sud',[(reading+'え','😀訂正\tせい',1,0)])
+            size=(self.data/'reading_correction.sud').stat().st_size
+            result=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+            correction=[c for c in result['candidates'] if c['raw_text']]
+            self.assertEqual(bool(correction),allowed)
+            if correction:
+                self.assertEqual(correction[0]['segments'][0]['length_utf16'],len(reading.encode('utf-16-le'))//2)
+                self.assertEqual(correction[0]['score'],8000)
+            (self.data/'reading_correction.sud').unlink()
+            self.assertEqual(result['mapped_bytes']-json.loads(self.run_cli('--predict-japanese',reading).stdout)['mapped_bytes'],size)
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'Z-PRIMARY',1,10000)])
+        dictionary(self.data/'reading_correction.sud',[(reading+'え','A-CORRECTION\tえ',1,0)])
+        result=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertEqual(result['candidates'][0]['text'],'A-CORRECTION')
+        limited=json.loads(self.run_cli('--predict-japanese','--max-states','1',reading).stdout)
+        self.assertFalse(limited['complete'])
+        self.assertFalse(any(c['raw_text'] for c in limited['candidates']))
+        # Optional files are still fully validated when present.
+        damaged=bytearray((self.data/'reading_correction.sud').read_bytes()); damaged[-1]^=1
+        (self.data/'reading_correction.sud').write_bytes(damaged)
+        self.run_cli('--predict-japanese',reading,ok=False)
+        dictionary(self.data/'reading_correction.sud',[(reading+'え','POS\tよみ',999,0)])
+        self.run_cli('--predict-japanese',reading,ok=False)
+
+    def test_reading_correction_raw_metadata_orders_equal_display_surfaces(self):
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+        dictionary(self.data/'reading_correction.sud',[
+            (reading+'え','同じ\tい',1,0),(reading+'え','同じ\tあ',1,0)])
+        correction=[c for c in json.loads(self.run_cli('--predict-japanese',reading).stdout)['candidates'] if c['raw_text']]
+        self.assertEqual([c['corrected_reading'] for c in correction],['あ','い'])
+        self.assertEqual([c['text'] for c in correction],['同じ','同じ'])
+
     def test_japanese_prediction_includes_kana_without_dictionary_completion(self):
         for reading, katakana, halfwidth in [('あ', 'ア', 'ｱ'),
                                               ('がぱゔ', 'ガパヴ', 'ｶﾞﾊﾟゔ'),
@@ -661,6 +723,7 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
         dictionary(self.data/'medical.sud',[('あい','Medical',1,-20), ('かきくけ','CategoryABI',1,100)])
+        dictionary(self.data/'reading_correction.sud',[('かきくけ','訂正\tていせい',1,200)])
         standalone(self.data/'standalone.sud',['しろ'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
