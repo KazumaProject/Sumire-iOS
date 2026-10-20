@@ -67,15 +67,31 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
-    func testSavedThreeRowsCollapseOnlyWhileShortcutsAreVisible() {
+    func testSavedThreeRowsKeepTheirHeightWhileShortcutsAreVisible() {
         withBar(rows: 3) { bar, list in
             XCTAssertEqual(bar.displayedHeight, 132)
             bar.showsShortcuts = true
             XCTAssertEqual(bar.rowCount, 3)
-            XCTAssertEqual(bar.displayedHeight, 44)
+            XCTAssertEqual(bar.displayedHeight, 132)
+            XCTAssertEqual(bar.requestedDisplayedHeight, 132)
             bar.showsShortcuts = false
             XCTAssertEqual(bar.rowCount, 3)
             XCTAssertEqual(bar.displayedHeight, 132)
+        }
+    }
+
+    func testConstrainedHeightIsEqualWhileIdleAndComposing() {
+        withBar(rows: 3) { bar, _ in
+            bar.setDisplayedHeightLimit(90)
+            XCTAssertEqual(bar.displayedHeight, 88)
+            bar.showsShortcuts = true
+            XCTAssertEqual(bar.displayedHeight, 88)
+            XCTAssertEqual(bar.requestedDisplayedHeight, 132)
+            let controls = bar.subviews.compactMap { $0 as? UIButton }
+            bar.layoutIfNeeded()
+            for control in controls { XCTAssertEqual(control.frame.height, 44) }
+            bar.showsShortcuts = false
+            XCTAssertEqual(bar.displayedHeight, 88)
         }
     }
 
