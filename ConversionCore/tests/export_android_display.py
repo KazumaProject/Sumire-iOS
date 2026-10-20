@@ -79,8 +79,8 @@ def export(source, output, java_home, sdk, policy):
     with raw.open_build_log(output / 'android-build.log') as log:
         subprocess.run(command, cwd=build, env={**os.environ, 'JAVA_HOME': str(java_home), 'ANDROID_HOME': str(sdk)}, stdout=log, stderr=subprocess.STDOUT, check=True)
     xml = ET.fromstring((build / 'app/build/test-results/testFullStandardDebugUnitTest/TEST-com.kazumaproject.markdownhelperkeyboard.converter.SumireIOSDisplayBaselineTest.xml').read_bytes())
-    if tuple(xml.get(k) for k in ('tests', 'failures', 'errors', 'skipped')) != ('4', '0', '0', '0'):
-        raise ValueError('all four exporter tests must execute successfully')
+    if tuple(xml.get(k) for k in ('tests', 'failures', 'errors', 'skipped')) != ('6', '0', '0', '0'):
+        raise ValueError('all six exporter tests must execute successfully')
     baseline = (build / 'app/build/reports/sumire-ios-display-baseline.jsonl').read_bytes()
     rows = [json.loads(line) for line in baseline.decode().splitlines()]
     validate_rows(rows, policy)

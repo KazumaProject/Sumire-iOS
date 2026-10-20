@@ -89,8 +89,8 @@ class SumireIOSDisplayBaselineTest {
                     .put("live_conversion", false).put("inline_suggestions", false)
                     .put("bunsetsu", false).put("incremental_session", false).put("dictionary_labels", false)
                     .put("date_formats", JSONArray(DateCandidateConfig.DEFAULT_ORDER.map { it.preferenceValue })))
-                row.put("raw_candidates", JSONArray(result.mapIndexed { index, c -> metadata(c).put("raw_index", index) }))
-                row.put("projected_candidates", JSONArray(projected.map { c -> metadata(c).put("raw_indices", JSONArray(result.indices.filter { index -> if(c.type == CANDIDATE_TYPE_TEXT_MACRO) result[index].type == c.type && result[index].sourceId == c.sourceId else result[index].type != CANDIDATE_TYPE_TEXT_MACRO && result[index].string == c.string })) }))
+                row.put("raw_candidates", JSONArray(result.mapIndexed { index, c -> metadata(input, c).put("raw_index", index) }))
+                row.put("projected_candidates", JSONArray(projected.map { c -> metadata(input, c).put("raw_indices", JSONArray(result.indices.filter { index -> if(c.type == CANDIDATE_TYPE_TEXT_MACRO) result[index].type == c.type && result[index].sourceId == c.sourceId else result[index].type != CANDIDATE_TYPE_TEXT_MACRO && result[index].string == c.string })) }))
                 row.put("adapter_items", bind(projected, context))
                 writer.appendLine(row.toString())
             }
@@ -114,10 +114,28 @@ class SumireIOSDisplayBaselineTest {
         return UtilityCandidateComposer.compose(input, ordered, UtilityCandidateProvider().provide(input, config))
     }
 
-    private fun metadata(c: Candidate): JSONObject = JSONObject()
+    // Derive only the constrained standard tap branch; commitText is retained
+    // separately and is not necessarily what IMEService commits for exact input.
+    private fun effectiveCommitText(input: String, c: Candidate): String {
+        val type = c.type.toInt()
+        check(type !in setOf(41, 42, QWERTY_GLIDE_CANDIDATE_TYPE.toInt(),
+            CANDIDATE_TYPE_CALCULATION.toInt(), CANDIDATE_TYPE_UNIT_CONVERSION.toInt(),
+            CANDIDATE_TYPE_UTILITY_LITERAL.toInt(), CANDIDATE_TYPE_TEXT_MACRO.toInt(),
+            CANDIDATE_TYPE_FORMULA_UNICODE.toInt(), CANDIDATE_TYPE_FORMULA_TEX.toInt())) {
+            "Macro/utility/AI/glide tap commit is outside this disabled-feature export scope"
+        }
+        return when(type) {
+            15 -> c.string.correctReading().first
+            9, 11, 12, 13, 14, 28, 30, CANDIDATE_TYPE_TIME.toInt(),
+            CANDIDATE_TYPE_ERA.toInt(), CANDIDATE_TYPE_USER_TEMPLATE.toInt() -> c.string
+            else -> if(input.length == c.length.toInt()) c.string else c.commitText
+        }
+    }
+
+    private fun metadata(input: String, c: Candidate): JSONObject = JSONObject()
         .put("text", c.string).put("text_utf16", JSONArray(c.string.map { it.code }))
         .put("commit_text", c.commitText)
-        .put("effective_commit_text", if(c.type == 15.toByte()) c.string.correctReading().first else c.commitText)
+        .put("effective_commit_text", effectiveCommitText(input, c))
         .put("correction_reading", if(c.type == 15.toByte()) c.string.correctReading().second else JSONObject.NULL)
         .put("score", c.score).put("length_utf16", c.length.toInt()).put("type", c.type.toInt())
         .put("yomi", c.yomi ?: JSONObject.NULL).put("left_id", c.leftId?.toInt() ?: JSONObject.NULL)
@@ -166,8 +184,8 @@ class SumireIOSDisplayBaselineTest {
         assertEquals(10, result[0].score)
         assertEquals(first.dictionaryCategories + duplicate.dictionaryCategories, result[0].dictionaryCategories)
         assertEquals(listOf(1L, 2L), result.filter { it.type == CANDIDATE_TYPE_TEXT_MACRO }.map { it.sourceId })
-        assertEquals("同じ", metadata(result.last()).getString("effective_commit_text"))
-        assertEquals("おなじ", metadata(result.last()).getString("correction_reading"))
+        assertEquals("同じ", metadata("おなじ", result.last()).getString("effective_commit_text"))
+        assertEquals("おなじ", metadata("おなじ", result.last()).getString("correction_reading"))
     }
 
     @Test fun productionProjectionPreservesRawUtf16AndFirstCommitIdentity() {
@@ -183,6 +201,38 @@ class SumireIOSDisplayBaselineTest {
         val historic = Candidate(String(Character.toChars(0x1B005)), 13, 1u, 1)
         assertEquals(emptyList<Candidate>(), project("を", listOf(historic), suppress=true))
         assertEquals(listOf(historic), project("を", listOf(historic), suppress=false))
+    }
+
+    @Test fun effectiveTapCommitMetadataFollowsExactPartialAndSpecialBranches() {
+        val source = Candidate("eye", 2, 2u, 1)
+        for (display in listOf("Eye", "EYE")) {
+            val candidate = source.copy(string=display)
+            assertEquals("eye", metadata("あい", candidate).getString("commit_text"))
+            assertEquals(display, metadata("あい", candidate).getString("effective_commit_text"))
+            assertEquals("eye", metadata("あいう", candidate).getString("effective_commit_text"))
+            assertEquals("eye", metadata("あ", candidate).getString("effective_commit_text"))
+        }
+        // Kotlin String.length and Candidate.length are UTF-16 units, not glyphs.
+        assertEquals("Eye", metadata(String(Character.toChars(0x1F600)), source.copy(string="Eye"))
+            .getString("effective_commit_text"))
+        for (type in listOf(9, 11, 12, 13, 14, 28, 30, 46, 47, 48)) {
+            assertEquals("表示", metadata("長い入力", Candidate("表示", type.toByte(), 1u, 1, commitText="保持された別値"))
+                .getString("effective_commit_text"))
+        }
+        val corrected = Candidate("表記\tよみ", 15, 1u, 1, commitText="別値")
+        assertEquals("表記", metadata("入力", corrected).getString("effective_commit_text"))
+        assertEquals("よみ", metadata("入力", corrected).getString("correction_reading"))
+    }
+
+    @Test fun unsupportedTapCommitBranchesAreRejectedInsteadOfGuessed() {
+        for (type in listOf(41, 42, 45, 49, 50, 51, 52, 53, 54)) {
+            try {
+                metadata("入力", Candidate("表示", type.toByte(), 2u, 1, commitText="別値"))
+                fail("Unsupported tap metadata type " + type)
+            } catch (expected: IllegalStateException) {
+                assertTrue(expected.message.orEmpty().contains("outside"))
+            }
+        }
     }
 
     @Test fun actualAdapterBindsCorrectionAndPartialLabels() {
