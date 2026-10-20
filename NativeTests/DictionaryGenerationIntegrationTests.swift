@@ -98,6 +98,91 @@ final class DictionaryGenerationIntegrationTests: XCTestCase {
         XCTAssertTrue(rejected.contains(current.directory.standardizedFileURL))
     }
 
+    func testImportRepairsLegacyGenerationAndRetainsBundledConversionFeatures() throws {
+        let base = try XCTUnwrap(ConversionService.bundledDictionary, "Bundled dictionaries required")
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        let stripped = root.appendingPathComponent("legacy-stripped")
+        try FileManager.default.createDirectory(at: stripped, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Model generations published by the former 34-file-only allowlist.
+        for name in DictionaryArchivePlan.categoryIDs + ["system", "connection", "english", "english_reading"] {
+            try FileManager.default.copyItem(at: base.appendingPathComponent(name + ".sud"),
+                                            to: stripped.appendingPathComponent(name + ".sud"))
+        }
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("store"))
+        let published = try store.publish(importedFiles: ["person.sud": stripped.appendingPathComponent("person.sud")],
+                                          from: stripped, supportFallback: base) { directory in
+            try Self.validateAllDictionaries(at: directory)
+        }
+        let support = ["standalone.sud", "reading_correction.sud", "system_ngram.dat", "system_ngram_unigram.dat",
+                       "mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat", "single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"]
+        for name in support + ["system.sud", "connection.sud", "person.sud", "english.sud", "english_reading.sud"] {
+            let original = try Data(contentsOf: base.appendingPathComponent(name), options: .mappedIfSafe)
+            let copied = try Data(contentsOf: published.directory.appendingPathComponent(name), options: .mappedIfSafe)
+            XCTAssertEqual(SHA256.hash(data: original), SHA256.hash(data: copied), name)
+        }
+        var engine: OpaquePointer?
+        var error = [CChar](repeating: 0, count: 1024)
+        XCTAssertEqual(sumire_engine_open_with_dictionaries(published.directory.path, 0, 3, &engine, &error, error.count), 0)
+        let opened = try XCTUnwrap(engine)
+        XCTAssertEqual(sumire_engine_has_standalone_priority(opened), 1)
+        sumire_engine_close(opened)
+        let bunsetsu = try convert(directory: published.directory, reading: "きょうはとうきょうにいきます", bunsetsu: true)
+        XCTAssertTrue(bunsetsu.complete)
+        XCTAssertTrue(bunsetsu.candidates.contains { $0.text == "今日は東京に行きます" })
+        for name in ["single_kanji", "emoji", "emoticon", "symbol"] {
+            let reading = try firstReading(directory: base, name: name)
+            let original = try convert(directory: base, reading: reading)
+            let copied = try convert(directory: published.directory, reading: reading)
+            XCTAssertTrue(original.candidates.contains { $0.dictionaries.contains(name) }, "Fixture must exercise \(name)")
+            XCTAssertEqual(original.candidates.map(\.text), copied.candidates.map(\.text), name)
+            XCTAssertEqual(original.candidates.map(\.dictionaries), copied.candidates.map(\.dictionaries), name)
+        }
+    }
+
+    private func convert(directory: URL, reading: String, bunsetsu: Bool = false) throws -> ConversionResponse {
+        let service = ConversionService(directory: directory)
+        let completed = expectation(description: "Published dictionary conversion")
+        var response: Result<ConversionResponse, Error>?
+        service.convert(reading, generation: 1, editStart: 0, bunsetsuSearch: bunsetsu) {
+            response = $0
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 20)
+        return try XCTUnwrap(response).get()
+    }
+
+    private func firstReading(directory: URL, name: String) throws -> String {
+        // The product browser deliberately excludes auxiliary names. Browse an
+        // unchanged test-only copy through its supported system-dictionary name.
+        let fixture = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: fixture, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: fixture) }
+        try FileManager.default.copyItem(at: directory.appendingPathComponent(name + ".sud"),
+                                        to: fixture.appendingPathComponent("system.sud"))
+        var browser: OpaquePointer?
+        var error = [CChar](repeating: 0, count: 1024)
+        guard sumire_dictionary_browser_open(fixture.path, "system", "", 0, &browser, &error, error.count) == 0 else {
+            throw NSError(domain: "Auxiliary test fixture browser", code: 1,
+                          userInfo: [NSLocalizedDescriptionKey: String(cString: error)])
+        }
+        let opened = try XCTUnwrap(browser)
+        defer { sumire_dictionary_browser_close(opened) }
+        while sumire_dictionary_browser_done(opened) == 0 {
+            guard sumire_dictionary_browser_step(opened, 1, &error, error.count) == 0 else {
+                throw NSError(domain: "Auxiliary browser failed", code: 1,
+                              userInfo: [NSLocalizedDescriptionKey: String(cString: error)])
+            }
+            if sumire_dictionary_browser_count(opened) > 0 {
+                var row = sumire_dictionary_row()
+                XCTAssertEqual(sumire_dictionary_browser_row(opened, 0, &row), 0)
+                let reading = String(decoding: UnsafeRawBufferPointer(start: row.reading, count: row.reading_bytes), as: UTF8.self)
+                if !reading.isEmpty && reading.utf16.count <= 16 { return reading }
+            }
+        }
+        throw NSError(domain: "Missing auxiliary test reading", code: 1)
+    }
+
     private nonisolated static func validateAllDictionaries(at directory: URL) throws {
         var engine: OpaquePointer?
         var error = [CChar](repeating: 0, count: 1024)
