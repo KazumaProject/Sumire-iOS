@@ -45,7 +45,7 @@ std::u16string hiragana_to_katakana(std::u16string value) {
   }
   return value;
 }
-std::u16string katakana_to_halfwidth(std::u16string_view value) {
+std::u16string reading_to_halfwidth(std::u16string_view value) {
   static const std::unordered_map<char16_t, std::u16string> replacements = {
       {u'。',u"｡"},{u'「',u"｢"},{u'」',u"｣"},{u'、',u"､"},{u'・',u"･"},
       {0x3099,u"ﾞ"},{0x309a,u"ﾟ"},{0x309b,u"ﾞ"},{0x309c,u"ﾟ"},
@@ -75,6 +75,15 @@ std::u16string katakana_to_halfwidth(std::u16string_view value) {
   std::u16string result;
   result.reserve(value.size());
   for (auto c : value) {
+    // Match df1f383 String.toHankakuKatakana's direct input mapping, rather
+    // than normalizing all hiragana first. Unlisted characters stay intact.
+    if (c >= 0x3041 && c <= 0x3093 && c != 0x308e &&
+        c != 0x3090 && c != 0x3091) c += 0x60;
+    const bool mapped =
+        (c >= 0x30a1 && c <= 0x30f4 && c != 0x30ee &&
+         c != 0x30f0 && c != 0x30f1) ||
+        c == u'ー' || c == u'、' || c == u'。' || c == u'「' || c == u'」';
+    if (!mapped) { result.push_back(c); continue; }
     auto it = replacements.find(c);
     if (it == replacements.end()) result.push_back(c);
     else result.append(it->second);
@@ -1391,23 +1400,26 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.insert(result.candidates.end(), candidates.begin(),
                              candidates.end());
   };
-  // The one-character Android path places kana before emoji/symbols. Longer
-  // bunsetsu input places those auxiliary lists before kana and raw yomi parts.
-  if (bunsetsu_search && reading.size() == 1) {
+  // Pinned Android df1f383 prediction paths include these three kana choices
+  // even when no dictionary completion matches. One UTF-16 unit places them
+  // before emoji/symbols; retain the existing no-prediction CLI behavior.
+  const bool include_kana = bunsetsu_search || japanese_prediction;
+  if (include_kana && reading.size() == 1) {
     auto katakana = hiragana_to_katakana(reading);
     result.candidates.push_back({utf8(reading), 6000, {}});
     result.candidates.push_back({utf8(katakana), 6000, {}});
-    result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+    result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
     append_candidates(emoji_and_emoticon_candidates);
     append_candidates(symbol_candidates);
   } else {
     append_candidates(emoji_and_emoticon_candidates);
-    append_candidates(symbol_candidates);
-    if (bunsetsu_search) {
+    if (bunsetsu_search || !japanese_prediction)
+      append_candidates(symbol_candidates);
+    if (include_kana) {
       auto katakana = hiragana_to_katakana(reading);
       result.candidates.push_back({utf8(reading), 6000, {}});
       result.candidates.push_back({utf8(katakana), 6000, {}});
-      result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+      result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
     }
   }
   // Reference dev 9506a0b yomiPartList: longest matching reading first,
@@ -1427,6 +1439,10 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         result.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}});
     }
   }
+  // Ordinary getCandidates places symbols after kana and yomiPartList;
+  // the bunsetsu route retains its separate symbol-before-kana order.
+  if (japanese_prediction && !bunsetsu_search && reading.size() != 1)
+    append_candidates(symbol_candidates);
   append_candidates(single_kanji_candidates);
   if (bunsetsu_search && !impl->auxiliary_dictionaries_available)
     result.complete = false;
