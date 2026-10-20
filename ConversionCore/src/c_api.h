@@ -29,7 +29,9 @@ typedef struct {
   uint32_t max_states;
   /* Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
    * lookahead 3, up to 4 system and 4 per enabled category candidates.
-   * Consumes the typed input only. */
+   * Also includes kana forms and optional reading-correction completions
+   * (3..16 input units, lookahead 3, no four-candidate cap). All consume only
+   * the typed input. Correction metadata is queried separately below. */
   uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
 } sumire_request;
 typedef struct {
