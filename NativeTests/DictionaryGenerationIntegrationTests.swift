@@ -19,6 +19,17 @@ final class DictionaryGenerationIntegrationTests: XCTestCase {
         let manifestURL = URL(fileURLWithPath: nativePath, isDirectory: true).appendingPathComponent("manifest.json")
         let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: manifestURL))
         XCTAssertEqual(manifest.sourceRevision, "df1f38315bf56d860d32919a3eaed6a75499e91e")
+        // Pin dictionary bytes independently of the supplied manifest's label.
+        // Sorting makes this insensitive to JSON formatting/key iteration order.
+        let pins = manifest.outputSHA256.keys.sorted().map {
+            "\($0)=\(manifest.outputSHA256[$0]!)\n"
+        }.joined()
+        let digest = SHA256.hash(data: Data(pins.utf8)).map { String(format: "%02x", $0) }.joined()
+        guard manifest.outputSHA256.count == 44,
+              digest == "2326a2865968479168411258dcc22b5e2cc475e7ba8ae263edaf017c120c643f" else {
+            XCTFail("Reference output hashes differ from the pinned df1f383 app generation")
+            return
+        }
 
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
@@ -38,10 +49,20 @@ final class DictionaryGenerationIntegrationTests: XCTestCase {
         let importedFiles = Dictionary(uniqueKeysWithValues: report.convertedFiles.map {
             ($0, convertedDirectory.appendingPathComponent($0))
         })
-        let published = try store.publish(importedFiles: importedFiles, from: convertedDirectory) { directory in
+        let bundled = try XCTUnwrap(ConversionService.bundledDictionary)
+        // Exercise the app's publication path: converted word dictionaries
+        // replace the bundled base while its support groups survive.
+        let published = try store.publish(importedFiles: importedFiles, from: bundled,
+                                          supportFallback: bundled) { directory in
             try Self.validateAllDictionaries(at: directory)
         }
         XCTAssertEqual(store.loadCurrent()?.generation, published.generation)
+        for (name, expected) in manifest.outputSHA256 {
+            try autoreleasepool {
+                let data = try Data(contentsOf: published.directory.appendingPathComponent(name), options: .mappedIfSafe)
+                XCTAssertEqual(SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined(), expected, name)
+            }
+        }
 
         var rejected = Set<URL>()
         let opened = try NativeDictionaryEngineOpener.open(
@@ -50,6 +71,12 @@ final class DictionaryGenerationIntegrationTests: XCTestCase {
         defer { sumire_engine_close(opened.engine) }
         XCTAssertEqual(opened.directory, published.directory.standardizedFileURL)
         XCTAssertTrue(rejected.isEmpty)
+        XCTAssertEqual(sumire_engine_has_standalone_priority(opened.engine), 1)
+        let bunsetsu = try convert(directory: published.directory, reading: "きょうはとうきょうにいきます", bunsetsu: true)
+        XCTAssertTrue(bunsetsu.complete)
+        XCTAssertTrue(bunsetsu.candidates.contains { $0.text == "今日は東京に行きます" })
+        let correction = try convert(directory: published.directory, reading: "きしゃ")
+        XCTAssertTrue(correction.candidates.contains { $0.text == "着尺" && $0.correctedReading == "きじゃく" })
     }
 
     func testNativeLoaderValidatesGenerationBeforePointerSwitch() throws {
