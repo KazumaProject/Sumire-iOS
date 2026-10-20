@@ -571,6 +571,9 @@ class Tests(unittest.TestCase):
         for reading in ['a1','a+b','あ','é','123','１２３']:
             _, values = provider(reading)
             self.assertFalse(values,reading)
+        for reading, normalized in [('ａ＋ｂ','a＋b'), ('＋','＋'), ('ａ１','a１'), ('　',' ')]:
+            _, values = provider(reading)
+            self.assertTrue(any(c['text']==normalized and c['score']==10000 for c in values), reading)
         dedicated=json.loads(self.run_cli('--english','--nbest','5','ab').stdout)
         self.assertEqual(len(dedicated['candidates']),5)
         self.assertEqual([(c['text'],c['score']) for c in dedicated['candidates']],[(c['text'],c['score']) for c in english[:5]])

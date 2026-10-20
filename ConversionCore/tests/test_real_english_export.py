@@ -10,7 +10,7 @@ class RealEnglishExportTests(unittest.TestCase):
         eligible = {'a', 'A', 'ab', 'Ab', 'AB', 'app', 'ApP', 'APP', 'iPh', 'NASA', 'zzzzq',
                     'ａｂ', 'Ａｂ', 'ＡＢ', '＋', '　', 'ａ＋ｂ'}
         for text in exporter.INPUTS:
-            normalized = text.translate(str.maketrans({ord(c): ord(c) - 0xfee0 for c in text if '！' <= c <= '～'})).replace('　', ' ')
+            normalized = text.translate(str.maketrans({ord(c): ord(c) - 0xfee0 for c in text if 'Ａ' <= c <= 'Ｚ' or 'ａ' <= c <= 'ｚ'})).replace('　', ' ')
             value = dict(text='word', score=100, lexical_length_utf16=4, consumed_utf16=1, effective_commit_text='word')
             rows.append(dict(reading=text, provider_input=normalized, eligible=text in eligible,
                 source_revision=exporter.raw.REVISION, n=20, beam_width=20, typo_correction=False,

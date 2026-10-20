@@ -1471,9 +1471,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     const bool wide = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
       return c == 0x3000 || (c >= 0xff01 && c <= 0xff5e);
     });
-    if (wide) for (auto &c : englishInput) c = c == 0x3000 ? u' ' : c - 0xfee0;
+    if (wide) for (auto &c : englishInput) {
+      if (c == 0x3000) c = u' ';
+      else if ((c >= 0xff21 && c <= 0xff3a) || (c >= 0xff41 && c <= 0xff5a)) c -= 0xfee0;
+    }
     const bool digits = std::all_of(englishInput.begin(), englishInput.end(), [](char16_t c) {
-      return c >= u'0' && c <= u'9';
+      return (c >= u'0' && c <= u'9') || (c >= 0xff10 && c <= 0xff19);
     });
     if ((letters || wide) && !digits) {
       if (impl->english_words) {

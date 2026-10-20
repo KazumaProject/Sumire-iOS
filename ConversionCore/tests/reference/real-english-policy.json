@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
-  "adapter_sha256": "d81eb2fe8ed1886406f45d3fbcd0a767104fc6d3bddfc3ade318b63b1fcbda80",
+  "adapter_sha256": "f3fe089211150f611d57b412d905d38378da69f4f27bb4d4f3e3b093b5e89f33",
   "factory_patched_sha256": "7264bff17506135ed53e29ca2af963e49b5bd107a47c8169273b0befacea13d9",
   "scope": "Real bundled English dictionary; ordinary Japanese provider unlimited; dedicated English top20; no typo/personal/learning; separate from fixed25 corpus."
 }

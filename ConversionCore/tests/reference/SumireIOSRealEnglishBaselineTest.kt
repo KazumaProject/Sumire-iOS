@@ -1,6 +1,7 @@
 package com.kazumaproject.markdownhelperkeyboard.converter
 
 import android.content.Context
+import com.kazumaproject.core.domain.extensions.toHankakuAlphabet
 import androidx.test.core.app.ApplicationProvider
 import com.kazumaproject.markdownhelperkeyboard.dictionary_override.*
 import com.kazumaproject.markdownhelperkeyboard.repository.UserDictionaryRepository
@@ -81,13 +82,9 @@ class SumireIOSRealEnglishBaselineTest {
             output.parentFile.mkdirs()
             output.bufferedWriter().use { writer ->
                 for (input in inputs) {
-                    val normalized = input.map { c -> when {
-                        c == '　' -> ' '
-                        c in '！'..'～' -> (c.code - 0xfee0).toChar()
-                        else -> c
-                    } }.joinToString("")
+                    val normalized = input.toHankakuAlphabet()
                     val eligible = input.all { it in 'a'..'z' || it in 'A'..'Z' } ||
-                        (input.all { it == '　' || it in '！'..'～' } && !normalized.all { it in '0'..'9' })
+                        (input.all { it == '　' || it in '！'..'～' } && !input.all { it in '０'..'９' })
                     val provider = if (eligible) english.getCandidates(normalized, false, true) else emptyList()
                     val original = engine.getCandidatesOriginal(input=input, n=20,
                         enabledDictionaryCategories=emptySet(), userDictionaryRepository=repository, learnRepository=null,

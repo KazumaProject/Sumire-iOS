@@ -26,12 +26,15 @@ final class JapaneseEnglishProviderTests: XCTestCase {
         XCTAssertTrue(english.allSatisfy { $0.range == NSRange(location: 0, length: 2) })
         XCTAssertTrue(fullWidth.allSatisfy { $0.range == NSRange(location: 0, length: 2) })
         XCTAssertTrue(normal.complete); XCTAssertTrue(wide.complete)
-        let mixed = try convert(service, "a1", generation: 3)
+        let punctuation = try convert(service, "ａ＋ｂ", generation: 3)
+        XCTAssertTrue(provider(punctuation).contains { $0.text == "a＋b" })
+        XCTAssertFalse(provider(punctuation).contains { $0.text == "a+b" })
+        let mixed = try convert(service, "a1", generation: 4)
         XCTAssertFalse(mixed.candidates.contains { $0.dictionaries.contains("english") })
         var personal = PersonalLexicon()
         personal.words = [PersonalWord(word: "UniquePersonal", reading: "ab", posScore: -10000)]
         service.setPersonal(personal)
-        let custom = try convert(service, "ab", generation: 4)
+        let custom = try convert(service, "ab", generation: 5)
         XCTAssertEqual(custom.candidates.filter { $0.text == "UniquePersonal" }.count, 1)
     }
 

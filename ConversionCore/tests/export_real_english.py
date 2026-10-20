@@ -45,10 +45,10 @@ def validate_rows(rows):
         if row.get('source_revision') != raw.REVISION or row.get('n') != 20 or row.get('beam_width') != 20 or row.get('typo_correction') is not False:
             raise ValueError('real-English configuration differs')
         text = row['reading']
-        normalized = ''.join(' ' if c == '　' else chr(ord(c) - 0xfee0) if '！' <= c <= '～' else c for c in text)
+        normalized = ''.join(' ' if c == '　' else chr(ord(c) - 0xfee0) if 'Ａ' <= c <= 'Ｚ' or 'ａ' <= c <= 'ｚ' else c for c in text)
         # Mirror the explicit pinned ASCII predicate, not locale-sensitive isalpha/isdecimal.
         eligible = all('a' <= c <= 'z' or 'A' <= c <= 'Z' for c in text) or (
-            all(c == '　' or '！' <= c <= '～' for c in text) and not all('0' <= c <= '9' for c in normalized))
+            all(c == '　' or '！' <= c <= '～' for c in text) and not all('０' <= c <= '９' for c in text))
         if row.get('provider_input') != normalized or row.get('eligible') is not eligible:
             raise ValueError('provider eligibility/normalization differs')
         for field in ('provider', 'japanese_original', 'dedicated_english', 'projected'):
