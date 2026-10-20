@@ -22,7 +22,17 @@ final class SpecialKeyGuideConnectionTests: XCTestCase {
         let surface = Sumire.KeyboardSurface()
         surface.settingsDefaults = defaults
         surface.reloadAppearance()
-        surface.frame = CGRect(x: 0, y: 0, width: 390, height: 400)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 500))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let container = controller.view!
+        container.addSubview(surface)
+        NSLayoutConstraint.activate([surface.widthAnchor.constraint(equalToConstant: 390),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor)])
+        container.layoutIfNeeded()
         surface.layoutIfNeeded()
         func deleteKey() throws -> Sumire.DirectionalActionKey {
             try XCTUnwrap(descendants(surface).first { $0.accessibilityIdentifier == "sumire-delete_key" } as? Sumire.DirectionalActionKey)
@@ -35,6 +45,17 @@ final class SpecialKeyGuideConnectionTests: XCTestCase {
             $0.accessibilityIdentifier == "flick-guide-right"
         } as? UILabel)
         XCTAssertEqual(right.text, ":")
+        let originalGuideSize = right.font.pointSize
+        special.guideFontSize = 12
+        special.save(.sumire, group: .special, defaults: defaults)
+        surface.reloadAppearance()
+        container.layoutIfNeeded()
+        surface.layoutIfNeeded()
+        let largerGuide = try XCTUnwrap(descendants(try deleteKey()).first {
+            $0.accessibilityIdentifier == "flick-guide-right"
+        } as? UILabel)
+        let measuredKey = try deleteKey()
+        XCTAssertGreaterThan(largerGuide.font.pointSize, originalGuideSize, "key=\(measuredKey.bounds) guide=\(largerGuide.frame) surface=\(surface.bounds)")
         let character = try XCTUnwrap(descendants(surface).first { $0.accessibilityIdentifier == "sumire-a" } as? UIButton)
         XCTAssertTrue(character.accessibilityActivate())
         XCTAssertEqual(try leftGuide(deleteKey()).text, "全削除")

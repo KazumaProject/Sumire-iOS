@@ -1340,7 +1340,7 @@ final class KeyboardSurface: UIInputView {
     private func configureSpecialKeyGuides(_ button: DirectionalActionKey, key: SumireSpecialKeyID,
                                            arrangement: SumireKeyArrangement) {
         let appearance = keyAppearance(special: true)
-        let color = button.titleColor(for: .normal) ?? button.tintColor
+        let color = button.titleColor(for: .normal) ?? button.tintColor ?? UIColor.label
         guard appearance.guidesVisible else {
             button.configureGuides(titles: [:], visible: false, fontSize: appearance.guideFontSize, color: color)
             return
