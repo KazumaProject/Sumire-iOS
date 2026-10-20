@@ -1397,7 +1397,9 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                                  int64_t(extra) * 1000;
               candidates.push_back(
                   {text, score,
-                   {{text, dictionary.name, 0, uint32_t(yomi.size())}}});
+                   // The longer dictionary reading selects the completion, but
+                   // this candidate replaces only the currently typed input.
+                   {{text, dictionary.name, 0, uint32_t(reading.size())}}});
             });
         result.complete = result.complete && complete;
       }

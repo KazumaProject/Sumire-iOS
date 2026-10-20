@@ -588,6 +588,24 @@ class Tests(unittest.TestCase):
             self.assertEqual(predicted_candidates[key]['score'],score)
         self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
 
+    def test_auxiliary_completion_ranges_consume_only_typed_utf16(self):
+        dictionary(self.data/'english_reading.sud',[('えいご','English',0,10000)])
+        dictionary(self.data/'single_kanji.sud',[('べつ','別',0,10000)])
+        for name,text,cost in [('emoji','⚪️',6000),('emoticon','(^_^)',4000),('symbol','㎥',2000)]:
+            dictionary(self.data/(name+'.sud'),[('あいうえ',text,0,cost),('😀あい',text,0,cost)])
+        for reading in ('あいう','😀あ'):
+            result=json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--english-reading','--nbest','20',reading).stdout)
+            for name,text,score in [('emoji','⚪️',7000),('emoticon','(^_^)',5000),('symbol','㎥',3000)]:
+                candidate=next(c for c in result['candidates'] if c['text']==text)
+                self.assertEqual(candidate['score'],score)
+                self.assertEqual(candidate['segments'],[dict(text=text,dictionary=name,start_utf16=0,length_utf16=3)])
+                self.assertFalse(candidate['is_reading_prefix'])
+            disabled=json.loads(self.run_cli('--nbest','20',reading).stdout)
+            self.assertFalse({'⚪️','(^_^)','㎥'} & {c['text'] for c in disabled['candidates']})
+        if C_API is not None:
+            result=subprocess.run([C_API,str(self.data),'--aux-completion'],capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr.decode())
+
     def test_prediction_kana_symbol_and_prefix_order(self):
         self.install_auxiliary_dictionary_fixture()
         dictionary(self.data/'system.sud', [('あ','Prefix',1,100), ('あいう','Primary',1,100)])

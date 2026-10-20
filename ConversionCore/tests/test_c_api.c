@@ -194,7 +194,53 @@ static void test_pathless_kana_ranges(const char *directory) {
   }
   sumire_session_destroy(session); sumire_engine_close(engine);
 }
+static void test_auxiliary_completion_ranges(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory,0,2,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  const char *readings[] = {"あいう", "😀あ"};
+  const char *texts[] = {"⚪️", "(^_^)", "㎥"};
+  const char *dictionaries[] = {"emoji", "emoticon", "symbol"};
+  const int64_t scores[] = {7000,5000,3000};
+  for (size_t r = 0; r < 2; ++r) {
+    sumire_result *result = NULL;
+    sumire_request request = {r+1,readings[r],strlen(readings[r]),0,20,200000,12};
+    CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+    unsigned found = 0;
+    uint64_t commit_id = 0;
+    for (size_t i = 0; i < sumire_result_count(result); ++i) {
+      sumire_candidate candidate;
+      CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+      for (size_t k = 0; k < 3; ++k) {
+        if (candidate.text.size != strlen(texts[k]) || memcmp(candidate.text.data,texts[k],candidate.text.size) != 0) continue;
+        CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == 3);
+        CHECK(candidate.score == scores[k] && candidate.segment_count == 1);
+        sumire_segment segment;
+        CHECK(sumire_result_segment(result,i,0,&segment) == 0);
+        CHECK(segment.start_utf16 == 0 && segment.length_utf16 == 3);
+        CHECK(segment.dictionary.size == strlen(dictionaries[k]) && memcmp(segment.dictionary.data,dictionaries[k],segment.dictionary.size) == 0);
+        uint32_t flags = 99;
+        CHECK(sumire_result_candidate_flags(result,i,&flags) == 0 && flags == 0);
+        CHECK(sumire_result_bunsetsu_count(result,i) == 0);
+        found |= 1u << k;
+        commit_id = candidate.candidate_id;
+      }
+    }
+    CHECK(found == 7);
+    CHECK(sumire_session_commit(session,r+1,commit_id,error,sizeof error) == 0);
+    sumire_result_destroy(result);
+  }
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
+}
+
 int main(int argc, char **argv) {
+  if (argc == 3 && strcmp(argv[2],"--aux-completion") == 0) {
+    test_auxiliary_completion_ranges(argv[1]);
+    return 0;
+  }
   CHECK(argc == 2);
   test_edit_reuse(argv[1]);
   test_candidate_origin_flags(argv[1]);
