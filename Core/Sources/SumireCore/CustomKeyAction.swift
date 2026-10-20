@@ -17,6 +17,10 @@ public enum CustomKeyAction: Codable, Equatable {
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
     }
+    /// Pinned IMEService InputText actions; ordinary Text payloads stay literal.
+    public static func supportsInputText(_ token: String) -> Bool {
+        SumireFlickMarker(rawValue: token) != nil || ["^_^", ":", "-"].contains(token)
+    }
     public static func tap(_ raw: String, targets: CustomLayoutTargets) -> Self {
         if raw.hasPrefix("Text:") { return .text(String(raw.dropFirst(5))) }
         if raw.hasPrefix("InputText:") { return .inputText(String(raw.dropFirst(10))) }
@@ -62,7 +66,15 @@ public struct CustomLayoutActionReview {
     }
     public let items: [Item]
     public var unsupported: [Item] {
-        items.filter { if case .unsupported = $0.action { return true }; return false }
+        items.compactMap { item in
+            if case .unsupported = item.action { return item }
+            if case .inputText(let token) = item.action, !CustomKeyAction.supportsInputText(token) {
+                return Item(layoutID: item.layoutID, keyID: item.keyID, location: item.location,
+                            action: .unsupported(raw: "InputText:" + token,
+                                                 reason: "このInputText操作はiOS側で未対応です"))
+            }
+            return nil
+        }
     }
     public init(layouts: [ImportedCustomLayout]) {
         let targets = CustomLayoutTargets(layouts: layouts)
