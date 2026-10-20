@@ -483,6 +483,24 @@ class Tests(unittest.TestCase):
         (self.data/'symbol.sud').unlink()
         self.run_cli('--bunsetsu','あいう',ok=False)
 
+    def test_japanese_prediction_includes_kana_without_dictionary_completion(self):
+        for reading, katakana, halfwidth in [('あ', 'ア', 'ｱ'),
+                                              ('がぱゔ', 'ガパヴ', 'ｶﾞﾊﾟゔ'),
+                                              ('ゐゑゎ・か\u3099', 'ヰヱヮ・カ\u3099', 'ゐゑゎ・ｶ\u3099'),
+                                              ('あ😀', 'ア😀', 'ｱ😀')]:
+            dictionary(self.data/'system.sud', [(reading, 'Primary', 1, 100)])
+            plain=json.loads(self.run_cli('--nbest','1',reading).stdout)['candidates']
+            predicted=json.loads(self.run_cli('--predict-japanese','--nbest','1',reading).stdout)['candidates']
+            self.assertEqual([c['text'] for c in plain], ['Primary'])
+            self.assertEqual([c['text'] for c in predicted], ['Primary', reading, katakana, halfwidth])
+            self.assertEqual([c['score'] for c in predicted[1:]], [6000,6000,6000])
+            self.assertTrue(all(not c['segments'] for c in predicted[1:]))
+        # A dictionary candidate with the same surface must retain its score
+        # and order; kana choices are auxiliary, not a cheaper primary path.
+        dictionary(self.data/'system.sud', [('あ', 'あ', 1, 100)])
+        predicted=json.loads(self.run_cli('--predict-japanese','あ').stdout)['candidates']
+        self.assertEqual([c['score'] for c in predicted if c['text']=='あ'], [140,6000])
+
     def test_japanese_prediction_enables_auxiliary_reading_completion(self):
         self.install_auxiliary_dictionary_fixture()
         baseline=json.loads(self.run_cli('あいう').stdout)
@@ -498,6 +516,20 @@ class Tests(unittest.TestCase):
             self.assertIn(key,predicted_candidates)
             self.assertEqual(predicted_candidates[key]['score'],score)
         self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
+
+    def test_prediction_kana_symbol_and_prefix_order(self):
+        self.install_auxiliary_dictionary_fixture()
+        dictionary(self.data/'system.sud', [('あ','Prefix',1,100), ('あいう','Primary',1,100)])
+        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--nbest','1','あいう').stdout)['candidates']]
+        self.assertLess(texts.index('EMOJI'),texts.index('あいう'))
+        self.assertLess(texts.index('ｱｲｳ'),texts.index('Prefix'))
+        self.assertLess(texts.index('Prefix'),texts.index('SYMBOL'))
+        self.assertLess(texts.index('SYMBOL'),texts.index('SINGLE-KANJI'))
+        dictionary(self.data/'emoji.sud',[('あ','EMOJI',0,6000)])
+        dictionary(self.data/'symbol.sud',[('あ','SYMBOL',0,3000)])
+        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--nbest','1','あ').stdout)['candidates']]
+        self.assertLess(texts.index('ｱ'),texts.index('EMOJI'))
+        self.assertLess(texts.index('EMOJI'),texts.index('SYMBOL'))
 
     def test_bunsetsu_marks_legacy_generation_without_auxiliary_dictionaries_incomplete(self):
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','B'])
