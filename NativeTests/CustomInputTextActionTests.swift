@@ -52,6 +52,12 @@ final class CustomInputTextActionTests: XCTestCase {
             let callback = try XCTUnwrap(key.onCommittedPress)
             callback(true)
         }
+        func numberFlick(_ id: String, _ direction: MultiFlickDirection) throws {
+            let key = try XCTUnwrap(find("custom-" + id) as? Sumire.MultiStageFlickKey)
+            let callback = try XCTUnwrap(key.onCommit)
+            callback(.init(output: .text(""), isTap: direction == .tap, wasFlick: direction != .tap,
+                           isLongPress: false, direction: direction, secondDirection: nil, circularSlot: nil))
+        }
         func find(_ id: String) -> UIView? { descendants(surface).first { $0.accessibilityIdentifier == id } }
         func contains(_ id: String) -> Bool {
             descendants(surface).contains { $0.accessibilityIdentifier == id }
@@ -94,7 +100,7 @@ final class CustomInputTextActionTests: XCTestCase {
     }
 
     func testExplicitSymbolCommandOpensPanel() throws {
-        let fixture = try Fixture(actions: [("symbols", "ShowEmojiKeyboard")])
+        let fixture = try Fixture(actions: [("symbols", "^_^")])
         try fixture.tap("symbols")
         XCTAssertTrue(fixture.contains("symbol-keyboard"))
         XCTAssertEqual(fixture.inserted, "")
@@ -198,6 +204,51 @@ final class CustomInputTextActionTests: XCTestCase {
         try fixture.tap("space")
         XCTAssertEqual(fixture.reading, "a")
         XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testCustomNumberProxyKeepsOwnerAndExactSixteenKeys() throws {
+        let fixture = try Fixture(actions: [("number", "SwitchToNumber")])
+        let saved = fixture.defaults.string(forKey: "keyboard.lastUsed")
+        try fixture.tap("number")
+        let ids = (0...9).map { "number-" + String($0) } +
+            ["number-comma", "number-dot", "number-globe", "number-space", "number-delete", "number-enter"]
+        for id in ids { XCTAssertTrue(fixture.contains("custom-" + id), id) }
+        XCTAssertFalse(fixture.contains("custom-input-mode-return"))
+        XCTAssertFalse(fixture.contains("keyboard-switch"), "No extra generic bottom row")
+        XCTAssertEqual(fixture.defaults.string(forKey: "keyboard.lastUsed"), saved)
+        try fixture.numberFlick("number-1", .tap)
+        try fixture.numberFlick("number-comma", .left)
+        try fixture.numberFlick("number-dot", .right)
+        XCTAssertEqual(fixture.reading, "1+)")
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testNumberProxyUsesOwningCustomRomajiAndDirectModes() throws {
+        for direct in [false, true] {
+            let fixture = try Fixture(actions: [("number", "SwitchToNumber")], direct: direct, romaji: true)
+            try fixture.tap("number")
+            try fixture.numberFlick("number-comma", .up)
+            XCTAssertEqual(fixture.reading, direct ? "" : "ー")
+            XCTAssertEqual(fixture.inserted, direct ? "-" : "")
+        }
+    }
+
+    func testNumberDeleteFlickAndGlobeUseEditingCallbacks() throws {
+        let fixture = try Fixture(actions: [("word", "Text:あ"), ("number", "SwitchToNumber")])
+        try fixture.tap("word"); try fixture.tap("number")
+        var boundaryCalls = 0, keyboardCalls = 0
+        fixture.surface.deleteUntilBoundary = { boundaryCalls += 1 }
+        fixture.surface.nextKeyboard = { keyboardCalls += 1 }
+        try fixture.numberFlick("number-delete", .left)
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertEqual(boundaryCalls, 0)
+        try fixture.numberFlick("number-delete", .left)
+        XCTAssertEqual(boundaryCalls, 1)
+        try fixture.numberFlick("number-2", .tap)
+        try fixture.tap("number-globe")
+        XCTAssertEqual(keyboardCalls, 1)
+        XCTAssertEqual(fixture.inserted, "2")
+        XCTAssertEqual(fixture.reading, "")
     }
 
     func testKanaMarkersModifyPriorKanaWithoutInsertingTheirNames() throws {

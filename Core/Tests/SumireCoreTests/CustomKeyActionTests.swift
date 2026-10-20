@@ -19,12 +19,27 @@ final class CustomKeyActionTests: XCTestCase {
         let cases: [(String, String, CustomKeyAction.Command)] = [
             ("MoveCursorRight", "MOVE_CURSOR_RIGHT", .cursorRight),
             ("DeleteUntilSymbol", "DELETE_UNTIL_SYMBOL", .deleteUntilBoundary),
-            ("ShowEmojiKeyboard", "SHOW_EMOJI_KEYBOARD", .openSymbols)]
+            ("ShowEmojiKeyboard", "SHOW_EMOJI_KEYBOARD", .openSymbols),
+            ("SwitchToKanaLayout", "SWITCH_TO_KANA_LAYOUT", .switchKana),
+            ("SwitchToEnglishLayout", "SWITCH_TO_ENGLISH_LAYOUT", .switchEnglish),
+            ("SwitchToNumberLayout", "SWITCH_TO_NUMBER_LAYOUT", .switchNumber)]
         for (raw, alias, command) in cases {
             XCTAssertEqual(CustomKeyAction.tap(raw, targets: targets), .command(command))
             XCTAssertEqual(CustomKeyAction.flick(type: raw, value: nil, targets: targets), .command(command))
             XCTAssertEqual(CustomKeyAction.flick(type: alias, value: nil, targets: targets), .command(command))
         }
+    }
+
+    func testPinnedSerializedModeAndEmojiNames() {
+        let targets = CustomLayoutTargets(layouts: [])
+        let cases: [(String, CustomKeyAction.Command)] = [("SwitchToKana", .switchKana),
+            ("SwitchToEnglish", .switchEnglish), ("SwitchToNumber", .switchNumber), ("^_^", .openSymbols)]
+        for (raw, command) in cases {
+            XCTAssertEqual(CustomKeyAction.tap(raw, targets: targets), .command(command))
+            XCTAssertEqual(CustomKeyAction.flick(type: raw, value: nil, targets: targets), .command(command))
+            XCTAssertEqual(CustomKeyAction.tap("Text:" + raw, targets: targets), .text(raw))
+        }
+        XCTAssertEqual(CustomKeyAction.tap("InputText:^_^", targets: targets), .inputText("^_^"))
     }
 
     func testLegacyLayoutReferencesAndReviewPreserveUnresolvedActions() throws {

@@ -17,6 +17,7 @@ public enum CustomKeyAction: Codable, Equatable {
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
         case deleteUntilBoundary = "DeleteUntilSymbol", openSymbols = "ShowEmojiKeyboard"
+        case switchKana = "SwitchToKanaLayout", switchEnglish = "SwitchToEnglishLayout", switchNumber = "SwitchToNumberLayout"
     }
     /// Pinned IMEService InputText actions; ordinary Text payloads stay literal.
     public static func supportsInputText(_ token: String) -> Bool {
@@ -26,7 +27,7 @@ public enum CustomKeyAction: Codable, Equatable {
         if raw.hasPrefix("Text:") { return .text(String(raw.dropFirst(5))) }
         if raw.hasPrefix("InputText:") { return .inputText(String(raw.dropFirst(10))) }
         if raw.hasPrefix("MoveToCustomKeyboard:") { return targets.resolve(String(raw.dropFirst(21)), raw: raw) }
-        if let command = Command(rawValue: raw) { return .command(command) }
+        if let command = decodedCommand(raw) { return .command(command) }
         return .unsupported(raw: raw, reason: "この操作はiOS側で未対応です")
     }
     public static func flick(type: String, value: String?, targets: CustomLayoutTargets) -> Self {
@@ -35,11 +36,20 @@ public enum CustomKeyAction: Codable, Equatable {
         let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "SPACE": "Space",
                        "NEW_LINE": "NewLine", "ENTER": "Enter", "CONFIRM": "Confirm", "CONVERT": "Convert",
                        "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "MOVE_CURSOR_RIGHT": "MoveCursorRight",
-                       "DELETE_UNTIL_SYMBOL": "DeleteUntilSymbol", "SHOW_EMOJI_KEYBOARD": "ShowEmojiKeyboard", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
+                       "SWITCH_TO_KANA_LAYOUT": "SwitchToKanaLayout", "SWITCH_TO_ENGLISH_LAYOUT": "SwitchToEnglishLayout",
+                       "SWITCH_TO_NUMBER_LAYOUT": "SwitchToNumberLayout", "DELETE_UNTIL_SYMBOL": "DeleteUntilSymbol", "SHOW_EMOJI_KEYBOARD": "ShowEmojiKeyboard", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
                        "TOGGLE_DAKUTEN": "小゛゜", "CHANGE_INPUT_MODE": "ChangeInputMode"]
-        if let command = Command(rawValue: aliases[type] ?? type) { return .command(command) }
+        if let command = decodedCommand(aliases[type] ?? type) { return .command(command) }
         return .unsupported(raw: type + ":" + (value ?? ""), reason: "このフリック操作はiOS側で未対応です")
     }
+    /// KeyActionMapper tap strings differ from enum class names. Flick exports
+    /// also use the short SwitchTo* names; retain long iOS aliases for compatibility.
+    private static func decodedCommand(_ raw: String) -> Command? {
+        let aliases = ["SwitchToKana": "SwitchToKanaLayout", "SwitchToEnglish": "SwitchToEnglishLayout",
+                       "SwitchToNumber": "SwitchToNumberLayout", "^_^": "ShowEmojiKeyboard"]
+        return Command(rawValue: aliases[raw] ?? raw)
+    }
+
 }
 
 public struct CustomLayoutTargets {

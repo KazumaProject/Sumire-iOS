@@ -190,7 +190,7 @@ final class KeyboardSurface: UIInputView {
     }
     func configureAppearancePreview(_ kind: KeyboardKind, defaults: UserDefaults) {
         settingsDefaults = defaults
-        customEnglishOwner = nil
+        customPresentationOwner = nil
         if !isAppearancePreview {
             stackLeading.isActive = false; stackTrailing.isActive = false
             stackLeading = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: geometry.horizontalInset)
@@ -222,8 +222,8 @@ final class KeyboardSurface: UIInputView {
             inputMode = first.mode
             if let id = first.customID { activeCustomID = id }
         }
-        if customEnglishOwner != nil && !customEnglishVisible {
-            customEnglishOwner = nil
+        if customPresentationOwner != nil && !customProxyVisible {
+            customPresentationOwner = nil
             refreshCustomPresentationLanguage()
         }
         if !isAppearancePreview,
@@ -336,15 +336,27 @@ final class KeyboardSurface: UIInputView {
     private var inputMode: InputMode = .kana
     // A temporary English surface belongs to the selected custom layout. It is
     // independent of the user's enabled keyboard list and last-used layout.
-    private var customEnglishOwner: String?
-    private var customEnglishVisible: Bool {
-        inputMode == .custom && customEnglishOwner == activeCustomID && customEnglishOwner != nil
-            && customLayouts.contains { $0.id == customEnglishOwner }
+    private var customPresentationOwner: String?
+    private enum CustomPresentation { case english, number }
+    private var customPresentation = CustomPresentation.english
+    private var customProxyVisible: Bool {
+        inputMode == .custom && customPresentationOwner == activeCustomID && customPresentationOwner != nil
+            && customLayouts.contains { $0.id == customPresentationOwner }
     }
+    private var customEnglishVisible: Bool { customProxyVisible && customPresentation == .english }
+    private var customNumberVisible: Bool { customProxyVisible && customPresentation == .number }
     private var displayedInputMode: InputMode { customEnglishVisible ? .english : inputMode }
     private func setCustomEnglishPresentation(_ visible: Bool) {
         beforeInput?(); tapCycle.reset()
-        customEnglishOwner = visible ? activeCustomID : nil
+        customPresentationOwner = visible ? activeCustomID : nil
+        if visible { customPresentation = .english }
+        refreshCustomPresentationLanguage()
+        rebuild()
+    }
+    private func showCustomNumberPresentation() {
+        beforeInput?(); tapCycle.reset()
+        customPresentationOwner = activeCustomID
+        customPresentation = .number
         refreshCustomPresentationLanguage()
         rebuild()
     }
@@ -366,8 +378,8 @@ final class KeyboardSurface: UIInputView {
             customLayouts = layouts
             storedCustomID = library.activeID
             activeCustomID = library.activeID ?? layouts.first?.id
-            if customEnglishOwner != nil && !customEnglishVisible {
-                customEnglishOwner = nil
+            if customPresentationOwner != nil && !customProxyVisible {
+                customPresentationOwner = nil
                 refreshCustomPresentationLanguage()
             }
             rebuild()
@@ -531,6 +543,11 @@ final class KeyboardSurface: UIInputView {
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(candidateBar)
         if customEnglishVisible { addQwertyGrid(palette: palette); return }
+        if customNumberVisible {
+            do { addCustomGrid(palette: palette, presentation: try CustomNumberLayout.layout()) }
+            catch { showDataNotice(error.localizedDescription) }
+            return
+        }
         if inputMode == .custom {
             addCustomGrid(palette: palette)
             return
@@ -926,15 +943,16 @@ final class KeyboardSurface: UIInputView {
             self.consumeQwertyShift()
         }
     }
-    private func addCustomGrid(palette: KeyboardPalette) {
-        guard let layout = customLayouts.first(where: { $0.id == activeCustomID }) else {
+    private func addCustomGrid(palette: KeyboardPalette, presentation: ImportedCustomLayout? = nil) {
+        guard let ownerLayout = customLayouts.first(where: { $0.id == activeCustomID }) else {
             status.text = "カスタム配列が選択されていません"
             addRow(["50音", "🌐"], palette: palette, special: true)
             return
         }
+        let layout = presentation ?? ownerLayout
         let targets = CustomLayoutTargets(layouts: customLayouts)
         let tapController = CustomDoubleTapController()
-        tapController.onAction = { [weak self] action in self?.customAction(action, layout: layout) }
+        tapController.onAction = { [weak self] action in self?.customAction(action, layout: ownerLayout) }
         customTapController = tapController
         let grid = CustomKeyboardGrid(layout: layout) { [weak self] placement in
             guard let self else { return UIView() }
@@ -974,6 +992,15 @@ final class KeyboardSurface: UIInputView {
                 tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
             let normalAction = tapAction
+            if presentation != nil {
+                let icons: [CustomKeyAction.Command: KeyboardIcon] = [
+                    .nextKeyboard: .globe, .space: .space, .delete: .delete, .newLine: .enter]
+                if case .command(let command) = normalAction, let icon = icons[command] {
+                    key.setTitle(nil, for: .normal)
+                    key.setImage(icon.image, for: .normal)
+                    key.tintColor = palette.foreground
+                }
+            }
             let doubleTap = CustomDoubleTapBinding.effective(definition: definition, normalAction: normalAction, targets: targets)
 
             if let error = runtimeError {
@@ -989,7 +1016,7 @@ final class KeyboardSurface: UIInputView {
                 [normalAction] + (doubleTap.map { [$0.action] } ?? [])
             let needsExclusiveTouch = actions.contains { action in
                 switch action {
-                case .switchLayout, .command(.changeMode), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
+                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
                 default: return false
                 }
             }
@@ -998,7 +1025,7 @@ final class KeyboardSurface: UIInputView {
                 repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft), .command(.cursorRight)].contains(normalAction)
                 switch normalAction {
-                case .switchLayout, .command(.changeMode), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
+                case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
                 default: break
                 }
@@ -1028,8 +1055,8 @@ final class KeyboardSurface: UIInputView {
             return SizedKey(key, scale: appearance.keyScale)
         }
         stack.addArrangedSubview(grid)
-        addRow(["🌐", "空白", "⌫", "改行"], palette: palette, special: true)
-        if let row = keyRows.last {
+        if presentation == nil { addRow(["🌐", "空白", "⌫", "改行"], palette: palette, special: true) }
+        if presentation == nil, let row = keyRows.last {
             let height = row.heightAnchor.constraint(equalToConstant: 44)
             height.priority = .defaultHigh
             height.isActive = true
@@ -1116,7 +1143,10 @@ final class KeyboardSurface: UIInputView {
             case .openSymbols: showSymbolKeyboard()
             case .nextKeyboard: pressed("🌐")
             case .modifier: pressed("゛")
-            case .changeMode: setCustomEnglishPresentation(true)
+            case .changeMode: setCustomEnglishPresentation(!customNumberVisible)
+            case .switchKana: setCustomEnglishPresentation(false)
+            case .switchEnglish: setCustomEnglishPresentation(true)
+            case .switchNumber: showCustomNumberPresentation()
             case .moveCustomKeyboardTab:
                 guard !customLayouts.isEmpty else { status.text = "切り替え先のカスタム配列がありません"; return }
                 let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
@@ -1846,7 +1876,7 @@ final class KeyboardSurface: UIInputView {
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()
         let previousEnglishComposition = englishComposition
-        customEnglishOwner = nil
+        customPresentationOwner = nil
         inputMode = mode
         if let customID { activeCustomID = customID }
         rememberKeyboard()
