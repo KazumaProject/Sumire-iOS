@@ -57,12 +57,19 @@ final class StableCandidateHeightTests: XCTestCase {
         for orientation: UIDeviceOrientation in [.landscapeLeft, .portrait] {
             XCUIDevice.shared.orientation = orientation
             let landscape = orientation == .landscapeLeft
+            // iPadOS can keep a portrait-shaped app window on a landscape
+            // display. Check device-screen rotation separately from key bounds.
             let settled = XCTNSPredicateExpectation(predicate: NSPredicate { _, _ in
-                let window = app.windows.firstMatch.frame
-                return landscape ? window.width > window.height : window.height > window.width
+                let screen = XCUIScreen.main.screenshot().image.size
+                return landscape ? screen.width > screen.height : screen.height > screen.width
             }, object: nil)
             XCTAssertEqual(XCTWaiter.wait(for: [settled], timeout: 5), .completed,
-                           "Window must rotate before checking keyboard geometry")
+                           "Device screen must rotate before checking keyboard geometry")
+            let screenshot = XCUIScreen.main.screenshot()
+            let attachment = XCTAttachment(screenshot: screenshot)
+            attachment.name = "iPad \(orientation.rawValue) screen \(screenshot.image.size), window \(app.windows.firstMatch.frame)"
+            attachment.lifetime = .keepAlways
+            add(attachment)
             XCTAssertEqual(editor.value as? String, "あ", "Rotation must preserve editor text")
             XCTAssertEqual(header.label, "あ", "Rotation must preserve uncommitted composition")
             let window = app.windows.firstMatch.frame
