@@ -16,6 +16,9 @@ final class SpecialKeyGuideConnectionTests: XCTestCase {
         special.guidesVisible = true
         special.guideFontSize = 8
         special.save(.sumire, group: .special, defaults: defaults)
+        var actions = SumireSpecialKeySettings()
+        try actions.set(.insertColon, for: .delete, gesture: .right, arrangement: .toggle, mode: .japanese)
+        try actions.save(defaults: defaults)
         let surface = Sumire.KeyboardSurface()
         surface.settingsDefaults = defaults
         surface.reloadAppearance()
@@ -28,6 +31,10 @@ final class SpecialKeyGuideConnectionTests: XCTestCase {
             try XCTUnwrap(descendants(key).first { $0.accessibilityIdentifier == "flick-guide-left" } as? UILabel)
         }
         XCTAssertEqual(try leftGuide(deleteKey()).text, "区切削除")
+        let right = try XCTUnwrap(descendants(try deleteKey()).first {
+            $0.accessibilityIdentifier == "flick-guide-right"
+        } as? UILabel)
+        XCTAssertEqual(right.text, ":")
         let character = try XCTUnwrap(descendants(surface).first { $0.accessibilityIdentifier == "sumire-a" } as? UIButton)
         XCTAssertTrue(character.accessibilityActivate())
         XCTAssertEqual(try leftGuide(deleteKey()).text, "全削除")
