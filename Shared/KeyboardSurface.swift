@@ -533,7 +533,7 @@ final class KeyboardSurface: UIInputView {
                                           horizontalGap: geometry.keySpacing, verticalGap: geometry.rowSpacing,
                                           makeKey: { [weak self] definition in
             guard let self else { return UIView() }
-            let appearance = self.keyAppearance(special: definition.action != .text)
+            let appearance = self.keyAppearance(special: definition.action != .text && definition.action != .modifier)
             let key: UIButton
             if definition.action == .text {
                 let flickKey = FlickKey(type: .custom)
@@ -660,7 +660,7 @@ final class KeyboardSurface: UIInputView {
         guard let grid = try? KeyboardGrid(layout: .init(rows: 5, columns: centralColumns + 4, keys: keys), horizontalGap: 0, verticalGap: 0,
                                           columnWeights: [1, 1] + Array(repeating: 11 / CGFloat(centralColumns), count: centralColumns) + [1, 1], makeKey: { definition in
             let side = definition.column < 2 || definition.column == centralColumns + 2
-            let special = side || definition.action == .modifier
+            let special = side
             let appearance = self.keyAppearance(special: special)
             let key: UIButton = definition.action == .text ? FlickKey(type: .custom) : RepeatingKey(type: .system)
             key.accessibilityIdentifier = definition.id
