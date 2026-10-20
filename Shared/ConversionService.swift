@@ -16,6 +16,34 @@ struct ConversionCandidate {
         if let correctedReading, !correctedReading.isEmpty { return "[読] " + correctedReading }
         return isReadingPrefix ? "[部]" : nil
     }
+    /// Match the pinned Android display merger: raw UTF-16 identity, first
+    /// candidate behavior/order, and dictionary labels from equal commits.
+    /// Swift String equality folds canonical equivalents; Kotlin does not.
+    static func mergedForDisplay(_ candidates: [ConversionCandidate]) -> [ConversionCandidate] {
+        var positions: [[UInt16]: Int] = [:]
+        var merged: [ConversionCandidate] = []
+        merged.reserveCapacity(candidates.count)
+        for candidate in candidates {
+            let key = Array((candidate.rawText ?? candidate.text).utf16)
+            guard let index = positions[key] else {
+                positions[key] = merged.count
+                merged.append(candidate)
+                continue
+            }
+            let first = merged[index]
+            guard first.text.utf16.elementsEqual(candidate.text.utf16) else { continue }
+            var dictionaries = first.dictionaries
+            for name in candidate.dictionaries where !dictionaries.contains(name) {
+                dictionaries.append(name)
+            }
+            guard dictionaries != first.dictionaries else { continue }
+            merged[index] = ConversionCandidate(id: first.id, text: first.text,
+                score: first.score, range: first.range, dictionaries: dictionaries,
+                bunsetsu: first.bunsetsu, rawText: first.rawText,
+                correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix)
+        }
+        return merged
+    }
     /// Owned Swift values projected from this candidate's path only. Ranges are
     /// UTF-16 offsets within the consumed reading (currently a prefix at zero).
     let bunsetsu: [BunsetsuSegment]
@@ -222,6 +250,7 @@ final class ConversionService {
                                                           correctedReading: correctedReading.isEmpty ? nil : correctedReading,
                                                           isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0))
                 }
+                candidates = ConversionCandidate.mergedForDisplay(candidates)
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
                 response = .success(ConversionResponse(generation: metrics.generation, candidates: candidates,
