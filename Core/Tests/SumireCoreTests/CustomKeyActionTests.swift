@@ -15,7 +15,7 @@ final class CustomKeyActionTests: XCTestCase {
         else { XCTFail("Unsupported action must not silently change behavior") }
     }
     func testLegacyLayoutReferencesAndReviewPreserveUnresolvedActions() throws {
-        let json = #"[{"layout":{"layoutId":11,"stableId":"a","name":"A","rowCount":1,"columnCount":1},"keysWithFlicks":[{"key":{"keyIdentifier":"key","action":"MoveToCustomKeyboard:12","doubleTapAction":"VoiceInput"},"flicks":[{"actionType":"MoveToCustomKeyboard","actionValue":"missing"}]}]},{"layout":{"layoutId":12,"stableId":"b","name":"B","rowCount":1,"columnCount":1},"keysWithFlicks":[]}]"#
+        let json = #"[{"layout":{"layoutId":11,"stableId":"a","name":"A","rowCount":1,"columnCount":1},"keysWithFlicks":[{"key":{"keyIdentifier":"key","action":"MoveToCustomKeyboard:12","doubleTapAction":"VoiceInput","isSpecialKey":true},"flicks":[{"actionType":"MoveToCustomKeyboard","actionValue":"missing"}]}]},{"layout":{"layoutId":12,"stableId":"b","name":"B","rowCount":1,"columnCount":1},"keysWithFlicks":[]}]"#
         let preview = try CustomLayoutImportPreview.parse(Data(json.utf8))
         XCTAssertEqual(preview.layouts.count, 2)
         let targets = CustomLayoutTargets(layouts: preview.layouts)

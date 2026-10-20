@@ -73,8 +73,12 @@ public struct CustomLayoutActionReview {
                 for field in ["action", "doubleTapAction"] {
                     if let raw = definition?[field]?.string {
                         let action: CustomKeyAction
-                        if field == "doubleTapAction", definition?["doubleTapEnabled"] != .bool(false) {
-                            action = .unsupported(raw: raw, reason: "ダブルタップ操作は移植中です")
+                        if field == "doubleTapAction" {
+                            // Disabled/ordinary-key bindings are inert, as in Android imports.
+                            guard let binding = CustomDoubleTapBinding.effective(
+                                definition: definition, normalAction: .tap(definition?["action"]?.string ?? "", targets: targets),
+                                targets: targets) else { continue }
+                            action = binding.action
                         } else {
                             action = .tap(raw, targets: targets)
                         }
