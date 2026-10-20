@@ -14,6 +14,89 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     var action: ((SumireSpecialKeyGesture) -> Void)?
     var repeats: ((SumireSpecialKeyGesture) -> Bool)?
     var longPressEnabled: (() -> Bool)?
+    private var guideLabels: [FlickDirection: UILabel] = [:]
+    private var guideTitles: [FlickDirection: String] = [:]
+    private var guidesVisible = false
+    private var guideFontSize: CGFloat = 9
+    private var guideColor = UIColor.label
+    private static let guideDirections: [(FlickDirection, String)] = [
+        (.left, "left"), (.up, "up"), (.right, "right"), (.down, "down")
+    ]
+    private var hasGuides: Bool { guidesVisible && !guideTitles.isEmpty }
+
+    func configureGuides(titles: [FlickDirection: String], visible: Bool,
+                         fontSize: CGFloat, color: UIColor) {
+        let titles = titles.filter { $0.key != .tap && !$0.value.isEmpty }
+        let size = fontSize.isFinite ? min(64, max(1, fontSize)) : 9
+        guard titles != guideTitles || visible != guidesVisible ||
+                size != guideFontSize || !color.isEqual(guideColor) else { return }
+        guideTitles = titles; guidesVisible = visible
+        guideFontSize = size; guideColor = color
+        for (direction, name) in Self.guideDirections {
+            let title = titles[direction]
+            if visible && title != nil && guideLabels[direction] == nil {
+                let label = UILabel()
+                label.accessibilityIdentifier = "flick-guide-" + name
+                label.isUserInteractionEnabled = false
+                label.isAccessibilityElement = false
+                label.textAlignment = .center
+                label.lineBreakMode = .byClipping
+                addSubview(label)
+                guideLabels[direction] = label
+            }
+            if let label = guideLabels[direction] {
+                label.text = title
+                label.textColor = color
+                label.isHidden = !visible || title == nil
+            }
+        }
+        setNeedsLayout()
+    }
+
+    private func guideArea(in rect: CGRect) -> CGRect {
+        guard !rect.isNull, !rect.isInfinite, rect.width > 4, rect.height > 4 else { return .zero }
+        return rect.insetBy(dx: 2, dy: 2)
+    }
+    private func guideCenter(in rect: CGRect) -> CGRect {
+        CGRect(x: rect.midX - rect.width * 0.23, y: rect.midY - rect.height * 0.225,
+               width: rect.width * 0.46, height: rect.height * 0.45)
+    }
+    override func contentRect(forBounds bounds: CGRect) -> CGRect {
+        let rect = super.contentRect(forBounds: bounds)
+        return hasGuides ? guideCenter(in: guideArea(in: rect)) : rect
+    }
+    override func titleRect(forContentRect contentRect: CGRect) -> CGRect {
+        hasGuides ? contentRect : super.titleRect(forContentRect: contentRect)
+    }
+    override func imageRect(forContentRect contentRect: CGRect) -> CGRect {
+        guard hasGuides, let image = currentImage else { return super.imageRect(forContentRect: contentRect) }
+        let scale = min(1, contentRect.width / max(1, image.size.width), contentRect.height / max(1, image.size.height))
+        let size = CGSize(width: image.size.width * scale, height: image.size.height * scale)
+        return CGRect(x: contentRect.midX - size.width / 2, y: contentRect.midY - size.height / 2,
+                      width: size.width, height: size.height)
+    }
+    override func layoutSubviews() {
+        super.layoutSubviews()
+        guard hasGuides else { return }
+        let rect = guideArea(in: super.contentRect(forBounds: bounds))
+        let center = guideCenter(in: rect)
+        let gap: CGFloat = 1
+        let frames: [FlickDirection: CGRect] = [
+            .up: CGRect(x: rect.minX, y: rect.minY, width: rect.width, height: max(0, center.minY - rect.minY - gap)),
+            .down: CGRect(x: rect.minX, y: center.maxY + gap, width: rect.width, height: max(0, rect.maxY - center.maxY - gap)),
+            .left: CGRect(x: rect.minX, y: center.minY, width: max(0, center.minX - rect.minX - gap), height: center.height),
+            .right: CGRect(x: center.maxX + gap, y: center.minY, width: max(0, rect.maxX - center.maxX - gap), height: center.height)
+        ]
+        for (direction, label) in guideLabels {
+            guard let title = guideTitles[direction], let frame = frames[direction] else { continue }
+            label.frame = frame
+            label.isHidden = frame.width < 1 || frame.height < 1
+            let measured = (title as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: guideFontSize)])
+            let ratio = min(1, frame.width / max(1, measured.width), frame.height / max(1, measured.height))
+            label.font = .systemFont(ofSize: max(1, guideFontSize * ratio))
+        }
+    }
+
     private var touch: UITouch?
     private var origin = CGPoint.zero
     private var direction = FlickDirection.tap
