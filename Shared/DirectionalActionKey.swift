@@ -16,6 +16,8 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     var longPressEnabled: (() -> Bool)?
     private var guideLabels: [FlickDirection: UILabel] = [:]
     private var guideTitles: [FlickDirection: String] = [:]
+    private var originalTitleFont: UIFont?
+    private var fittedTitleFont: UIFont?
     private var guidesVisible = false
     private var guideFontSize: CGFloat = 9
     private var guideColor = UIColor.label
@@ -41,6 +43,7 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
                 label.isAccessibilityElement = false
                 label.textAlignment = .center
                 label.lineBreakMode = .byClipping
+                label.clipsToBounds = true
                 addSubview(label)
                 guideLabels[direction] = label
             }
@@ -50,7 +53,29 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
                 label.isHidden = !visible || title == nil
             }
         }
+        if !hasGuides, let originalTitleFont {
+            // Respect a caller's new font even when it disables the guides in
+            // the same update, rather than restoring an obsolete font.
+            if titleLabel?.font == fittedTitleFont { titleLabel?.font = originalTitleFont }
+            self.originalTitleFont = nil
+            fittedTitleFont = nil
+        }
         setNeedsLayout()
+    }
+
+    private func fitCenterTitle() {
+        guard hasGuides, currentAttributedTitle == nil,
+              let title = currentTitle, !title.isEmpty, let label = titleLabel else { return }
+        if originalTitleFont == nil || label.font != fittedTitleFont {
+            originalTitleFont = label.font
+        }
+        guard let font = originalTitleFont else { return }
+        let rect = contentRect(forBounds: bounds)
+        let size = (title as NSString).size(withAttributes: [.font: font])
+        let ratio = min(1, rect.width / max(1, size.width), rect.height / max(1, size.height))
+        let fitted = font.withSize(max(1, font.pointSize * ratio))
+        label.font = fitted
+        fittedTitleFont = fitted
     }
 
     private func guideArea(in rect: CGRect) -> CGRect {
@@ -76,6 +101,7 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
                       width: size.width, height: size.height)
     }
     override func layoutSubviews() {
+        fitCenterTitle()
         super.layoutSubviews()
         guard hasGuides else { return }
         let rect = guideArea(in: super.contentRect(forBounds: bounds))

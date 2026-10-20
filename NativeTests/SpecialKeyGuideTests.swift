@@ -43,6 +43,32 @@ final class SpecialKeyGuideTests: XCTestCase {
         XCTAssertEqual(actions, [.tap])
     }
 
+    func testCenterTitleFitsReservedSpaceAndRestoresCallerFontWhenGuidesEnd() throws {
+        let key = Sumire.DirectionalActionKey(frame: CGRect(x: 0, y: 0, width: 44, height: 44))
+        key.setTitle("削除", for: .normal)
+        let original = UIFont.systemFont(ofSize: 24)
+        key.titleLabel?.font = original
+        key.configureGuides(titles: titles, visible: true, fontSize: 10, color: .label)
+        key.layoutIfNeeded()
+        let fitted = try XCTUnwrap(key.titleLabel?.font)
+        let measured = ("削除" as NSString).size(withAttributes: [.font: fitted])
+        let center = key.contentRect(forBounds: key.bounds)
+        XCTAssertLessThan(fitted.pointSize, original.pointSize)
+        XCTAssertLessThanOrEqual(measured.width, center.width + 0.01)
+        XCTAssertLessThanOrEqual(measured.height, center.height + 0.01)
+        key.configureGuides(titles: titles, visible: false, fontSize: 10, color: .label)
+        key.layoutIfNeeded()
+        XCTAssertEqual(key.titleLabel?.font, original)
+        key.configureGuides(titles: titles, visible: true, fontSize: 10, color: .label)
+        key.layoutIfNeeded()
+        let changed = UIFont.systemFont(ofSize: 18)
+        key.titleLabel?.font = changed
+        key.configureGuides(titles: titles, visible: false, fontSize: 10, color: .label)
+        key.layoutIfNeeded()
+        XCTAssertEqual(key.titleLabel?.font, changed)
+        XCTAssertEqual(key.currentTitle, "削除")
+    }
+
     func testGuidesStayInsideSmallKeysAndOutsideTitleAndIcon() throws {
         for size in [CGSize(width: 90, height: 64), CGSize(width: 44, height: 44), CGSize(width: 24, height: 24)] {
             for useImage in [false, true] {
