@@ -233,7 +233,10 @@ int main(int argc, char **argv) {
             std::cout << ',';
           auto &c = r.candidates[i];
           std::cout << "{\"id\":" << i << ",\"text\":" << json(c.text)
-                    << ",\"score\":" << c.score << ",\"segments\":[";
+                    << ",\"score\":" << c.score
+                    << ",\"raw_text\":" << json(c.raw_text)
+                    << ",\"corrected_reading\":" << json(c.corrected_reading)
+                    << ",\"segments\":[";
           for (size_t j = 0; j < c.segments.size(); ++j) {
             if (j)
               std::cout << ',';
