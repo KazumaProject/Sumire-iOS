@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "source_revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
-  "adapter_sha256": "c448097a01cdae1b351275a0e299996bd46ee8430488ee4f3c773303877bdb31",
+  "adapter_sha256": "09ffd00476cce689f58a6f68b8cee15dc26c0477b414556ce1862861eb3a0f3d",
   "n": 20,
   "beam_width": 20,
   "readings": [
@@ -37,5 +37,6 @@
     "Factory English word provider is mocked empty; bundled English-reading data is loaded.",
     "No wall-clock-trigger readings; date/time generation is not covered or clock-mocked.",
     "No iOS parity threshold: this exports reference observations only."
-  ]
+  ],
+  "effective_commit_policy": "Pinned IMEService.processCandidate: correction type15 splits display payload; special full-commit types use candidate.string; ordinary exact UTF-16 length uses candidate.string, partial/excess uses candidate.commitText. Macro/utility/AI/glide branches are explicitly rejected."
 }
