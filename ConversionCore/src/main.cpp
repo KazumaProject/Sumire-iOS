@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <filesystem>
 
 std::string json(const std::string &s) {
   static const char hex[] = "0123456789abcdef";
@@ -197,7 +198,8 @@ int main(int argc, char **argv) {
     if (count < 1 || count > 100 || limit < 1 || limit > 2000000)
       throw std::runtime_error("invalid search limits");
     auto start = std::chrono::steady_clock::now();
-    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates, standalone_priority);
+    const bool japaneseEnglishWords = japanese_prediction && std::filesystem::exists(dir + "/english.sud");
+    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates || japaneseEnglishWords, standalone_priority);
     const auto personal = personal_entries.empty() ? std::shared_ptr<const sumire::PersonalDictionary>{}
                                                  : engine.personal_dictionary(std::move(personal_entries));
     sumire::Workspace workspace;

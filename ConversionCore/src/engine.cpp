@@ -434,18 +434,17 @@ Result Engine::lookup_english_reading(const std::string &input, size_t count) co
 Result Engine::lookup_english(const std::string &input, size_t count) const {
   return lookup_word_dictionary(impl->english_words.get(), input, count);
 }
-Result Engine::predict_english(const std::string &input, size_t count, bool case_variants,
-                               const PersonalDictionary *personal, const PersonalDictionary *learned) const {
+static Result english_dictionary_candidates(const Dictionary *dictionary,
+                                             const std::string &input, bool case_variants) {
   auto started = std::chrono::steady_clock::now();
-  require(impl->english_words != nullptr, "English dictionary is not enabled");
-  require(count >= 1 && count <= 100, "invalid candidate count");
+  require(dictionary != nullptr, "English dictionary is not enabled");
   auto reading = utf16(input);
   require(reading.size() <= 8192, "input exceeds 8192 UTF-16 units (not truncated)");
   Result r;
   if (reading.empty()) return r;
   const auto inputLength = reading.size();
   reading = unicode_lower(reading);
-  const auto &d = *impl->english_words;
+  const auto &d = *dictionary;
   d.predictive(reading, inputLength <= 2 ? 6 : 12, [&](size_t node, uint32_t token) {
     auto text = d.surface(token, reading, 0, reading.size(), node);
     r.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(inputLength)}}});
@@ -522,6 +521,17 @@ Result Engine::predict_english(const std::string &input, size_t count, bool case
   std::stable_sort(r.candidates.begin(), r.candidates.end(),
       [](const auto &a, const auto &b) { return a.score < b.score; });
   r.lattice_nodes = r.candidates.size();
+  r.elapsed_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - started).count();
+  return r;
+}
+Result Engine::predict_english(const std::string &input, size_t count, bool case_variants,
+                               const PersonalDictionary *personal, const PersonalDictionary *learned) const {
+  const auto started = std::chrono::steady_clock::now();
+  require(count >= 1 && count <= 100, "invalid candidate count");
+  auto r = english_dictionary_candidates(impl->english_words.get(), input, case_variants);
+  const auto inputLength = utf16(input).size();
+  if (input.empty()) return r;
   if (r.candidates.size() > count) r.candidates.resize(count);
   // Overlay readings and surfaces are user-authored and remain case-sensitive.
   // Keep only the requested top count while merging, even for large dictionaries.
@@ -1454,6 +1464,26 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.insert(result.candidates.end(), candidates.begin(),
                              candidates.end());
   };
+  const auto englishStart = result.candidates.size();
+  if (japanese_prediction && !reading.empty()) {
+    auto englishInput = reading;
+    const bool letters = std::all_of(reading.begin(), reading.end(), is_ascii_alphabet);
+    const bool wide = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
+      return c == 0x3000 || (c >= 0xff01 && c <= 0xff5e);
+    });
+    if (wide) for (auto &c : englishInput) c = c == 0x3000 ? u' ' : c - 0xfee0;
+    const bool digits = std::all_of(englishInput.begin(), englishInput.end(), [](char16_t c) {
+      return c >= u'0' && c <= u'9';
+    });
+    if ((letters || wide) && !digits) {
+      if (impl->english_words) {
+        auto english = english_dictionary_candidates(impl->english_words.get(), utf8(englishInput), true);
+        // This provider is not the standalone English session: no N-best cap
+        // or personal overlay is applied a second time.
+        append_candidates(english.candidates);
+      } else result.complete = false;
+    }
+  }
   // Pinned getCandidatesOriginal adds deterministic mixed-alphanumeric case
   // and full-width ASCII choices before the auxiliary/kana/prefix sections.
   // Numeric inputs take an earlier, separate Android route (including temporal
@@ -1493,6 +1523,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       result.candidates.back().presentation_kind = CandidatePresentationKind::full_width;
     }
   }
+  std::stable_sort(result.candidates.begin() + englishStart, result.candidates.end(),
+                   [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
   // Pinned Android df1f383 prediction paths include these three kana choices
   // even when no dictionary completion matches. One UTF-16 unit places them
   // before emoji/symbols; retain the existing no-prediction CLI behavior.

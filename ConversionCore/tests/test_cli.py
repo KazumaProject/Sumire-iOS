@@ -554,6 +554,35 @@ class Tests(unittest.TestCase):
         self.assertEqual([c['corrected_reading'] for c in correction],['あ','い'])
         self.assertEqual([c['text'] for c in correction],['同じ','同じ'])
 
+    def test_japanese_english_provider_is_uncapped_and_does_not_duplicate_personal(self):
+        connection(self.data/'connection.sud',1842)
+        dictionary(self.data/'english.sud', [('ab', 'word'+str(i), 0, i+100) for i in range(12)])
+        def provider(reading, *options):
+            result = json.loads(self.run_cli('--predict-japanese','--nbest','1',*options,reading).stdout)
+            return result, [c for c in result['candidates'] if c['segments'] and all(s['dictionary']=='english' for s in c['segments'])]
+        result, english = provider('ab')
+        self.assertTrue(result['complete'])
+        self.assertGreater(len(english),20)
+        self.assertTrue(any(c['text']=='ab' and c['score']==500 for c in english))
+        wide, wide_english = provider('ａｂ')
+        self.assertEqual([(c['text'],c['score']) for c in english],[(c['text'],c['score']) for c in wide_english])
+        for candidate in wide_english:
+            self.assertTrue(all(s['length_utf16']==2 for s in candidate['segments']))
+        for reading in ['a1','a+b','あ','é','123','１２３']:
+            _, values = provider(reading)
+            self.assertFalse(values,reading)
+        dedicated=json.loads(self.run_cli('--english','--nbest','5','ab').stdout)
+        self.assertEqual(len(dedicated['candidates']),5)
+        self.assertEqual([(c['text'],c['score']) for c in dedicated['candidates']],[(c['text'],c['score']) for c in english[:5]])
+        personal, _ = provider('ab','--user-entry','ab','UserWord','1','-10000')
+        self.assertEqual(sum(c['text']=='UserWord' for c in personal['candidates']),1)
+
+    def test_missing_english_provider_is_explicitly_incomplete_for_qualifying_input(self):
+        connection(self.data/'connection.sud',1842)
+        result=json.loads(self.run_cli('--predict-japanese','ab').stdout)
+        self.assertFalse(result['complete'])
+        self.assertTrue(json.loads(self.run_cli('--predict-japanese','あ').stdout)['complete'])
+
     def test_japanese_ascii_generated_variants_preserve_scores_order_and_duplicates(self):
         connection(self.data/'connection.sud',1842)
         for reading, expected in [('a',[('ａ',30000),('Ａ',30000)]),
