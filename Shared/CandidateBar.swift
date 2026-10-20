@@ -183,8 +183,10 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             onSizingChange?()
         }
     }
-    var requestedDisplayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
-    var displayedHeight: CGFloat { height(forShortcutsVisible: showsShortcuts) }
+    // Keep the host keyboard frame stable when shortcuts give way to candidates.
+    // Shortcut controls occupy one row; the configured rows remain reserved.
+    var requestedDisplayedHeight: CGFloat { CGFloat(min(3, max(1, rowCount))) * 44 }
+    var displayedHeight: CGFloat { configuredDisplayedHeight }
     func setDisplayedHeightLimit(_ limit: CGFloat) {
         let normalized = max(44, limit.isFinite ? limit : 44)
         guard displayedHeightLimit.map({ abs($0 - normalized) > 0.5 }) ?? true else { return }
@@ -194,9 +196,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         collection.collectionViewLayout.invalidateLayout()
         clampContentOffset()
     }
-    private func height(forShortcutsVisible shortcutsVisible: Bool) -> CGFloat {
-        let requested = CGFloat(shortcutsVisible ? 1 : min(3, max(1, storedRowCount))) * 44
-        guard !shortcutsVisible, let displayedHeightLimit else { return requested }
+    private var configuredDisplayedHeight: CGFloat {
+        let requested = CGFloat(min(3, max(1, storedRowCount))) * 44
+        guard let displayedHeightLimit else { return requested }
         let visibleRows = max(1, min(storedRowCount, Int(floor(displayedHeightLimit / 44))))
         return CGFloat(visibleRows) * 44
     }
