@@ -1468,8 +1468,9 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     append_candidates(symbol_candidates);
   } else {
     append_candidates(emoji_and_emoticon_candidates);
-    if (bunsetsu_search || !japanese_prediction)
-      append_candidates(symbol_candidates);
+    // df1f383 getCandidatesOriginal (default hidden candidate tabs) places
+    // symbols before kana and yomiPartList for multi-unit input.
+    append_candidates(symbol_candidates);
     if (include_kana) {
       auto katakana = hiragana_to_katakana(reading);
       result.candidates.push_back({utf8(reading), 6000, {}});
@@ -1498,10 +1499,6 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       }
     }
   }
-  // Ordinary getCandidates places symbols after kana and yomiPartList;
-  // the bunsetsu route retains its separate symbol-before-kana order.
-  if (japanese_prediction && !bunsetsu_search && reading.size() != 1)
-    append_candidates(symbol_candidates);
   append_candidates(single_kanji_candidates);
   if (bunsetsu_search && !impl->auxiliary_dictionaries_available)
     result.complete = false;
