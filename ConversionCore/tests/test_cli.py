@@ -317,6 +317,70 @@ class Tests(unittest.TestCase):
             value=json.loads(self.run_cli('--predict-japanese',reading).stdout)
             self.assertEqual('Completion' in [c['text'] for c in value['candidates']], len(reading)==16)
 
+    def test_classified_prediction_per_category_limit_penalty_and_switches(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Exact', 1, 100)])
+        dictionary(self.data/'medical.sud', [
+            ('あいうえ', f'Medical{i}', 1, 100) for i in range(5)
+        ] + [('あいうえおかき', 'TooFar', 1, -30000)])
+        dictionary(self.data/'place.sud', [('あいうえお', 'Place', 1, 50)])
+        args=['--categories','medical,place','--nbest','1','--predict-japanese']
+        result=json.loads(self.run_cli(*args,'あいう').stdout)
+        predicted=[c for c in result['candidates'] if c['text'].startswith('Medical')]
+        self.assertEqual([c['text'] for c in predicted], [f'Medical{i}' for i in range(4)])
+        self.assertTrue(all(c['score']==1600 and c['categories']==['medical'] for c in predicted))
+        self.assertTrue(all(c['segments'][0]['length_utf16']==3 for c in predicted))
+        place=next(c for c in result['candidates'] if c['text']=='Place')
+        self.assertEqual(place['score'],3050)
+        self.assertEqual(place['categories'],['place'])
+        self.assertNotIn('TooFar',[c['text'] for c in result['candidates']])
+        for flags,reading in [([], 'あいう'), (['--predict-japanese'], 'あい'),
+                              (['--categories','medical'], 'あいう')]:
+            value=json.loads(self.run_cli(*flags,reading).stdout)
+            self.assertFalse(any(c['text'].startswith('Medical') for c in value['candidates']))
+        limited=json.loads(self.run_cli(*args,'--max-states','1','あいう').stdout)
+        self.assertFalse(limited['complete'])
+
+    def test_classified_prediction_keeps_all_thirty_enabled_categories(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Primary', 1, 100)])
+        for category in b.CATEGORIES:
+            dictionary(self.data/(category+'.sud'), [('あいうえ', category, 1, 100)])
+        result=json.loads(self.run_cli('--categories','all','--nbest','1','--predict-japanese','あいう').stdout)
+        labels={label for candidate in result['candidates'] for label in candidate['categories']}
+        self.assertEqual(labels,set(b.CATEGORIES))
+        self.assertTrue(all(any(c['text']==name and c['categories']==[name] for c in result['candidates'])
+                            for name in b.CATEGORIES))
+        self.assertTrue(result['complete'])
+
+    def test_classified_prediction_preserves_distinct_readings_scores_and_primary(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Shared', 1, 100)])
+        dictionary(self.data/'medical.sud', [('あいうえ', 'Shared', 1, 100),
+                                             ('あいうお', 'Shared', 1, 100)])
+        dictionary(self.data/'place.sud', [('あいうえ', 'Shared', 1, 100),
+                                           ('あいうえ', 'Shared', 2, 100),
+                                           ('あいうえ', 'Shared', 1, 200)])
+        result=json.loads(self.run_cli('--categories','medical,place','--predict-japanese','あいう').stdout)
+        shared=[c for c in result['candidates'] if c['text']=='Shared']
+        self.assertEqual(len(shared),5) # Primary + four distinct prediction identities.
+        self.assertEqual(sorted(c['score'] for c in shared),[140,1600,1600,1600,1700])
+        self.assertEqual(sum(c['categories']==['medical','place'] for c in shared),1)
+        self.assertEqual(sum(c['categories']==['medical'] for c in shared),1)
+        self.assertEqual(sum(c['categories']==['place'] for c in shared),2)
+
+    def test_classified_prediction_utf16_limits_long_penalty_and_posting_budget(self):
+        for reading in ['あい😀', 'あいうえおか', 'あいうえおかきくけこさしすせそた', 'あいうえおかきくけこさしすせそたち']:
+            dictionary(self.data/'medical.sud', [(reading+'😀', -2, 1, 100)])
+            result=json.loads(self.run_cli('--categories','medical','--predict-japanese',reading).stdout)
+            matches=[c for c in result['candidates'] if c['text']==reading+'😀']
+            units=len(reading.encode('utf-16-le'))//2
+            self.assertEqual(bool(matches), units<=16)
+            if matches:
+                self.assertEqual(matches[0]['score'],3100)
+                self.assertEqual(matches[0]['segments'][0]['length_utf16'],units)
+        dictionary(self.data/'medical.sud', [('かきくけ', f'Budget{i}', 1, -i) for i in range(100)])
+        result=json.loads(self.run_cli('--categories','medical','--predict-japanese','--max-states','10','かきく').stdout)
+        self.assertFalse(result['complete'])
+        self.assertNotIn('Budget99',[c['text'] for c in result['candidates']])
+
     def test_japanese_completion_postings_consume_budget(self):
         # One terminal, many tokens: traversing just two nodes cannot allow an
         # unbounded posting scan. The cheapest token occurs after the budget.
@@ -564,6 +628,7 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
+        dictionary(self.data/'medical.sud',[('あい','Medical',1,-20), ('かきくけ','CategoryABI',1,100)])
         standalone(self.data/'standalone.sud',['しろ'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])

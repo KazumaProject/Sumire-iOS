@@ -73,9 +73,37 @@ static void test_edit_reuse(const char *directory) {
   CHECK(hits > 0);
   sumire_session_destroy(reused); sumire_engine_close(engine);
 }
+static void test_category_prediction(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  sumire_result *result = NULL;
+  CHECK(sumire_engine_open(directory, 1u << 9, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "かきく", strlen("かきく"), 0, 1, 200000, 8};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
+  int found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (candidate.text.size != strlen("CategoryABI") ||
+        memcmp(candidate.text.data, "CategoryABI", candidate.text.size) != 0) continue;
+    CHECK(candidate.score == 1600 && candidate.length_utf16 == 3);
+    CHECK(sumire_result_category_count(result, i) == 1);
+    sumire_string category;
+    CHECK(sumire_result_category(result, i, 0, &category) == 0);
+    CHECK(category.size == 7 && memcmp(category.data, "medical", 7) == 0);
+    found = 1;
+  }
+  CHECK(found);
+  sumire_result_destroy(result);
+}
 int main(int argc, char **argv) {
   CHECK(argc == 2);
   test_edit_reuse(argv[1]);
+  test_category_prediction(argv[1]);
   char error[256];
   sumire_engine *engine = NULL;
   sumire_session *session = NULL;

@@ -1242,6 +1242,57 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
   }
+  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
+    // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
+    // category, stable token order on ties, 1500 per additional UTF-16 unit.
+    // Retain references until selection, including for large posting lists.
+    // Android groups predictions by reading/surface/score/POS, separately from
+    // exact candidates: equal surfaces can still represent distinct choices.
+    struct SelectedPrediction {
+      std::u16string reading;
+      uint16_t left, right;
+      size_t candidate;
+    };
+    std::vector<SelectedPrediction> selected;
+    for (size_t index = 1; index < impl->dictionaries.size(); ++index) {
+      const auto &d = *impl->dictionaries[index];
+      struct Prediction { size_t node; uint32_t token; int64_t score; };
+      std::vector<Prediction> best;
+      const bool complete = d.completion(reading, 3, limit,
+          [&](size_t node, uint32_t token, size_t extra) {
+        const int64_t score = int64_t(d.costs[token]) + int64_t(extra) * 1500;
+        const auto at = std::upper_bound(best.begin(), best.end(), score,
+            [](int64_t value, const Prediction &entry) { return value < entry.score; });
+        if (best.size() == 4 && at == best.end()) return;
+        best.insert(at, {node, token, score});
+        if (best.size() > 4) best.pop_back();
+      });
+      result.complete = result.complete && complete;
+      for (const auto &prediction : best) {
+        auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
+        auto completedReading = d.nodeReading(prediction.node);
+        const auto pos = d.pos[prediction.token];
+        const auto left = impl->connection.left[pos], right = impl->connection.right[pos];
+        const auto previous = std::find_if(selected.begin(), selected.end(),
+            [&](const SelectedPrediction &entry) {
+          const auto &candidate = result.candidates[entry.candidate];
+          return entry.reading == completedReading && entry.left == left && entry.right == right &&
+                 candidate.text == text && candidate.score == prediction.score;
+        });
+        size_t position;
+        if (previous == selected.end()) {
+          position = result.candidates.size();
+          selected.push_back({std::move(completedReading), left, right, position});
+          seen.insert(text);
+          result.candidates.push_back({text, prediction.score,
+              {{text, d.name, 0, uint32_t(reading.size())}}});
+        } else position = previous->candidate;
+        auto &candidate = result.candidates[position];
+        if (std::find(candidate.classified_categories.begin(), candidate.classified_categories.end(), d.name) == candidate.classified_categories.end())
+          candidate.classified_categories.push_back(d.name);
+      }
+    }
+  }
   if (bunsetsu_search) {
     for (auto &candidate : result.candidates) {
       auto it = splitPatternIndex.find(candidate.text);

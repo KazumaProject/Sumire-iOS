@@ -47,7 +47,7 @@ void usage() {
                "or Java runtime.\n"
                "--max-states N bounds N-best states (default 200000); "
                "complete=false reports exhaustion.\n"
-               "--predict-japanese appends up to 4 system completions (3..16 UTF-16 input, lookahead 3).\n"
+               "--predict-japanese adds up to 4 system and 4 per enabled category completions (3..16 UTF-16 input, lookahead 3).\n"
                "--bunsetsu enables the pinned Android bunsetsu route and disables Japanese completion; combine with --english-reading to append kana-to-English candidates.\n"
                "--prefix-candidates appends system reading-prefix matches with consumed UTF-16 ranges and word costs.\n"
                "--no-standalone-priority disables the optional standalone.sud table.\n"
