@@ -261,6 +261,7 @@ int main(int argc, char **argv) {
                     << ",\"score\":" << c.score
                     << ",\"raw_text\":" << json(c.raw_text)
                     << ",\"corrected_reading\":" << json(c.corrected_reading)
+                    << ",\"is_reading_prefix\":" << (c.is_reading_prefix ? "true" : "false")
                     << ",\"segments\":[";
           for (size_t j = 0; j < c.segments.size(); ++j) {
             if (j)

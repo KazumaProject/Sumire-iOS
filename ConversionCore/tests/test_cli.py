@@ -438,6 +438,13 @@ class Tests(unittest.TestCase):
         self.assertEqual([c['text'] for c in result],['AI','Whole','A','B'])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[1:]],[2,1,1])
         self.assertEqual([c['score'] for c in result[1:]],[500,100,200])
+        self.assertEqual([c['is_reading_prefix'] for c in result],[False,False,True,True])
+        ordinary=json.loads(self.run_cli('--nbest','1','あい').stdout)['candidates']
+        self.assertTrue(all(not c['is_reading_prefix'] for c in ordinary))
+        overlap=json.loads(self.run_cli('--prefix-candidates','--nbest','100','あい').stdout)['candidates']
+        whole=[c for c in overlap if c['text']=='Whole']
+        self.assertEqual(len(whole),1)
+        self.assertFalse(whole[0]['is_reading_prefix'])
 
     def test_bunsetsu_includes_raw_reading_prefix_and_english_candidates(self):
         dictionary(self.data/'system.sud',[
@@ -458,6 +465,8 @@ class Tests(unittest.TestCase):
                          [('Whole',500),('A',100),('A',150)])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[7:]],
                          [2,1,1])
+        self.assertTrue(all(not c['is_reading_prefix'] for c in result[:7]))
+        self.assertEqual([c['is_reading_prefix'] for c in result[7:]],[False,True,True])
 
     def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
         self.install_auxiliary_dictionary_fixture()

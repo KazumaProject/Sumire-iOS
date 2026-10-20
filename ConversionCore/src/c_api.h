@@ -119,6 +119,12 @@ void sumire_result_destroy(sumire_result *result);
 size_t sumire_result_count(const sumire_result *result);
 int sumire_result_candidate(const sumire_result *result, size_t index,
                             sumire_candidate *out);
+/* Additive ABI v1 origin flags. Reading-prefix denotes reference type 5:
+ * a yomiPartList match consuming strictly less than the complete reading.
+ * Returns 0 on success, -1 for invalid result/index/output. */
+#define SUMIRE_CANDIDATE_READING_PREFIX (1u << 0)
+int sumire_result_candidate_flags(const sumire_result *result, size_t index,
+                                   uint32_t *out);
 /* Optional reading-correction metadata, owned by the result. Non-correction
  * candidates return empty strings. Display/commit only candidate.text; raw
  * payload may contain a TAB delimiter. Returns -1 for invalid arguments. */

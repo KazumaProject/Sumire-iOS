@@ -11,13 +11,18 @@ struct ConversionCandidate {
     let dictionaries: [String]
     let rawText: String?
     let correctedReading: String?
+    let isReadingPrefix: Bool
+    var displayAnnotation: String? {
+        if let correctedReading, !correctedReading.isEmpty { return "[読] " + correctedReading }
+        return isReadingPrefix ? "[部]" : nil
+    }
     /// Owned Swift values projected from this candidate's path only. Ranges are
     /// UTF-16 offsets within the consumed reading (currently a prefix at zero).
     let bunsetsu: [BunsetsuSegment]
 
     init(id: UInt64, text: String, score: Int64, range: NSRange,
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
-         rawText: String? = nil, correctedReading: String? = nil) {
+         rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false) {
         self.id = id
         self.text = text
         self.score = score
@@ -26,6 +31,7 @@ struct ConversionCandidate {
         self.bunsetsu = bunsetsu
         self.rawText = rawText
         self.correctedReading = correctedReading
+        self.isReadingPrefix = isReadingPrefix
     }
 }
 struct ConversionResponse {
@@ -159,6 +165,10 @@ final class ConversionService {
                         throw NativeError("読み訂正情報を取得できません")
                     }
                     let rawText = Self.copy(raw), correctedReading = Self.copy(corrected)
+                    var candidateFlags: UInt32 = 0
+                    guard sumire_result_candidate_flags(result, index, &candidateFlags) == 0 else {
+                        throw NativeError("候補の種類を取得できませんでした")
+                    }
                     let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
                     // Auxiliary and predicted entries can be malformed for this
                     // input range. They must not make the complete conversion fail
@@ -209,7 +219,8 @@ final class ConversionService {
                                                           score: candidate.score, range: range,
                                                           dictionaries: dictionaries, bunsetsu: bunsetsu,
                                                           rawText: rawText.isEmpty ? nil : rawText,
-                                                          correctedReading: correctedReading.isEmpty ? nil : correctedReading))
+                                                          correctedReading: correctedReading.isEmpty ? nil : correctedReading,
+                                                          isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0))
                 }
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })

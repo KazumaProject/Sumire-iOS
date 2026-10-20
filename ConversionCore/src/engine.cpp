@@ -1464,8 +1464,11 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       // surfaces from distinct tokens and overlaps with primary path results.
       // Preserve that candidate count in bunsetsu mode. Keep the existing
       // surface de-duplication behavior for the opt-in non-bunsetsu route.
-      if (bunsetsu_search || seen.insert(text).second)
-        result.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}});
+      if (bunsetsu_search || seen.insert(text).second) {
+        Candidate candidate{text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}};
+        candidate.is_reading_prefix = end < reading.size();
+        result.candidates.push_back(std::move(candidate));
+      }
     }
   }
   // Ordinary getCandidates places symbols after kana and yomiPartList;

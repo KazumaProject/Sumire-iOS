@@ -22,6 +22,8 @@ struct Candidate {
   // display/commit text above never contains this metadata delimiter.
   std::string raw_text{};
   std::string corrected_reading{};
+  // Reference type 5: a yomiPartList match shorter than the input (type 2 otherwise).
+  bool is_reading_prefix = false;
 };
 struct CandidateSplitPattern {
   std::string surface;

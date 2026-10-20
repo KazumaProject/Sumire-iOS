@@ -18,6 +18,10 @@ static void compare_results(sumire_result *actual, sumire_result *fresh) {
   CHECK(actual_metrics.complete == fresh_metrics.complete && actual_metrics.generation == fresh_metrics.generation);
   CHECK(sumire_result_count(actual) == sumire_result_count(fresh));
   for (size_t i = 0; i < sumire_result_count(actual); ++i) {
+    uint32_t actual_flags, fresh_flags;
+    CHECK(sumire_result_candidate_flags(actual,i,&actual_flags) == 0);
+    CHECK(sumire_result_candidate_flags(fresh,i,&fresh_flags) == 0);
+    CHECK(actual_flags == fresh_flags);
     sumire_candidate a, b;
     CHECK(sumire_result_candidate(actual, i, &a) == 0 && sumire_result_candidate(fresh, i, &b) == 0);
     CHECK(a.candidate_id == b.candidate_id && a.score == b.score && same_string(a.text,b.text));
@@ -72,6 +76,38 @@ static void test_edit_reuse(const char *directory) {
   }
   CHECK(hits > 0);
   sumire_session_destroy(reused); sumire_engine_close(engine);
+}
+static void test_candidate_origin_flags(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  sumire_result *result = NULL;
+  CHECK(sumire_engine_open(directory,0,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  sumire_request request = {1,"あい",strlen("あい"),0,1,200000,4};
+  CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+  sumire_session_reset(session);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
+  int found_prefix = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    uint32_t flags = 99;
+    CHECK(sumire_result_candidate_flags(result,i,&flags) == 0);
+    if (!i) CHECK(flags == 0);
+    if (flags == SUMIRE_CANDIDATE_READING_PREFIX) {
+      sumire_candidate candidate;
+      CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+      CHECK(candidate.length_utf16 < 2);
+      found_prefix = 1;
+    }
+    CHECK((flags & ~SUMIRE_CANDIDATE_READING_PREFIX) == 0);
+  }
+  CHECK(found_prefix);
+  uint32_t flags = 99;
+  CHECK(sumire_result_candidate_flags(NULL,0,&flags) == -1 && flags == 99);
+  CHECK(sumire_result_candidate_flags(result,sumire_result_count(result),&flags) == -1 && flags == 99);
+  CHECK(sumire_result_candidate_flags(result,0,NULL) == -1);
+  sumire_result_destroy(result);
 }
 static void test_category_prediction(const char *directory) {
   char error[256];
@@ -161,6 +197,7 @@ static void test_pathless_kana_ranges(const char *directory) {
 int main(int argc, char **argv) {
   CHECK(argc == 2);
   test_edit_reuse(argv[1]);
+  test_candidate_origin_flags(argv[1]);
   test_category_prediction(argv[1]);
   test_pathless_kana_ranges(argv[1]);
   char error[256];

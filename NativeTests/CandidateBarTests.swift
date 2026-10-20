@@ -24,6 +24,70 @@ final class CandidateBarTests: XCTestCase {
         wait(for: [finished], timeout: 10)
     }
 
+    func testAnnotationsPreserveRowsDuplicateSelectionAndClearOnPlainUpdate() {
+        for rows in 1...3 {
+            for expanded in [false, true] {
+                withBar(rows: rows) { bar, list in
+                    if expanded { bar.useExpandedLayout() }
+                    bar.setCandidates([.init(text: "橋", annotation: "[部]"),
+                                       .init(text: "橋", annotation: "[読] はし")])
+                    bar.layoutIfNeeded(); list.layoutIfNeeded()
+                    for index in 0..<2 {
+                        let path = IndexPath(item: index, section: 0)
+                        let cell = list.cellForItem(at: path)
+                        cell?.layoutIfNeeded()
+                        XCTAssertEqual(cell?.accessibilityLabel, "橋")
+                        XCTAssertEqual(cell?.accessibilityValue, index == 0 ? "[部]" : "[読] はし")
+                        XCTAssertEqual(cell?.bounds.height, 44)
+                        let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }
+                            .first { $0.accessibilityIdentifier == "candidate-annotation" }
+                        XCTAssertFalse(label?.isHidden ?? true)
+                        XCTAssertGreaterThan(label?.frame.width ?? 0, 0)
+                    }
+                    var selected: Int?
+                    bar.onSelect = { selected = $0 }
+                    bar.collectionView(list, didSelectItemAt: IndexPath(item: 1, section: 0))
+                    XCTAssertEqual(selected, 1)
+                    bar.candidates = ["橋", "橋"]
+                    bar.layoutIfNeeded(); list.layoutIfNeeded()
+                    XCTAssertNil(list.cellForItem(at: IndexPath(item: 0, section: 0))?.accessibilityValue)
+                }
+            }
+        }
+    }
+
+    func testLongAnnotationTruncatesBeforeCandidateInNarrowBar() {
+        withBar { bar, list in
+            bar.frame.size.width = 120
+            bar.setCandidates([.init(text: "橋", annotation: "[読] " + String(repeating: "はし", count: 40))])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            let path = IndexPath(item: 0, section: 0)
+            let cell = list.cellForItem(at: path)!
+            cell.layoutIfNeeded()
+            let title = cell.contentView.subviews.compactMap { $0 as? UILabel }.first!
+            XCTAssertGreaterThanOrEqual(title.frame.width, HistoricKanaFont.attributed("橋").size().width)
+            XCTAssertGreaterThanOrEqual(title.frame.minX, 0)
+            XCTAssertLessThanOrEqual(title.frame.maxX, cell.contentView.bounds.width)
+            XCTAssertEqual(cell.bounds.height, 44)
+            let identity = ObjectIdentifier(cell)
+            bar.setCandidates([.init(text: "橋", annotation: "[部]")])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            XCTAssertEqual(list.cellForItem(at: path).map(ObjectIdentifier.init), identity)
+            XCTAssertEqual(list.cellForItem(at: path)?.accessibilityValue, "[部]")
+        }
+    }
+
+    func testCorrectionAnnotationDoesNotChangeCommitText() {
+        let candidate = ConversionCandidate(id: 1, text: "雰囲気", score: 0,
+            range: NSRange(location: 0, length: 4), dictionaries: [],
+            rawText: "雰囲気\tふんいき", correctedReading: "ふんいき", isReadingPrefix: true)
+        XCTAssertEqual(candidate.displayAnnotation, "[読] ふんいき")
+        XCTAssertEqual(candidate.text, "雰囲気")
+        XCTAssertEqual(ConversionCandidate(id: 2, text: "橋", score: 0,
+            range: NSRange(location: 0, length: 2), dictionaries: [],
+            isReadingPrefix: true).displayAnnotation, "[部]")
+    }
+
     func testHistoricKanaCandidateUsesBundledFontWithoutChangingSelection() {
         for expanded in [false, true] {
             withBar { bar, list in

@@ -161,12 +161,23 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         clipboard.tintColor = value.foreground
         refreshVisibleCells()
     }
-    var candidates: [String] = [] {
-        didSet {
-            guard candidates != oldValue else { return }
-            updateCandidateSnapshot()
-            updateExpansionButton()
-        }
+    struct Presentation: Equatable {
+        let text: String
+        var annotation: String? = nil
+    }
+    private var presentations: [Presentation] = []
+    private var candidateTexts: [String] = []
+    var candidates: [String] {
+        get { candidateTexts }
+        set { setCandidates(newValue.map { Presentation(text: $0) }) }
+    }
+    func setCandidates(_ values: [Presentation]) {
+        guard values != presentations else { return }
+        presentations = values
+        candidateTexts = values.map(\.text)
+        updateCandidateSnapshot()
+        collection.collectionViewLayout.invalidateLayout()
+        updateExpansionButton()
     }
     private var storedRowCount = 1
     private var displayedHeightLimit: CGFloat?
@@ -219,6 +230,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         self.configure(cell, item: item)
         return cell
     }
+    private var annotations: [Item: String] = [:]
     private var height: NSLayoutConstraint!
     override init(frame: CGRect) {
         let layout = CandidateRowsLayout()
@@ -317,10 +329,13 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func updateCandidateSnapshot() {
         var occurrences: [String: Int] = [:]
-        let items = candidates.map { text -> Item in
-            let occurrence = occurrences[text, default: 0]
-            occurrences[text] = occurrence + 1
-            return Item(text: text, occurrence: occurrence)
+        annotations.removeAll(keepingCapacity: true)
+        let items = presentations.map { presentation -> Item in
+            let occurrence = occurrences[presentation.text, default: 0]
+            occurrences[presentation.text] = occurrence + 1
+            let item = Item(text: presentation.text, occurrence: occurrence)
+            if let annotation = presentation.annotation, !annotation.isEmpty { annotations[item] = annotation }
+            return item
         }
         let offset = collection.contentOffset
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
@@ -358,13 +373,23 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         cell.layer.cornerRadius = 8
         cell.label.attributedText = HistoricKanaFont.attributed(item.text)
         cell.label.textColor = selected ? palette.accentForeground : palette.foreground
+        let annotation = annotations[item]
+        cell.annotation.attributedText = annotation.map { HistoricKanaFont.attributed($0, size: 11) }
+        cell.annotation.textColor = (selected ? palette.accentForeground : palette.foreground).withAlphaComponent(0.8)
+        cell.annotation.isHidden = annotation == nil
+        cell.annotationWidth.isActive = annotation == nil
+        cell.annotationGap.constant = annotation == nil ? 0 : 4
         cell.accessibilityTraits = selected ? [.button, .selected] : .button
         if isUpdating { cell.accessibilityTraits.insert(.notEnabled) }
         cell.accessibilityLabel = item.text
+        cell.accessibilityValue = annotation
     }
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let text = dataSource.itemIdentifier(for: indexPath)?.text ?? ""
-        let width = HistoricKanaFont.attributed(text).size().width
+        let item = dataSource.itemIdentifier(for: indexPath)
+        let text = item?.text ?? ""
+        let detail = item.flatMap { annotations[$0] }
+        let width = HistoricKanaFont.attributed(text).size().width +
+            (detail.map { HistoricKanaFont.attributed($0, size: 11).size().width + 4 } ?? 0)
         return CGSize(width: min(max(44, width + 32), max(44, collection.bounds.width)), height: 44)
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -376,6 +401,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
 
 private final class CandidateCell: UICollectionViewCell {
     let label = UILabel()
+    let annotation = UILabel()
+    var annotationWidth: NSLayoutConstraint!
+    var annotationGap: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -384,12 +412,26 @@ private final class CandidateCell: UICollectionViewCell {
         label.textAlignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.numberOfLines = 1
+        annotation.translatesAutoresizingMaskIntoConstraints = false
+        annotation.font = .systemFont(ofSize: 11)
+        annotation.lineBreakMode = .byTruncatingTail
+        annotation.accessibilityIdentifier = "candidate-annotation"
+        label.setContentCompressionResistancePriority(UILayoutPriority(751), for: .horizontal)
+        annotation.setContentCompressionResistancePriority(UILayoutPriority(749), for: .horizontal)
         contentView.addSubview(label)
+        contentView.addSubview(annotation)
+        annotationWidth = annotation.widthAnchor.constraint(equalToConstant: 0)
+        annotationGap = annotation.leadingAnchor.constraint(equalTo: label.trailingAnchor)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
             label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor)
+            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor),
+            annotationGap,
+            annotation.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            annotation.lastBaselineAnchor.constraint(equalTo: label.lastBaselineAnchor),
+            annotation.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            annotation.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor)
         ])
     }
 

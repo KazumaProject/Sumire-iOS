@@ -12,6 +12,7 @@ void equal(const Result &a, const Result &b) {
     const auto &x = a.candidates[i], &y = b.candidates[i];
     check(x.text == y.text && x.score == y.score && x.bunsetsu_boundaries == y.bunsetsu_boundaries &&
           x.standalone_unigram_matched == y.standalone_unigram_matched &&
+          x.is_reading_prefix == y.is_reading_prefix &&
           x.system_ngram_matched == y.system_ngram_matched && x.classified_categories == y.classified_categories &&
           x.segments.size() == y.segments.size(), "candidate order/surface/score/path changed");
     for (size_t j = 0; j < x.segments.size(); ++j) {
