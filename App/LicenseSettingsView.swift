@@ -14,6 +14,8 @@ struct LicenseSettingsView: View {
             Section("プログラム・画像・アイコン") {
                 notice("Sumire 変換コア・入力コア", url: Bundle.main.url(forResource: "SumireCoreLicense", withExtension: "txt"))
                 notice("アプリのロゴ", url: Bundle.main.url(forResource: "SumireAssetLicense", withExtension: "txt"))
+                notice("Noto Serif Hentaigana — SIL OFL 1.1", url: Bundle.main.url(forResource: "NotoSerifHentaigana-OFL", withExtension: "txt"))
+                notice("変体仮名フォントの出典・SHA-256", url: Bundle.main.url(forResource: "NotoSerifHentaigana-Source", withExtension: "txt"))
                 NavigationLink("スミレ入力スタイルの定義・出典") {
                     ScrollView { Text(ReferenceFlickMaps.provenanceNotice).font(.system(.footnote, design: .monospaced)).textSelection(.enabled).padding() }
                         .navigationTitle("入力スタイルの出典")

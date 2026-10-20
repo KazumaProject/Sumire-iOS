@@ -1,4 +1,5 @@
 import UIKit
+import CoreText
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -355,7 +356,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         let selected = selectedIndex.map { dataSource.indexPath(for: item)?.item == $0 } ?? false
         cell.backgroundColor = selected ? palette.accent : .clear
         cell.layer.cornerRadius = 8
-        cell.label.text = item.text
+        cell.label.attributedText = HistoricKanaFont.attributed(item.text)
         cell.label.textColor = selected ? palette.accentForeground : palette.foreground
         cell.accessibilityTraits = selected ? [.button, .selected] : .button
         if isUpdating { cell.accessibilityTraits.insert(.notEnabled) }
@@ -363,7 +364,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     }
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
         let text = dataSource.itemIdentifier(for: indexPath)?.text ?? ""
-        let width = (text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 18)]).width
+        let width = HistoricKanaFont.attributed(text).size().width
         return CGSize(width: min(max(44, width + 32), max(44, collection.bounds.width)), height: 44)
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -438,5 +439,40 @@ private final class CandidateRowsLayout: UICollectionViewFlowLayout {
     }
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
         scrollDirection == .horizontal ? collectionView?.bounds.size != newBounds.size : super.shouldInvalidateLayout(forBoundsChange: newBounds)
+    }
+}
+
+/// Local fallback for historic kana absent from the system font. Candidate values
+/// remain unchanged; only the glyphs used by the keyboard are selected here.
+enum HistoricKanaFont {
+    static let assetName = "NotoSerifHentaigana-Regular"
+    static let assetSHA256 = "2231394c949fa1cea871d943cf7ff7c0552308fca9067d70b88a533351d6bb5c"
+    private static let registered: Bool = {
+        guard let url = Bundle.main.url(forResource: assetName, withExtension: "ttf") else { return false }
+        return CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }()
+
+    static func fallback(size: CGFloat) -> UIFont? {
+        _ = registered
+        return UIFont(name: assetName, size: size)
+    }
+
+    private static let supportedScalars: CharacterSet? = {
+        guard let font = fallback(size: 18) else { return nil }
+        return CTFontCopyCharacterSet(font as CTFont) as CharacterSet
+    }()
+
+    static func attributed(_ text: String, size: CGFloat = 18) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: size)])
+        guard let font = fallback(size: size), let supported = supportedScalars else { return result }
+        var offset = 0
+        for scalar in text.unicodeScalars {
+            let length = scalar.utf16.count
+            if (0x1B000...0x1B16F).contains(scalar.value), supported.contains(scalar) {
+                result.addAttribute(.font, value: font, range: NSRange(location: offset, length: length))
+            }
+            offset += length
+        }
+        return result
     }
 }
