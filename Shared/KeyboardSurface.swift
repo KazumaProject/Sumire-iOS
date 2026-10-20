@@ -72,6 +72,7 @@ final class KeyboardSurface: UIInputView {
     private var sizedAvailableHeight: CGFloat?
     private var isAppearancePreview = false
     private var resizeOverlay: KeyboardResizeOverlay?
+    private var customTapController: CustomDoubleTapController?
     private var stackLeading: NSLayoutConstraint!
     private var stackTrailing: NSLayoutConstraint!
     var requestedHeight: CGFloat { preferredHeight.constant }
@@ -409,7 +410,7 @@ final class KeyboardSurface: UIInputView {
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()
-        if window == nil { touchRouter.cancelAll() }
+        if window == nil { touchRouter.cancelAll(); customTapController?.cancel() }
     }
     private func touchPolicy(for key: UIButton) -> (exclusive: Bool, blocksFollowing: Bool) {
         let id = key.accessibilityIdentifier ?? ""
@@ -466,6 +467,7 @@ final class KeyboardSurface: UIInputView {
     }
     private func rebuild() {
         touchRouter.cancelAll()
+        customTapController?.deactivate(); customTapController = nil
         touchFeedback = TouchFeedbackSettings.load(defaults: settingsDefaults)
         touchRouter.independentMultiTouch = touchFeedback.independentMultiTouch
         // All arrangements, including early-return grids, share the same router.
@@ -888,6 +890,9 @@ final class KeyboardSurface: UIInputView {
             return
         }
         let targets = CustomLayoutTargets(layouts: customLayouts)
+        let tapController = CustomDoubleTapController()
+        tapController.onAction = { [weak self] action in self?.customAction(action, layout: layout) }
+        customTapController = tapController
         let grid = CustomKeyboardGrid(layout: layout) { [weak self] placement in
             guard let self else { return UIView() }
             let definition = placement.source["key"]
@@ -926,6 +931,7 @@ final class KeyboardSurface: UIInputView {
                 tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
             let normalAction = tapAction
+            let doubleTap = CustomDoubleTapBinding.effective(definition: definition, normalAction: normalAction, targets: targets)
 
             if let error = runtimeError {
                 key.isEnabled = false
@@ -936,7 +942,8 @@ final class KeyboardSurface: UIInputView {
                 key.accessibilityHint = "このカスタム入力方式の定義がありません"
             }
 
-            let actions = runtime.map { Self.customActions(in: $0, targets: targets) } ?? []
+            let actions = (runtime.map { Self.customActions(in: $0, targets: targets) } ?? []) +
+                [normalAction] + (doubleTap.map { [$0.action] } ?? [])
             let needsExclusiveTouch = actions.contains { action in
                 switch action {
                 case .switchLayout, .command(.changeMode), .command(.nextKeyboard), .command(.moveCustomKeyboardTab): return true
@@ -944,13 +951,19 @@ final class KeyboardSurface: UIInputView {
                 }
             }
             if let repeating = key as? RepeatingKey {
+                repeating.exclusiveTouchAction = needsExclusiveTouch
+                repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(normalAction)
                 switch normalAction {
                 case .switchLayout, .command(.changeMode), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
                 default: break
                 }
-                repeating.addAction(UIAction { [weak self] _ in self?.customAction(normalAction, layout: layout) }, for: .touchUpInside)
+                repeating.onCommittedPress = { isTap in
+                    if isTap {
+                        tapController.committedTap(keyIdentity: placement.id, action: normalAction, binding: doubleTap)
+                    } else { tapController.committedGesture(normalAction) }
+                }
             } else if let flick = key as? MultiStageFlickKey, let runtime {
                 flick.definition = runtime.gesture
                 flick.styleSettings = FlickStyleSettings.load(defaults: settingsDefaults)
@@ -961,7 +974,10 @@ final class KeyboardSurface: UIInputView {
                 flick.onCommit = { [weak self] event in
                     guard let self else { return }
                     guard let action = Self.customAction(for: event, runtime: runtime, targets: targets) else { return }
-                    self.customAction(action, layout: layout)
+                    if event.isPureTap {
+                        let binding = CustomDoubleTapBinding.effective(definition: definition, normalAction: action, targets: targets)
+                        tapController.committedTap(keyIdentity: placement.id, action: action, binding: binding)
+                    } else { tapController.committedGesture(action) }
                 }
             } else if let flick = key as? MultiStageFlickKey {
                 flick.isEnabled = false
@@ -1471,6 +1487,7 @@ final class KeyboardSurface: UIInputView {
         keyRows.append(row)
     }
     func invalidateComposition() {
+        customTapController?.cancel()
         closeSymbolKeyboard()
         katakanaCycle.reset()
         closeExpandedCandidates()
@@ -1759,6 +1776,7 @@ final class KeyboardSurface: UIInputView {
         selectKeyboard(next.mode, customID: next.customID)
     }
     private func pressed(_ value: String) {
+        customTapController?.interrupt()
         beforeInput?()
         katakanaCycle.reset()
         tapCycle.reset()

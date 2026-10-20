@@ -14,6 +14,8 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         didSet { hold.minimumPressDuration = Double(min(2000, max(100, longPressMilliseconds))) / 1000 }
     }
     var repeatEnabled: Bool?
+    /// Custom layouts resolve only actual taps as double-tap candidates.
+    var onCommittedPress: ((_ isTap: Bool) -> Void)?
     private var activeTouch: UITouch?
     private var emission = KeyPressEmission()
     private var inside = true
@@ -34,7 +36,11 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         guard let touch = activeTouch, touches.contains(touch) else { return }
         let shouldEmit = emission.finish(inside: bounds.contains(touch.location(in: self)))
         clearInput()
-        if shouldEmit { super.touchesEnded([touch], with: event) }
+        if shouldEmit, let onCommittedPress {
+            super.touchesCancelled([touch], with: event)
+            onCommittedPress(true)
+        }
+        else if shouldEmit { super.touchesEnded([touch], with: event) }
         else { super.touchesCancelled([touch], with: event) }
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) {
@@ -51,7 +57,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         guard activeTouch != nil else { return }
         let emit = emission.finish(inside: inside && isEnabled)
         cancelActiveInput()
-        if emit { sendActions(for: .touchUpInside) }
+        if emit { emitPress(isTap: true) }
     }
     func cancelActiveInput() {
         let touch = activeTouch
@@ -93,7 +99,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         case .began:
             guard activeTouch != nil else { return }
             emission.markEmitted()
-            sendActions(for: .touchUpInside)
+            emitPress(isTap: false)
             guard window != nil, activeTouch != nil else { return }
             repeatTimer = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in
                 guard let self else { return }
@@ -101,7 +107,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
                       self.bounds.contains(self.hold.location(in: self)) else {
                     self.stopRepeating(); return
                 }
-                self.sendActions(for: .touchUpInside)
+                self.emitPress(isTap: false)
             }
             RunLoop.main.add(repeatTimer!, forMode: .common)
         case .changed:
@@ -112,6 +118,15 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
     private func stopRepeating() {
         repeatTimer?.invalidate()
         repeatTimer = nil
+    }
+    private func emitPress(isTap: Bool) {
+        if let onCommittedPress { onCommittedPress(isTap) }
+        else { sendActions(for: .touchUpInside) }
+    }
+    override func accessibilityActivate() -> Bool {
+        guard isEnabled else { return false }
+        if let onCommittedPress { onCommittedPress(true); return true }
+        return super.accessibilityActivate()
     }
     override func didMoveToWindow() {
         super.didMoveToWindow()

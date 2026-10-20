@@ -46,6 +46,17 @@ public struct CustomLayoutEditor {
         keys[index] = setting(keys[index], ["key": setting(definition, ["keyType": .string(type)])])
         source = setting(source, ["keysWithFlicks": .array(keys)])
     }
+    public mutating func setDoubleTap(id: String, enabled: Bool, action: String) throws {
+        guard !enabled || !action.isEmpty else { throw PersonalDataError("ダブルタップの操作を指定してください") }
+        var keys = source["keysWithFlicks"]?.array ?? []
+        guard let index = keys.firstIndex(where: { $0["key"]?["keyIdentifier"]?.string == id }),
+              let definition = keys[index]["key"] else { throw PersonalDataError("編集対象のキーがありません") }
+        let promote = definition["action"]?.string == "ShiftKeyPressed" && action == "CapLockKey"
+        keys[index] = setting(keys[index], ["key": setting(definition, [
+            "doubleTapEnabled": .bool(enabled), "doubleTapAction": .string(action),
+            "doubleTapPolicy": .string(promote ? "PROMOTE" : "EXCLUSIVE")])])
+        source = setting(source, ["keysWithFlicks": .array(keys)])
+    }
     public mutating func setStandardFlick(id: String, values: [String]) throws {
         guard values.count == 5 else { throw PersonalDataError("標準フリックには5方向の文字を指定してください") }
         var keys = source["keysWithFlicks"]?.array ?? []
