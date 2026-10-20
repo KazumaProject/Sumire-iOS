@@ -84,8 +84,8 @@ struct CustomLayoutEditorView: View {
                     }
                     try next.setDoubleTap(id: draft.id, enabled: draft.doubleTapEnabled, action: draft.doubleTapAction)
                 }
-                if draft.type == "STANDARD_FLICK", draft.flickValues != draft.originalFlickValues || draft.type != draft.originalType {
-                    try next.setStandardFlick(id: draft.id, values: draft.flickValues)
+                if !draft.gestures.changes.isEmpty || draft.type != draft.originalType && draft.type != "NORMAL" {
+                    try next.setGestureMappings(id: draft.id, fields: draft.gestures.changes)
                 }
                 _ = try next.validated()
                 editor = next
@@ -101,9 +101,7 @@ private struct KeyDraft: Identifiable {
     var label = "あ", action = "Text:あ", special = false
     var row = 0, column = 0, height = 2, width = 2
     var type = "NORMAL", originalType = "NORMAL"
-    var flickValues = ["あ", "", "", "", ""]
-    var originalFlickValues = ["あ", "", "", "", ""]
-    var flickError: String?
+    var gestures = CustomGestureDraft()
     var doubleTapEnabled = false, originalDoubleTapEnabled = false
     var doubleTapAction = "Text:", originalDoubleTapAction = "Text:"
     var existing = false
@@ -119,10 +117,7 @@ private struct KeyDraft: Identifiable {
         originalDoubleTapEnabled = doubleTapEnabled; originalDoubleTapAction = doubleTapAction
         row = key.row; column = key.column; height = key.height; width = key.width; existing = true
         type = key.source["key"]?["keyType"]?.string ?? "NORMAL"; originalType = type
-        if type == "STANDARD_FLICK" {
-            do { flickValues = try CustomStandardFlick(placement: key).values; originalFlickValues = flickValues }
-            catch { flickError = error.localizedDescription }
-        }
+        gestures = CustomGestureDraft(source: key.source)
     }
 }
 private struct CustomKeyEditor: View {
@@ -139,19 +134,17 @@ private struct CustomKeyEditor: View {
                 if let error { Text(error).foregroundStyle(.red) }
                 TextField("表示文字", text: $draft.label)
                 Picker("入力方式", selection: $draft.type) {
-                    Text("通常キー").tag("NORMAL")
-                    Text("標準フリック").tag("STANDARD_FLICK")
-                    if !["NORMAL", "STANDARD_FLICK"].contains(draft.type) {
+                    ForEach(CustomGestureDraft.types, id: \.0) { value, title in Text(title).tag(value) }
+                    if !CustomGestureDraft.types.contains(where: { $0.0 == draft.type }) {
                         Text("取り込み済みの方式を保持").tag(draft.type)
                     }
                 }.accessibilityIdentifier("customKeyInputType")
-                if draft.type == "STANDARD_FLICK" {
-                    if let error = draft.flickError { Text(error).foregroundStyle(.red) }
-                    ForEach(0..<5, id: \.self) { index in
-                        TextField(["タップの文字", "左の文字", "上の文字", "右の文字", "下の文字"][index], text: $draft.flickValues[index])
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    }
-                    Text("空欄の方向は入力しません。").font(.caption).foregroundStyle(.secondary)
+                    .onChange(of: draft.type) { _, value in draft.gestures.prepare(type: value, label: draft.label) }
+                if !CustomGestureDraft.fields(for: draft.type).isEmpty {
+                    NavigationLink {
+                        CustomGestureEditorView(draft: $draft.gestures, type: draft.type, label: draft.label, layouts: allLayouts)
+                    } label: { Label("フリックの割り当て", systemImage: "hand.draw") }
+                        .accessibilityIdentifier("customGestureEditor")
                 } else {
                 Picker("操作", selection: Binding(get: {
                     draft.action.hasPrefix("Text:") ? "Text" : draft.action.hasPrefix("MoveToCustomKeyboard:") ? "SwitchLayout" : draft.action

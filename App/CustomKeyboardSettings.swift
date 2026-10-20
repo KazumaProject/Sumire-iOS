@@ -46,7 +46,7 @@ struct CustomKeyboardSettings: View {
                     }.disabled(!loaded)
                     Button("配列JSONファイルを取り込む") { importing = true }.disabled(!loaded)
                     Button("配列JSONを入力") { json = ""; editingJSON = true }.disabled(!loaded)
-                    Text("通常キー、標準フリックの文字入力、配列切替を利用できます。プレビューでキー配置を編集できます。その他のフリック・追加ジェスチャーは移植中です。")
+                    Text("プレビューからキー配置を編集できます。標準・二段フリック、方向別の長押し、ドーナツ入力の文字や操作も設定できます。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("選択する配列") {
