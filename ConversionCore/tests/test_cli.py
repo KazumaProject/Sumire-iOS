@@ -340,6 +340,17 @@ class Tests(unittest.TestCase):
         limited=json.loads(self.run_cli(*args,'--max-states','1','あいう').stdout)
         self.assertFalse(limited['complete'])
 
+    def test_classified_prediction_keeps_all_thirty_enabled_categories(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Primary', 1, 100)])
+        for category in b.CATEGORIES:
+            dictionary(self.data/(category+'.sud'), [('あいうえ', category, 1, 100)])
+        result=json.loads(self.run_cli('--categories','all','--nbest','1','--predict-japanese','あいう').stdout)
+        labels={label for candidate in result['candidates'] for label in candidate['categories']}
+        self.assertEqual(labels,set(b.CATEGORIES))
+        self.assertTrue(all(any(c['text']==name and c['categories']==[name] for c in result['candidates'])
+                            for name in b.CATEGORIES))
+        self.assertTrue(result['complete'])
+
     def test_classified_prediction_preserves_distinct_readings_scores_and_primary(self):
         dictionary(self.data/'system.sud', [('あいう', 'Shared', 1, 100)])
         dictionary(self.data/'medical.sud', [('あいうえ', 'Shared', 1, 100),
