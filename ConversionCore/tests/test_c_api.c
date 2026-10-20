@@ -209,10 +209,13 @@ static void test_auxiliary_completion_ranges(const char *directory) {
     sumire_request request = {r+1,readings[r],strlen(readings[r]),0,20,200000,12};
     CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
     unsigned found = 0;
+    size_t symbol_index = (size_t)-1, kana_index = (size_t)-1;
     uint64_t commit_id = 0;
     for (size_t i = 0; i < sumire_result_count(result); ++i) {
       sumire_candidate candidate;
       CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+      if (candidate.segment_count == 0 && candidate.text.size == strlen(readings[r]) &&
+          memcmp(candidate.text.data,readings[r],candidate.text.size) == 0) kana_index = i;
       for (size_t k = 0; k < 3; ++k) {
         if (candidate.text.size != strlen(texts[k]) || memcmp(candidate.text.data,texts[k],candidate.text.size) != 0) continue;
         CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == 3);
@@ -224,11 +227,13 @@ static void test_auxiliary_completion_ranges(const char *directory) {
         uint32_t flags = 99;
         CHECK(sumire_result_candidate_flags(result,i,&flags) == 0 && flags == 0);
         CHECK(sumire_result_bunsetsu_count(result,i) == 0);
+        if (k == 2) symbol_index = i;
         found |= 1u << k;
         commit_id = candidate.candidate_id;
       }
     }
     CHECK(found == 7);
+    CHECK(symbol_index != (size_t)-1 && kana_index != (size_t)-1 && symbol_index < kana_index);
     CHECK(sumire_session_commit(session,r+1,commit_id,error,sizeof error) == 0);
     sumire_result_destroy(result);
   }
