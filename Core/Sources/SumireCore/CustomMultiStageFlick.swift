@@ -197,6 +197,8 @@ public enum CustomMultiStageFlick {
             case .switchKana: return "かな"
             case .switchEnglish: return "ABC"
             case .switchNumber: return "123"
+            case .switchDirect: return "直接入力"
+            case .switchRomaji: return "ローマ字"
             case .nextKeyboard: return "🌐"
             case .modifier: return "゛"
             case .changeMode: return "モード"
