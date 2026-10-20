@@ -1,0 +1,8 @@
+Noto Serif Hentaigana Regular, version 1.000 (unmodified)
+Copyright 2023 The Noto Project Authors
+License: SIL Open Font License 1.1; see NotoSerifHentaigana-OFL.txt.
+Release: https://github.com/notofonts/hentaigana/releases/tag/NotoSerifHentaigana-v1.000
+Archive: https://github.com/notofonts/hentaigana/releases/download/NotoSerifHentaigana-v1.000/NotoSerifHentaigana-v1.000.zip
+Archive member: NotoSerifHentaigana/unhinted/ttf/NotoSerifHentaigana-Regular.ttf
+SHA-256: 2231394c949fa1cea871d943cf7ff7c0552308fca9067d70b88a533351d6bb5c
+Bundled for offline candidate rendering. The committed Unicode text is unchanged.

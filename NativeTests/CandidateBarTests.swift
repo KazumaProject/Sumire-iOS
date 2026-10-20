@@ -24,6 +24,31 @@ final class CandidateBarTests: XCTestCase {
         wait(for: [finished], timeout: 10)
     }
 
+    func testHistoricKanaCandidateUsesBundledFontWithoutChangingSelection() {
+        for expanded in [false, true] {
+            withBar { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                let text = "👩‍💻か\u{3099}\u{1B005}\u{1B116}を"
+                bar.candidates = [text]
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                let path = IndexPath(item: 0, section: 0)
+                let cell = list.cellForItem(at: path)
+                let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }.first
+                XCTAssertEqual(label?.attributedText?.string, text)
+                XCTAssertEqual(cell?.accessibilityLabel, text)
+                let range = (text as NSString).range(of: "\u{1B005}")
+                let font = label?.attributedText?.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont
+                XCTAssertEqual(font?.fontName, HistoricKanaFont.assetName)
+                var selected: String?
+                bar.onSelect = { selected = bar.candidates[$0] }
+                bar.collectionView(list, didSelectItemAt: path)
+                XCTAssertEqual(selected, text)
+                let size = bar.collectionView(list, layout: list.collectionViewLayout, sizeForItemAt: path)
+                XCTAssertEqual(size.width, min(max(44, HistoricKanaFont.attributed(text).size().width + 32), max(44, list.bounds.width)))
+            }
+        }
+    }
+
     func testThreeRowsPackVariableWidthsWithoutBlankColumns() {
         withBar(rows: 3) { bar, list in
             bar.candidates = ["か", "株式会社", "かな", "神奈川県横浜市", "家", "加", "蚊", "科学", "カメラ", "漢字", "課", "仮名"]
