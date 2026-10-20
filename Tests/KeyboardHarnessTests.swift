@@ -273,9 +273,14 @@ final class KeyboardHarnessTests: XCTestCase {
         nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (nameField.value as? String ?? "").count) + name)
         app.buttons["キーを追加"].tap()
         app.buttons["customKeyInputType"].tap(); app.buttons["標準フリック"].tap()
-        for (label, value) in [("左の文字", "い"), ("上の文字", "う"), ("右の文字", "え"), ("下の文字", "お")] {
-            let field = app.textFields[label]; field.tap(); field.typeText(value)
+        app.buttons["customGestureEditor"].tap()
+        for (direction, value) in [("左", "い"), ("上", "う"), ("右", "え"), ("下", "お")] {
+            addGestureRow("flicks", in: app)
+            chooseGestureDirection("flickDirection", title: direction, in: app)
+            setGestureOutput(value, in: app)
+            finishGestureRow(in: app)
         }
+        app.navigationBars["フリックの割り当て"].buttons.element(boundBy: 0).tap()
         app.buttons["適用"].tap(); app.buttons["保存"].tap(); app.buttons["完了"].tap()
         app.terminate(); launchInputPreview(app)
         let input = app.textViews["入力テスト"]; input.tap(); selectKeyboard(name, in: app)
@@ -288,6 +293,120 @@ final class KeyboardHarnessTests: XCTestCase {
         XCTAssertEqual(input.value as? String, "あいうえお")
         selectKeyboard("50音", in: app); settingsButton("Custom Keyboard", in: app).tap()
         app.buttons[name].firstMatch.tap(); app.buttons["この配列を削除"].tap(); app.buttons["削除する"].tap()
+    }
+
+    private func addGestureRow(_ field: String, in app: XCUIApplication) {
+        let add = app.buttons["customGestureAdd-" + field]
+        if !add.isHittable { app.swipeUp() }
+        XCTAssertTrue(add.waitForExistence(timeout: 3))
+        add.tap()
+        let rows = app.buttons.matching(identifier: "customGestureRow-" + field)
+        let row = rows.element(boundBy: rows.count - 1)
+        if !row.isHittable { app.swipeUp() }
+        row.tap()
+        XCTAssertTrue(app.navigationBars["割り当てを編集"].waitForExistence(timeout: 3))
+    }
+    private func chooseGestureDirection(_ field: String, title: String, in app: XCUIApplication) {
+        app.buttons["customGestureDirection-" + field].tap()
+        app.buttons[title].tap()
+    }
+    private func setGestureOutput(_ text: String, in app: XCUIApplication) {
+        let output = app.textFields["customGestureOutput"]
+        XCTAssertTrue(output.waitForExistence(timeout: 3))
+        output.tap()
+        output.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (output.value as? String ?? "").count) + text)
+    }
+    private func finishGestureRow(in app: XCUIApplication) {
+        app.navigationBars["割り当てを編集"].buttons.element(boundBy: 0).tap()
+    }
+    private func beginVisualGestureLayout(_ type: String, in app: XCUIApplication) -> String {
+        app.launchArguments = ["-liveConversion", "NO"]
+        launchInputPreview(app)
+        let name = "GestureEditor-" + UUID().uuidString.prefix(8)
+        settingsButton("Custom Keyboard", in: app).tap()
+        app.buttons["新しい配列を作成"].tap()
+        let nameField = app.textFields["配列名"]
+        nameField.tap()
+        nameField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (nameField.value as? String ?? "").count) + name)
+        app.buttons["キーを追加"].tap()
+        app.buttons["customKeyInputType"].tap()
+        app.buttons[type].tap()
+        app.buttons["customGestureEditor"].tap()
+        return name
+    }
+    private func saveVisualGestureLayoutAndRelaunch(_ name: String, in app: XCUIApplication) -> XCUIElement {
+        app.navigationBars["フリックの割り当て"].buttons.element(boundBy: 0).tap()
+        app.buttons["適用"].tap()
+        app.buttons["保存"].tap()
+        app.buttons["完了"].tap()
+        app.terminate()
+        launchInputPreview(app)
+        app.textViews["入力テスト"].tap()
+        selectKeyboard(name, in: app)
+        let key = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@ AND label == %@", "custom-", "あ")).firstMatch
+        XCTAssertTrue(key.waitForExistence(timeout: 3))
+        return key
+    }
+    private func removeVisualGestureLayout(_ name: String, in app: XCUIApplication) {
+        selectKeyboard("50音", in: app)
+        settingsButton("Custom Keyboard", in: app).tap()
+        app.buttons[name].firstMatch.tap()
+        app.buttons["この配列を削除"].tap()
+        app.buttons["削除する"].tap()
+        app.buttons["完了"].tap()
+    }
+    func testCreateTwoStepFlickInVisualEditorAndTypeAfterRelaunch() {
+        let app = XCUIApplication()
+        let name = beginVisualGestureLayout("二段フリック", in: app)
+        for (second, output) in [("タップ", "初"), ("上", "二")] {
+            addGestureRow("twoStepFlicks", in: app)
+            chooseGestureDirection("firstDirection", title: "上", in: app)
+            chooseGestureDirection("secondDirection", title: second, in: app)
+            setGestureOutput(output, in: app)
+            finishGestureRow(in: app)
+        }
+        let key = saveVisualGestureLayoutAndRelaunch(name, in: app)
+        key.tap()
+        let start = key.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(.init(dx: 0, dy: -70)))
+        XCTAssertEqual(app.textViews["入力テスト"].value as? String, "あ二")
+        removeVisualGestureLayout(name, in: app)
+    }
+    func testCreateDirectionalLongPressInVisualEditorAndTypeAfterRelaunch() {
+        let app = XCUIApplication()
+        let name = beginVisualGestureLayout("方向別の長押し", in: app)
+        addGestureRow("twoStepLongPressFlicks", in: app)
+        setGestureOutput("長", in: app)
+        finishGestureRow(in: app)
+        let key = saveVisualGestureLayoutAndRelaunch(name, in: app)
+        key.tap()
+        key.press(forDuration: 0.7)
+        XCTAssertEqual(app.textViews["入力テスト"].value as? String, "あ長")
+        removeVisualGestureLayout(name, in: app)
+    }
+    func testCreateCircularFlickMapsInVisualEditorAndSwitchDuringGestureAfterRelaunch() {
+        let app = XCUIApplication()
+        let name = beginVisualGestureLayout("ドーナツ入力", in: app)
+        addGestureRow("circularFlicks", in: app)
+        chooseGestureDirection("circularDirection", title: "位置 1", in: app)
+        app.buttons["customGestureAction"].tap()
+        app.buttons["次のドーナツ配列"].tap()
+        finishGestureRow(in: app)
+        app.buttons["配列の順序・追加・削除"].tap()
+        app.buttons["配列を追加"].tap()
+        app.navigationBars["ドーナツ配列"].buttons.element(boundBy: 0).tap()
+        addGestureRow("circularFlicks", in: app)
+        app.steppers["customGestureState"].buttons.element(boundBy: 1).tap()
+        chooseGestureDirection("circularDirection", title: "位置 1", in: app)
+        setGestureOutput("二", in: app)
+        finishGestureRow(in: app)
+        let key = saveVisualGestureLayoutAndRelaunch(name, in: app)
+        key.tap()
+        let start = key.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(.init(dx: 0, dy: -70)))
+        key.tap()
+        XCTAssertEqual(app.textViews["入力テスト"].value as? String, "あ二あ")
+        removeVisualGestureLayout(name, in: app)
     }
 
     func testCreateCustomLayoutVisuallyAndPersistAfterRelaunch() {
