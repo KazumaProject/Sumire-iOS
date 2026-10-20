@@ -14,6 +14,19 @@ final class CustomKeyActionTests: XCTestCase {
         if case .unsupported(let raw, _) = CustomKeyAction.tap("VoiceInput", targets: targets) { XCTAssertEqual(raw, "VoiceInput") }
         else { XCTFail("Unsupported action must not silently change behavior") }
     }
+    func testImportedEditingCommandsResolveForTapAndFlick() throws {
+        let targets = CustomLayoutTargets(layouts: [])
+        let cases: [(String, String, CustomKeyAction.Command)] = [
+            ("MoveCursorRight", "MOVE_CURSOR_RIGHT", .cursorRight),
+            ("DeleteUntilSymbol", "DELETE_UNTIL_SYMBOL", .deleteUntilBoundary),
+            ("ShowEmojiKeyboard", "SHOW_EMOJI_KEYBOARD", .openSymbols)]
+        for (raw, alias, command) in cases {
+            XCTAssertEqual(CustomKeyAction.tap(raw, targets: targets), .command(command))
+            XCTAssertEqual(CustomKeyAction.flick(type: raw, value: nil, targets: targets), .command(command))
+            XCTAssertEqual(CustomKeyAction.flick(type: alias, value: nil, targets: targets), .command(command))
+        }
+    }
+
     func testLegacyLayoutReferencesAndReviewPreserveUnresolvedActions() throws {
         let json = #"[{"layout":{"layoutId":11,"stableId":"a","name":"A","rowCount":1,"columnCount":1},"keysWithFlicks":[{"key":{"keyIdentifier":"key","action":"MoveToCustomKeyboard:12","doubleTapAction":"VoiceInput","isSpecialKey":true},"flicks":[{"actionType":"MoveToCustomKeyboard","actionValue":"missing"}]}]},{"layout":{"layoutId":12,"stableId":"b","name":"B","rowCount":1,"columnCount":1},"keysWithFlicks":[]}]"#
         let preview = try CustomLayoutImportPreview.parse(Data(json.utf8))

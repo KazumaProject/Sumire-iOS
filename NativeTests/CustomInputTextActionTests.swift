@@ -15,6 +15,7 @@ final class CustomInputTextActionTests: XCTestCase {
         let surface = Sumire.KeyboardSurface()
         var reading = ""
         var inserted = ""
+        var selection = NSRange(location: 0, length: 0)
         init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
@@ -32,7 +33,7 @@ final class CustomInputTextActionTests: XCTestCase {
             defaults.set(id, forKey: "keyboard.lastUsed")
             surface.settingsDefaults = defaults
             surface.updateMarkedText = { [weak self] in self?.reading = $0 }
-            surface.updateMarkedSelection = { [weak self] text, _ in self?.reading = text }
+            surface.updateMarkedSelection = { [weak self] text, selection in self?.reading = text; self?.selection = selection }
             surface.insert = { [weak self] in self?.inserted += $0 }
             surface.commitMarkedText = { [weak self] text in
                 self?.inserted += text
@@ -57,6 +58,73 @@ final class CustomInputTextActionTests: XCTestCase {
         private func descendants(_ view: UIView) -> [UIView] {
             view.subviews.flatMap { [$0] + descendants($0) }
         }
+    }
+
+    func testCursorCommandsPreserveMarkedReadingAndDelegateOutsideComposition() throws {
+        let fixture = try Fixture(actions: [("word", "Text:あ👩‍💻い"),
+            ("left", "MoveCursorLeft"), ("right", "MoveCursorRight")])
+        var left = 0, right = 0
+        fixture.surface.moveCursorLeft = { left += 1 }
+        fixture.surface.moveCursorRight = { right += 1 }
+        try fixture.tap("right")
+        XCTAssertEqual(right, 1)
+        try fixture.tap("word")
+        try fixture.tap("left")
+        XCTAssertEqual(fixture.reading, "あ👩‍💻い")
+        XCTAssertEqual(fixture.selection.location, "あ👩‍💻".utf16.count)
+        try fixture.tap("right")
+        XCTAssertEqual(fixture.selection.location, fixture.reading.utf16.count)
+        XCTAssertEqual(left, 0)
+        XCTAssertEqual(right, 1)
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testDeleteUntilSymbolClearsCompositionBeforeDelegatingToEditor() throws {
+        let fixture = try Fixture(actions: [("word", "Text:にほんご"), ("delete", "DeleteUntilSymbol")])
+        var calls = 0
+        fixture.surface.deleteUntilBoundary = { calls += 1 }
+        try fixture.tap("word")
+        try fixture.tap("delete")
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertEqual(calls, 0)
+        try fixture.tap("delete")
+        XCTAssertEqual(calls, 1)
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testExplicitSymbolCommandOpensPanel() throws {
+        let fixture = try Fixture(actions: [("symbols", "ShowEmojiKeyboard")])
+        try fixture.tap("symbols")
+        XCTAssertTrue(fixture.contains("symbol-keyboard"))
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testCustomSpaceAndEnterCommandsFollowCompositionState() throws {
+        for command in ["Convert", "ForceHalfWidthSpace", "ForceFullWidthSpace"] {
+            let empty = try Fixture(actions: [("command", command)])
+            try empty.tap("command")
+            XCTAssertEqual(empty.inserted, command == "ForceFullWidthSpace" ? "　" : " ")
+            let composing = try Fixture(actions: [("word", "Text:あ"), ("command", command)])
+            try composing.tap("word"); try composing.tap("command")
+            XCTAssertEqual(composing.inserted, "", command)
+            XCTAssertFalse(composing.reading.isEmpty, command)
+        }
+        for command in ["Confirm", "ForceNewLine"] {
+            let fixture = try Fixture(actions: [("word", "Text:あ"), ("command", command)])
+            try fixture.tap("word"); try fixture.tap("command")
+            XCTAssertEqual(fixture.inserted, "あ", command)
+            XCTAssertEqual(fixture.reading, "", command)
+            try fixture.tap("command")
+            XCTAssertEqual(fixture.inserted, "あ\n", command)
+        }
+    }
+
+    func testDirectModeUsesLiteralHalfWidthSpaceBeforeWidthPreference() throws {
+        let fixture = try Fixture(actions: [("word", "Text:abc"),
+            ("space", "ForceFullWidthSpace")], direct: true)
+        try fixture.tap("word"); try fixture.tap("space")
+        XCTAssertEqual(fixture.inserted, "abc ")
+        XCTAssertEqual(fixture.reading, "")
     }
 
     func testKanaMarkersModifyPriorKanaWithoutInsertingTheirNames() throws {
