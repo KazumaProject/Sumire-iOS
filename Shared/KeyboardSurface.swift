@@ -1281,6 +1281,7 @@ final class KeyboardSurface: UIInputView {
             case .switchRomaji: toggleCustomInputMode(layout: layout, direct: false)
             case .moveCustomKeyboardTab:
                 guard !customLayouts.isEmpty else { status.text = "切り替え先のカスタム配列がありません"; return }
+                customShift = .off
                 let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
                 activeCustomID = customLayouts[(currentIndex + 1) % customLayouts.count].id
                 if let id = activeCustomID { customModeOverrides.removeValue(forKey: id) }
