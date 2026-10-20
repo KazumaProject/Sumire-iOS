@@ -114,7 +114,7 @@ final class CandidateBarTests: XCTestCase {
         XCTAssertEqual(merged[0].score, 90)
         XCTAssertEqual(merged[0].range, first.range)
         XCTAssertEqual(merged[0].displayAnnotation, "[部] [人名・用語]")
-        XCTAssertEqual(merged[0].dictionaries, ["system"])
+        XCTAssertEqual(merged[0].dictionaries, ["system", "category"])
         XCTAssertEqual(merged[0].presentationKind, .none)
     }
 

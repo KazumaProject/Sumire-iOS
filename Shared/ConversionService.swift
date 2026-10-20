@@ -74,9 +74,15 @@ struct ConversionCandidate {
             for name in candidate.classifiedCategories where !categories.contains(name) {
                 categories.append(name)
             }
-            guard categories != first.classifiedCategories else { continue }
+            // Preserve legacy provenance-label aggregation independently from
+            // Android's classified badge set. These are not path segments.
+            var dictionaries = first.dictionaries
+            for name in candidate.dictionaries where !dictionaries.contains(name) {
+                dictionaries.append(name)
+            }
+            guard categories != first.classifiedCategories || dictionaries != first.dictionaries else { continue }
             merged[index] = ConversionCandidate(id: first.id, text: first.text,
-                score: first.score, range: first.range, dictionaries: first.dictionaries,
+                score: first.score, range: first.range, dictionaries: dictionaries,
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 presentationKind: first.presentationKind, classifiedCategories: categories)
