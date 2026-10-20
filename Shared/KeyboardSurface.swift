@@ -1590,7 +1590,7 @@ final class KeyboardSurface: UIInputView {
         list.clipboardAccessAllowed = false
         list.useExpandedLayout()
         list.applyPalette(palette)
-        list.candidates = converted.map(\.text)
+        list.setCandidates(converted.map { CandidateBar.Presentation(text: $0.text, annotation: $0.displayAnnotation) })
         list.selectedIndex = selectedCandidate
         list.onSelect = { [weak self] index in
             self?.closeExpandedCandidates()
@@ -1711,7 +1711,7 @@ final class KeyboardSurface: UIInputView {
                 guard result.generation == generation else { return }
                 self.converted = result.candidates
                 self.resultGeneration = generation
-                self.candidateBar.candidates = result.candidates.map(\.text)
+                self.candidateBar.setCandidates(result.candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.displayAnnotation) })
                 self.candidateBar.isUpdating = false
                 if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
