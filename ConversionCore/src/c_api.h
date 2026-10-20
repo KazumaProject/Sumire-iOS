@@ -27,8 +27,9 @@ typedef struct {
   uint32_t edit_start_utf16;
   uint32_t candidate_count; /* N-best limit, not total result limit: exact category matches, Japanese predictions and auxiliaries may add results. */
   uint32_t max_states;
-  /* Bit 3 enables Japanese system completion: defaults 3..16 input units,
-   * lookahead 3, up to 4 additional candidates. Consumes the typed input only. */
+  /* Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
+   * lookahead 3, up to 4 system and 4 per enabled category candidates.
+   * Consumes the typed input only. */
   uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
 } sumire_request;
 typedef struct {

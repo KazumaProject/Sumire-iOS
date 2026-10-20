@@ -628,6 +628,7 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
+        dictionary(self.data/'medical.sud',[('あい','Medical',1,-20), ('かきくけ','CategoryABI',1,100)])
         standalone(self.data/'standalone.sud',['しろ'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
