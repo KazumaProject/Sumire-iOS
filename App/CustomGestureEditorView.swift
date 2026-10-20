@@ -30,6 +30,19 @@ struct CustomGestureDraft: Equatable {
     var changes: [String: [LayoutJSON]] {
         rows.filter { original[$0.key] != $0.value }.mapValues { $0.map(\.source) }
     }
+    /// Validate only targets newly assigned by this editing session. Retained
+    /// imported references may be unresolved and must survive unrelated edits.
+    /// Row identity spans arrays so legacy circular materialization is unchanged.
+    var newlyAssignedLayoutTargets: [LayoutJSON] {
+        let originals = Dictionary(uniqueKeysWithValues: original.values.flatMap { $0 }.map { ($0.id, $0.source) })
+        return rows.values.flatMap { $0 }.compactMap { row in
+            guard row.source["actionType"]?.string == "MoveToCustomKeyboard" else { return nil }
+            if let previous = originals[row.id],
+               previous["actionType"] == row.source["actionType"],
+               previous["actionValue"] == row.source["actionValue"] { return nil }
+            return row.source
+        }
+    }
     static func fields(for type: String) -> [(String, String)] {
         switch type {
         case "CIRCULAR_FLICK": return [("circularFlicks", "配列と方向")]
@@ -166,11 +179,12 @@ private struct CustomGestureRowEditor: View {
     private let single = ["TAP", "UP_LEFT_FAR", "UP", "UP_RIGHT_FAR", "DOWN"]
     private let multi = ["TAP", "UP_LEFT", "UP", "UP_RIGHT", "LEFT", "RIGHT", "DOWN_LEFT", "DOWN", "DOWN_RIGHT"]
     private let circular = ["TAP"] + (0...6).map { "SLOT_\($0)" }
-    private let actions = [("INPUT_TEXT", "文字入力"), ("DELETE", "削除"), ("SPACE", "空白"),
-        ("ENTER", "改行"), ("CONFIRM", "確定"), ("CONVERT", "変換"), ("PASTE", "貼り付け"),
-        ("MOVE_CURSOR_LEFT", "カーソルを左へ"), ("SWITCH_TO_NEXT_IME", "次のキーボード"),
-        ("TOGGLE_DAKUTEN", "小文字・濁点"), ("MoveToCustomKeyboard", "カスタム配列へ切替"),
-        ("MoveCustomKeyboardTab", "次のドーナツ配列"), ("DoNothing", "何もしない")]
+    private var actions: [(String, String)] {
+        [("INPUT_TEXT", "文字入力")] + CustomCommandCatalog.selectableEntries.map { entry in
+            (entry.flickType, entry.command == .moveCustomKeyboardTab && field == "circularFlicks"
+                ? "次のドーナツ配列" : entry.title)
+        } + [("MoveToCustomKeyboard", "カスタム配列へ切替")]
+    }
     private var actionType: String { row.source["actionType"]?.string ?? "INPUT_TEXT" }
     var body: some View {
         Form {
@@ -199,11 +213,16 @@ private struct CustomGestureRowEditor: View {
                                 values: field == "circularFlicks" ? circular : single)
             }
             if field == "flicks" || field == "circularFlicks" {
-                Picker("操作", selection: string("actionType", fallback: "INPUT_TEXT")) {
+                Picker("操作", selection: Binding(get: { CustomCommandCatalog.flickSelection(actionType) }, set: { choice in
+                    guard choice != CustomCommandCatalog.flickSelection(actionType) else { return }
+                    row.set("actionType", .string(choice))
+                    let entry = CustomCommandCatalog.selectableEntries.first { $0.flickType == choice }
+                    row.set("actionValue", .string(entry?.flickValue ?? ""))
+                })) {
                     ForEach(actions, id: \.0) { value, title in
                         Text(value == "MoveCustomKeyboardTab" && field != "circularFlicks" ? "次のカスタム配列" : title).tag(value)
                     }
-                    if !actions.contains(where: { $0.0 == actionType }) { Text("取り込み済み：" + actionType).tag(actionType) }
+                    if !actions.contains(where: { $0.0 == CustomCommandCatalog.flickSelection(actionType) }) { Text("取り込み済み：" + actionType).tag(actionType) }
                 }.accessibilityIdentifier("customGestureAction")
                 if field == "circularFlicks", actionType == "MoveCustomKeyboardTab",
                    let value = row.source["actionValue"]?.string, value != "⇄" {
@@ -219,7 +238,7 @@ private struct CustomGestureRowEditor: View {
                     }
                 } else if actionType == "INPUT_TEXT" {
                     textField("入力する文字", key: "actionValue")
-                } else if !actions.contains(where: { $0.0 == actionType }) {
+                } else if !actions.contains(where: { $0.0 == CustomCommandCatalog.flickSelection(actionType) }) {
                     textField("取り込み済みの値", key: "actionValue")
                 }
             } else { textField("入力する文字", key: "output") }
