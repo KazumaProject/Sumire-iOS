@@ -63,7 +63,7 @@ final class CorePerformanceTests: XCTestCase {
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = try XCTUnwrap(ConversionService.bundledDictionary)
-        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
+        let provenance = try ConversionBenchmarkProvenance.collectFullDictionary(directory: directory)
         var cycles: [[String: Any]] = []
         let baseline = try footprint()
         for cycle in 0..<10 {
@@ -134,7 +134,7 @@ final class CorePerformanceTests: XCTestCase {
         #else
         let directory = try XCTUnwrap(ConversionService.bundledDictionary)
         let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
-        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
+        let provenance = try ConversionBenchmarkProvenance.collectFullDictionary(directory: directory)
         let japaneseFlags: UInt32 = bunsetsuSearch ? 16 : (prediction ? 12 : 4)
         let omissionFlags: UInt32 = japaneseFlags | 1
         var error = [CChar](repeating: 0, count: 1024)
@@ -234,6 +234,36 @@ final class CorePerformanceTests: XCTestCase {
 /// Hashing deliberately precedes timing: these are warm-file-cache benchmarks,
 /// never claims about OS cold pages, extension startup or touch-to-frame time.
 enum ConversionBenchmarkProvenance {
+    /// Canonical production engine inputs, including optional files that the
+    /// engine loads by presence even when a manifest accidentally omits them.
+    static func fullDictionaryOutputNames() throws -> Set<String> {
+        var names: Set<String> = [
+            "system.sud", "connection.sud", "standalone.sud", "english.sud", "english_reading.sud",
+            "reading_correction.sud", "single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud",
+            "system_ngram.dat", "system_ngram_unigram.dat", "mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat"
+        ]
+        for index in 0..<sumire_category_count() {
+            let name = try XCTUnwrap(sumire_category_name(index))
+            names.insert(String(cString: name) + ".sud")
+        }
+        return names
+    }
+
+    static func collectFullDictionary(directory: URL) throws -> [String: Any] {
+        let manifest = try Data(contentsOf: directory.appendingPathComponent("manifest.json"))
+        let parsed = try JSONSerialization.jsonObject(with: manifest) as? [String: Any]
+        let outputs = try XCTUnwrap(parsed?["output_sha256"] as? [String: String])
+        let required = try fullDictionaryOutputNames()
+        guard Set(outputs.keys) == required else {
+            throw NSError(domain: "SumireBenchmark", code: 5,
+                          userInfo: [NSLocalizedDescriptionKey: "Full-dictionary manifest must enumerate every canonical engine input"])
+        }
+        var report = try collect(directory: directory)
+        report["required_output_files"] = required.sorted()
+        report["full_dictionary_manifest_verified"] = true
+        return report
+    }
+
     static func collect(directory: URL) throws -> [String: Any] {
         let revision = ProcessInfo.processInfo.environment["SUMIRE_BENCHMARK_REVISION"] ?? ""
         guard revision.count == 40 && revision.allSatisfy({ $0.isHexDigit && $0.isASCII }) else {

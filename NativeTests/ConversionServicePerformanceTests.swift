@@ -14,7 +14,7 @@ final class ConversionServicePerformanceTests: XCTestCase {
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = try XCTUnwrap(ConversionService.bundledDictionary)
-        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
+        let provenance = try ConversionBenchmarkProvenance.collectFullDictionary(directory: directory)
         let outputs = try XCTUnwrap(provenance["dictionary_file_sha256"] as? [String: String])
         let support = outputs.keys.filter { !$0.hasSuffix(".sud") || ["connection.sud", "standalone.sud"].contains($0) }.sorted()
         let lexical = outputs.keys.filter { $0.hasSuffix(".sud") && !support.contains($0) }.sorted()

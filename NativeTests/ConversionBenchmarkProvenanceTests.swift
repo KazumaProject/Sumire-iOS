@@ -19,6 +19,32 @@ final class ConversionBenchmarkProvenanceTests: XCTestCase {
         XCTAssertThrowsError(try ConversionBenchmarkProvenance.collect(directory: root))
     }
 
+    func testFullDictionaryRejectsOmittedManifestEntryEvenWhenFileExists() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root.appendingPathComponent("mozc"), withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let payload = Data([1, 2, 3])
+        let digest = SHA256.hash(data: payload).map { String(format: "%02x", $0) }.joined()
+        let required = try ConversionBenchmarkProvenance.fullDictionaryOutputNames()
+        XCTAssertEqual(required.count, 44)
+        var outputs: [String: String] = [:]
+        for path in required {
+            try payload.write(to: root.appendingPathComponent(path))
+            outputs[path] = digest
+        }
+        func saveManifest() throws {
+            let manifest = try JSONSerialization.data(withJSONObject: ["output_sha256": outputs])
+            try manifest.write(to: root.appendingPathComponent("manifest.json"))
+        }
+        try saveManifest()
+        let complete = try ConversionBenchmarkProvenance.collectFullDictionary(directory: root)
+        XCTAssertEqual(complete["verified_manifest_output_count"] as? Int, 44)
+        outputs.removeValue(forKey: "reading_correction.sud")
+        try saveManifest()
+        XCTAssertTrue(FileManager.default.fileExists(atPath: root.appendingPathComponent("reading_correction.sud").path))
+        XCTAssertThrowsError(try ConversionBenchmarkProvenance.collectFullDictionary(directory: root))
+    }
+
     func testManifestTraversalAndEscapingSymlinkAreRejected() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
