@@ -66,6 +66,8 @@ def validate_rows(rows):
                     not isinstance(candidate.get('effective_commit_text'), str) or
                     not isinstance(item.get('text'), str) or not isinstance(item.get('annotation'), str)):
                 raise ValueError('Android display metadata missing')
+        if eligible and not row['provider']:
+            raise ValueError('eligible input lacks English fallback/provider')
         if not eligible and row['provider']:
             raise ValueError('ineligible input has English provider candidates')
 
@@ -105,7 +107,9 @@ def compare_display(rows, ios):
     if ios.get('schema_version') != 1 or ios.get('platform') != 'ios' or ios.get('configuration') != dict(n=20, flags=12, categories='none', learning=False, personal=False):
         raise ValueError('iOS English display configuration differs')
     provenance = ios.get('provenance', {})
-    if provenance.get('manifest_sha256') != raw.POLICY['conversion_data']['manifest_sha256'] or provenance.get('verified_manifest_output_count') != 44:
+    if (provenance.get('manifest_sha256') != raw.POLICY['conversion_data']['manifest_sha256'] or
+            provenance.get('dictionary_file_sha256') != raw.POLICY['conversion_data']['output_sha256'] or
+            provenance.get('verified_manifest_output_count') != 44):
         raise ValueError('iOS dictionary provenance differs')
     targets = ios.get('conditions', [])
     if [r.get('reading') for r in targets] != INPUTS:
@@ -156,6 +160,7 @@ def main():
     parser.add_argument('--baseline', type=Path)
     parser.add_argument('--baseline-provenance', type=Path)
     parser.add_argument('--ios-report', type=Path)
+    parser.add_argument('--ios-revision', help='Exact committed revision used by the Release iOS export')
     args = parser.parse_args()
     output = args.output.resolve()
     if output == raw.ROOT or raw.ROOT in output.parents:
@@ -215,8 +220,12 @@ def main():
     report = compare(rows, args.cli.resolve(), args.data.resolve())
     atomic_write_json(output / 'comparison.json', report)
     if args.ios_report:
-        display = compare_display(rows, json.loads(args.ios_report.read_text()))
-        display['ios_report_sha256'] = raw.digest(args.ios_report.read_bytes())
+        ios_bytes = args.ios_report.read_bytes()
+        ios = json.loads(ios_bytes)
+        if not args.ios_revision or ios.get('provenance', {}).get('source_revision') != args.ios_revision:
+            raise ValueError('iOS report revision differs from expected build')
+        display = compare_display(rows, ios)
+        display['ios_report_sha256'] = raw.digest(ios_bytes)
         atomic_write_json(output / 'display-comparison.json', display)
     print(json.dumps({k: report[k] for k in ('cases', 'provider_equal', 'dedicated_top20_equal')}))
     return 0 if report['provider_equal'] == len(INPUTS) and report['dedicated_top20_equal'] == len(INPUTS) else 1

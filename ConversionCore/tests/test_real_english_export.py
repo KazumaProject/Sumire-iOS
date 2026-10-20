@@ -45,6 +45,29 @@ class RealEnglishExportTests(unittest.TestCase):
                 exporter.validate_replay(baseline, altered, policy)
         with self.assertRaises(ValueError): exporter.validate_replay(b'changed', provenance, policy)
 
+    def test_actual_cell_projection_and_dictionary_hashes_are_required(self):
+        rows = self.rows()
+        candidate = dict(id=1, text='word', score=100, consumed_utf16=1, annotation=None)
+        item = dict(text='word', selected_id=1, annotation=None,
+                    labels=[dict(text='word', identifier=None, hidden=False)])
+        ios = dict(schema_version=1, platform='ios',
+            configuration=dict(n=20, flags=12, categories='none', learning=False, personal=False),
+            provenance=dict(manifest_sha256=exporter.raw.POLICY['conversion_data']['manifest_sha256'],
+                dictionary_file_sha256=exporter.raw.POLICY['conversion_data']['output_sha256'],
+                verified_manifest_output_count=44),
+            conditions=[dict(reading=r['reading'], candidates=[copy.deepcopy(candidate)],
+                normal=[copy.deepcopy(item)], expanded=[copy.deepcopy(item)]) for r in rows])
+        self.assertEqual(exporter.compare_display(rows, ios)['compared_fields_equal'], len(rows))
+        for mutation in ('title', 'callback', 'hashes', 'android_count', 'android_title'):
+            bad_rows, bad_ios = copy.deepcopy(rows), copy.deepcopy(ios)
+            if mutation == 'title': bad_ios['conditions'][0]['normal'][0]['labels'][0]['text'] = 'wrong'
+            if mutation == 'callback': bad_ios['conditions'][0]['expanded'][0]['selected_id'] = 2
+            if mutation == 'hashes': bad_ios['provenance']['dictionary_file_sha256'] = {}
+            if mutation == 'android_count': bad_rows[0]['adapter_items'] = []
+            if mutation == 'android_title': bad_rows[0]['adapter_items'][0]['text'] = 'word'
+            with self.subTest(mutation=mutation), self.assertRaises(ValueError):
+                exporter.compare_display(bad_rows, bad_ios)
+
     def test_factory_patch_rejects_unpinned_source_before_edit(self):
         with self.assertRaises(ValueError): exporter.patch_factory(b'not pinned factory', {})
 
