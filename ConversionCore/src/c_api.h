@@ -37,6 +37,8 @@ typedef struct {
   sumire_string text;
   int64_t score;
   uint32_t start_utf16;
+  /* Consumed input, not output length. Pathless kana auxiliaries consume the
+   * whole snapshot reading; dictionary prefixes retain their shorter range. */
   uint32_t length_utf16;
   size_t segment_count;
 } sumire_candidate;

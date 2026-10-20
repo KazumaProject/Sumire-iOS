@@ -213,7 +213,9 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
   if (!result || !out || index >= sumire_result_count(result))
     return -1;
   const auto &c = result->snapshot->value.candidates[index];
-  uint32_t consumed = 0;
+  // Kana auxiliaries have no dictionary path, but replace the complete typed
+  // reading. Keep their range independent of output width (e.g. ガ -> ｶﾞ).
+  uint32_t consumed = c.segments.empty() ? result->snapshot->length : 0;
   for (const auto &segment : c.segments)
     consumed = std::max(consumed, segment.start + segment.length);
   *out = {index, string(c.text), c.score,
