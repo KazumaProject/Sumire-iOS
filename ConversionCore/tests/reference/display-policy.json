@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "source_revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
+  "adapter_sha256": "c448097a01cdae1b351275a0e299996bd46ee8430488ee4f3c773303877bdb31",
+  "n": 20,
+  "beam_width": 20,
+  "readings": [
+    "にほんご",
+    "とうきょう",
+    "あい",
+    "はし",
+    "かみ",
+    "きしゃ",
+    "しろ",
+    "しろい",
+    "しろくろ",
+    "しろあり",
+    "みにゅうりょくじ",
+    "にて",
+    "ひを",
+    "がっこう",
+    "かつこう",
+    "びょういん",
+    "きょうはいいてんきですね",
+    "わたしはにほんごをにゅうりょくします",
+    "このあぷりのへんかんこうほをこうそくにしたい",
+    "にほん",
+    "とうき",
+    "かっこん",
+    "あせん",
+    "あめり",
+    "りゅう"
+  ],
+  "limits": [
+    "Constrained production pure functions and real Adapter binding; private IMEService and device UI are not executed.",
+    "Personal, learning, macros, NG, romaji, AI, utility and saved ordering disabled; empty tail, no live conversion or inline suggestions.",
+    "Factory English word provider is mocked empty; bundled English-reading data is loaded.",
+    "No wall-clock-trigger readings; date/time generation is not covered or clock-mocked.",
+    "No iOS parity threshold: this exports reference observations only."
+  ]
+}
