@@ -20,6 +20,8 @@ find_package(Python3 REQUIRED COMPONENTS Interpreter)
 add_test(NAME standalone_builder COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/../Scripts/tests/test_standalone_dictionary.py)
 add_test(NAME conversion COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_cli.py $<TARGET_FILE:sumire-cli> $<TARGET_FILE:sumire-c-api-test> $<TARGET_FILE:sumire-incremental-test>)
 add_test(NAME reference_quality_policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_reference_quality_policy.py)
+add_test(NAME prediction_quality_policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_prediction_reference_policy.py)
+add_test(NAME authored_conversion_quality COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_conversion_quality.py)
 
 add_executable(sumire-c-api-test tests/test_c_api.c)
 target_link_libraries(sumire-c-api-test PRIVATE sumire_conversion)
