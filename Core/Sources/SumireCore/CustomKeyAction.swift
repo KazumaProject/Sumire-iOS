@@ -9,7 +9,7 @@ public enum CustomKeyAction: Codable, Equatable {
     case switchLayout(String)
     case unsupported(raw: String, reason: String)
 
-    public enum Command: String, Codable {
+    public enum Command: String, Codable, CaseIterable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
         case paste = "Paste", cursorLeft = "MoveCursorLeft", cursorRight = "MoveCursorRight", nextKeyboard = "SwitchToNextIme"

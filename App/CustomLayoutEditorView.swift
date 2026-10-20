@@ -84,6 +84,12 @@ struct CustomLayoutEditorView: View {
                     }
                     try next.setDoubleTap(id: draft.id, enabled: draft.doubleTapEnabled, action: draft.doubleTapAction)
                 }
+                for row in draft.gestures.newlyAssignedLayoutTargets {
+                    if case .unsupported = CustomKeyAction.flick(type: "MoveToCustomKeyboard",
+                        value: row["actionValue"]?.string, targets: CustomLayoutTargets(layouts: allLayouts)) {
+                        throw PersonalDataError("フリックの切替先の配列を選択してください")
+                    }
+                }
                 if !draft.gestures.changes.isEmpty || draft.type != draft.originalType && draft.type != "NORMAL" {
                     try next.setGestureMappings(id: draft.id, fields: draft.gestures.changes)
                 }
@@ -146,21 +152,7 @@ private struct CustomKeyEditor: View {
                     } label: { Label("フリックの割り当て", systemImage: "hand.draw") }
                         .accessibilityIdentifier("customGestureEditor")
                 } else {
-                Picker("操作", selection: Binding(get: {
-                    draft.action.hasPrefix("Text:") ? "Text" : draft.action.hasPrefix("MoveToCustomKeyboard:") ? "SwitchLayout" : draft.action
-                }, set: { draft.action = $0 == "Text" ? "Text:" + draft.label : $0 == "SwitchLayout" ? "MoveToCustomKeyboard:" : $0 })) {
-                    Text("文字入力").tag("Text")
-                    Text("削除").tag("Delete")
-                    Text("空白").tag("Space")
-                    Text("改行").tag("Enter")
-                    Text("確定").tag("Confirm")
-                    Text("カーソルを左へ").tag("MoveCursorLeft")
-                    Text("次のキーボード").tag("SwitchToNextIme")
-                    Text("カスタム配列に切り替え").tag("SwitchLayout")
-                    if !draft.action.hasPrefix("Text:"), !draft.action.hasPrefix("MoveToCustomKeyboard:"), !["Delete", "Space", "Enter", "Confirm", "MoveCursorLeft", "SwitchToNextIme"].contains(draft.action) {
-                        Text("取り込み済みの操作を保持").tag(draft.action)
-                    }
-                }.pickerStyle(.navigationLink).accessibilityIdentifier("customKeyAction")
+                CustomTapActionPicker(title: "操作", raw: $draft.action, initialText: draft.label, accessibilityID: "customKeyAction")
                 if draft.action.hasPrefix("MoveToCustomKeyboard:") {
                     Picker("切替先の配列", selection: Binding(get: { String(draft.action.dropFirst(21)) }, set: { draft.action = "MoveToCustomKeyboard:" + $0 })) {
                         Text("選択してください").tag("")
@@ -182,22 +174,7 @@ private struct CustomKeyEditor: View {
                         Toggle("ダブルタップ操作を使う", isOn: $draft.doubleTapEnabled)
                             .accessibilityIdentifier("customDoubleTapEnabled")
                         if draft.doubleTapEnabled {
-                            Picker("ダブルタップの操作", selection: Binding(get: {
-                                draft.doubleTapAction.hasPrefix("Text:") ? "Text" : draft.doubleTapAction.hasPrefix("MoveToCustomKeyboard:") ? "SwitchLayout" : draft.doubleTapAction
-                            }, set: { draft.doubleTapAction = $0 == "Text" ? "Text:" : $0 == "SwitchLayout" ? "MoveToCustomKeyboard:" : $0 })) {
-                                Text("文字入力").tag("Text")
-                                Text("削除").tag("Delete")
-                                Text("空白").tag("Space")
-                                Text("改行").tag("Enter")
-                                Text("確定").tag("Confirm")
-                                Text("カーソルを左へ").tag("MoveCursorLeft")
-                                Text("次のキーボード").tag("SwitchToNextIme")
-                                Text("カスタム配列に切り替え").tag("SwitchLayout")
-                                if !draft.doubleTapAction.hasPrefix("Text:"), !draft.doubleTapAction.hasPrefix("MoveToCustomKeyboard:"),
-                                   !["Delete", "Space", "Enter", "Confirm", "MoveCursorLeft", "SwitchToNextIme"].contains(draft.doubleTapAction) {
-                                    Text("取り込み済みの操作を保持").tag(draft.doubleTapAction)
-                                }
-                            }.pickerStyle(.navigationLink).accessibilityIdentifier("customDoubleTapAction")
+                            CustomTapActionPicker(title: "ダブルタップの操作", raw: $draft.doubleTapAction, initialText: "", accessibilityID: "customDoubleTapAction")
                             if draft.doubleTapAction.hasPrefix("Text:") {
                                 TextField("ダブルタップで入力する文字", text: Binding(get: { String(draft.doubleTapAction.dropFirst(5)) }, set: { draft.doubleTapAction = "Text:" + $0 }))
                                     .textInputAutocapitalization(.never).autocorrectionDisabled()
@@ -249,5 +226,38 @@ private struct CustomEditablePreviewKey: View {
             .frame(width: width, height: height)
             .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
             .position(x: x, y: y)
+    }
+}
+
+private struct CustomTapActionPicker: View {
+    let title: String
+    @Binding var raw: String
+    let initialText: String
+    let accessibilityID: String
+    var body: some View {
+        Picker(title, selection: Binding(get: { CustomCommandCatalog.tapSelection(raw) }, set: { choice in
+            guard choice != CustomCommandCatalog.tapSelection(raw) else { return }
+            raw = choice == "Text" ? "Text:" + initialText : choice == "InputText" ? "InputText:ひらがな小文字" :
+                choice == "SwitchLayout" ? "MoveToCustomKeyboard:" : choice
+        })) {
+            Text("文字入力").tag("Text")
+            Text("入力文字の修飾・記号操作").tag("InputText")
+            ForEach(CustomCommandCatalog.selectableEntries) { Text($0.title).tag($0.tapRaw) }
+            Text("カスタム配列に切り替え").tag("SwitchLayout")
+            let selection = CustomCommandCatalog.tapSelection(raw)
+            if !["Text", "InputText", "SwitchLayout"].contains(selection),
+               !CustomCommandCatalog.selectableEntries.contains(where: { $0.tapRaw == selection }) {
+                Text("取り込み済みの操作を保持：" + raw).tag(selection)
+            }
+        }.pickerStyle(.navigationLink).accessibilityIdentifier(accessibilityID)
+        if raw.hasPrefix("InputText:") {
+            Picker("入力文字への操作", selection: Binding(get: { String(raw.dropFirst(10)) }, set: { raw = "InputText:" + $0 })) {
+                ForEach(CustomCommandCatalog.inputTextTokens, id: \.self) { Text($0).tag($0) }
+                let value = String(raw.dropFirst(10))
+                if !CustomCommandCatalog.inputTextTokens.contains(value) { Text("取り込み済み：" + value).tag(value) }
+            }.pickerStyle(.navigationLink)
+            Text("通常の文字入力とは異なり、直前の文字の修飾などを行います。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

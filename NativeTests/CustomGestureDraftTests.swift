@@ -20,6 +20,42 @@ final class CustomGestureDraftTests: XCTestCase {
         XCTAssertEqual(changed[0]["flickDirection"], .string("UP_LEFT"))
         XCTAssertEqual(changed[1], source["flicks"]?.array?[1])
     }
+    func testRetainedUnresolvedTargetsSurviveOtherRowAndMetadataEdits() throws {
+        let missing: LayoutJSON = .object(["flickDirection": .string("UP"), "actionType": .string("MoveToCustomKeyboard"),
+            "actionValue": .string("missing-layout"), "future": .object(["keep": .bool(true)])])
+        var draft = CustomGestureDraft(source: .object(["flicks": .array([missing,
+            .object(["flickDirection": .string("TAP"), "actionType": .string("INPUT_TEXT"), "actionValue": .string("あ")])])]))
+        draft.rows["flicks"]?[1].set("actionValue", .string("い"))
+        XCTAssertTrue(draft.newlyAssignedLayoutTargets.isEmpty)
+        XCTAssertEqual(draft.changes["flicks"]?[0], missing)
+        draft.rows["flicks"]?[0].set("stateIndex", .integer(3))
+        XCTAssertTrue(draft.newlyAssignedLayoutTargets.isEmpty)
+        XCTAssertEqual(draft.changes["flicks"]?[0]["future"], missing["future"])
+        // The same retained row moves to the native circular array, preserving UUID.
+        draft.prepare(type: "CIRCULAR_FLICK", label: "unused")
+        XCTAssertTrue(draft.newlyAssignedLayoutTargets.isEmpty)
+        XCTAssertEqual(draft.changes["circularFlicks"]?[0]["future"], missing["future"])
+    }
+    func testNewAndRetargetedLayoutReferencesAreEmittedIncludingEmptyTarget() throws {
+        let target: LayoutJSON = .object(["flickDirection": .string("UP"), "actionType": .string("MoveToCustomKeyboard"),
+            "actionValue": .string("old"), "future": .integer(42)])
+        var draft = CustomGestureDraft(source: .object(["flicks": .array([target])]))
+        draft.rows["flicks"]?[0].set("actionValue", .string("new"))
+        XCTAssertEqual(draft.newlyAssignedLayoutTargets.count, 1)
+        XCTAssertEqual(draft.newlyAssignedLayoutTargets.first?["actionValue"], .string("new"))
+        XCTAssertEqual(draft.newlyAssignedLayoutTargets.first?["future"], .integer(42))
+        draft.rows["flicks"]?[0].set("actionValue", .string("old"))
+        XCTAssertTrue(draft.newlyAssignedLayoutTargets.isEmpty)
+        draft.rows["flicks", default: []].append(.init(.object(["flickDirection": .string("TAP"),
+            "actionType": .string("MoveToCustomKeyboard"), "actionValue": .string("")])))
+        let newlyAssigned = try XCTUnwrap(draft.newlyAssignedLayoutTargets.first)
+        XCTAssertEqual(newlyAssigned["actionValue"], .string(""))
+        XCTAssertEqual(draft.newlyAssignedLayoutTargets.count, 1)
+        if case .unsupported = CustomKeyAction.flick(type: "MoveToCustomKeyboard",
+            value: newlyAssigned["actionValue"]?.string, targets: CustomLayoutTargets(layouts: [])) {} else {
+            XCTFail("A newly assigned empty target must fail validation")
+        }
+    }
     func testEveryNewSupportedGestureCanBeSavedAndLoadedAsRuntime() throws {
         for (type, _) in CustomGestureDraft.types where type != "NORMAL" {
             var editor = CustomLayoutEditor(rows: 1, columns: 1)

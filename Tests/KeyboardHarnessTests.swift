@@ -295,6 +295,61 @@ final class KeyboardHarnessTests: XCTestCase {
         app.buttons[name].firstMatch.tap(); app.buttons["この配列を削除"].tap(); app.buttons["削除する"].tap()
     }
 
+    private func chooseCustomCatalogAction(_ title: String, in app: XCUIApplication) {
+        let choice = app.buttons[title]
+        for _ in 0..<10 {
+            if choice.exists && choice.isHittable { choice.tap(); return }
+            app.swipeUp()
+        }
+        XCTFail("操作が見つかりません: " + title)
+    }
+    func testVisualEditorCreatesShiftAndCapsDoubleTapAfterRelaunch() {
+        let app = XCUIApplication(); launchInputPreview(app)
+        let name = "CommandEditor-" + String(UUID().uuidString.prefix(8))
+        settingsButton("Custom Keyboard", in: app).tap()
+        app.buttons["新しい配列を作成"].tap()
+        let field = app.textFields["配列名"]; field.tap()
+        field.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: (field.value as? String ?? "").count) + name)
+        app.buttons["キーを追加"].tap()
+        app.buttons["customKeyAction"].tap(); chooseCustomCatalogAction("Shift", in: app)
+        let special = app.switches["特殊キーの色・サイズを使う"]
+        if (special.value as? String) != "1" {
+            special.coordinate(withNormalizedOffset: .init(dx: 0.93, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(special.value as? String, "1")
+        let enabled = app.switches["customDoubleTapEnabled"]
+        if !enabled.isHittable { app.swipeUp() }
+        if (enabled.value as? String) != "1" {
+            enabled.coordinate(withNormalizedOffset: .init(dx: 0.93, dy: 0.5)).tap()
+        }
+        XCTAssertEqual(enabled.value as? String, "1")
+        app.buttons["customDoubleTapAction"].tap(); chooseCustomCatalogAction("Caps Lock", in: app)
+        app.buttons["適用"].tap(); app.buttons["保存"].tap(); app.buttons["完了"].tap()
+        app.terminate(); launchInputPreview(app)
+        app.textViews["入力テスト"].tap(); selectKeyboard(name, in: app)
+        let key = app.buttons.matching(NSPredicate(format: "identifier BEGINSWITH %@", "custom-")).matching(NSPredicate(format: "value == %@", "OFF")).firstMatch
+        XCTAssertTrue(key.waitForExistence(timeout: 3))
+        let keyID = key.identifier
+        key.doubleTap()
+        XCTAssertEqual(app.buttons[keyID].value as? String, "Caps Lock")
+        removeVisualGestureLayout(name, in: app)
+    }
+    func testVisualFlickEditorCreatesCaseCommandAfterRelaunch() {
+        let app = XCUIApplication()
+        let name = beginVisualGestureLayout("標準フリック", in: app)
+        addGestureRow("flicks", in: app)
+        chooseGestureDirection("flickDirection", title: "上", in: app)
+        app.buttons["customGestureAction"].tap()
+        chooseCustomCatalogAction("英字大小・小文字・濁点", in: app)
+        finishGestureRow(in: app)
+        let key = saveVisualGestureLayoutAndRelaunch(name, in: app)
+        key.tap()
+        let start = key.coordinate(withNormalizedOffset: .init(dx: 0.5, dy: 0.5))
+        start.press(forDuration: 0.05, thenDragTo: start.withOffset(.init(dx: 0, dy: -45)))
+        XCTAssertEqual(app.textViews["入力テスト"].value as? String, "ぁ")
+        removeVisualGestureLayout(name, in: app)
+    }
+
     private func addGestureRow(_ field: String, in app: XCUIApplication) {
         let add = app.buttons["customGestureAdd-" + field]
         if !add.isHittable { app.swipeUp() }
