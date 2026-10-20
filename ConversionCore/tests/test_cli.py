@@ -681,6 +681,59 @@ class Tests(unittest.TestCase):
         data=bytearray((self.data/'english_reading.sud').read_bytes());data[-1]^=1
         (self.data/'english_reading.sud').write_bytes(data)
         self.run_cli('--lookup-english-reading','はろー',ok=False)
+    def test_fixture_entries_convert_prefix_and_exact_template(self):
+        options=['--user-entry','あ','User','1','-1000',
+                 '--user-entry','い','Second','2','-900',
+                 '--template-entry','あい','Template','2','-2000','--nbest','100']
+        exact=json.loads(self.run_cli(*options,'あい').stdout)['candidates']
+        by_text={candidate['text']:candidate for candidate in exact}
+        self.assertEqual(by_text['Template']['score'],-2000)
+        self.assertEqual(by_text['Template']['segments'][0]['dictionary'],'template')
+        self.assertIn('UserSecond',by_text)
+        self.assertIn('Whole',by_text)
+        self.assertEqual(by_text['UserSecond']['segments'][0]['dictionary'],'user')
+        longer=json.loads(self.run_cli(*options,'あいい').stdout)['candidates']
+        self.assertFalse(any(segment['dictionary']=='template' for candidate in longer for segment in candidate['segments']))
+        shorter=json.loads(self.run_cli(*options,'あ').stdout)['candidates']
+        self.assertIn('User',[candidate['text'] for candidate in shorter])
+        self.assertNotIn('Template',[candidate['text'] for candidate in shorter])
+
+    def test_fixture_entries_english_prediction_and_case_sensitive_prefix(self):
+        dictionary(self.data/'english.sud',[('hello',-2,0,100)])
+        options=['--user-entry','help','Personal','1','-100',
+                 '--template-entry','hel','Exact','2','-200','--predict-english']
+        exact=json.loads(self.run_cli(*options,'hel').stdout)['candidates']
+        self.assertEqual([candidate['text'] for candidate in exact],['Exact','Personal','hello'])
+        self.assertEqual([candidate['segments'][0]['dictionary'] for candidate in exact[:2]],['template','user'])
+        longer=json.loads(self.run_cli(*options,'help').stdout)['candidates']
+        self.assertIn('Personal',[candidate['text'] for candidate in longer])
+        self.assertNotIn('Exact',[candidate['text'] for candidate in longer])
+        upper=json.loads(self.run_cli(*options,'HEL').stdout)['candidates']
+        self.assertNotIn('Personal',[candidate['text'] for candidate in upper])
+
+    def test_fixture_entries_validate_integer_ranges_and_missing_arguments(self):
+        for option in ['--user-entry','--template-entry']:
+            for context,score in [('x','0'),('1x','0'),('-1','0'),('65536','0'),
+                                  ('3','0'),('1','x'),('1','1.0'),('1','2147483648'),
+                                  ('1','-2147483649'),('99999999999999999999999','0')]:
+                with self.subTest(option=option,context=context,score=score):
+                    self.run_cli(option,'あ','Fixture',context,score,'あ',ok=False)
+            for arguments in [[],['あ'],['あ','Fixture'],['あ','Fixture','1']]:
+                with self.subTest(option=option,arguments=arguments):
+                    self.run_cli(option,*arguments,ok=False)
+        for score in ['-2147483648','2147483647']:
+            result=json.loads(self.run_cli('--template-entry','あ','Boundary','0',score,'あ').stdout)
+            self.assertIn('Boundary',[candidate['text'] for candidate in result['candidates']])
+        self.run_cli('--user-entry','','Fixture','1','0','あ',ok=False)
+        self.run_cli('--user-entry','あ','','1','0','あ',ok=False)
+
+    def test_fixture_entries_reject_lookup_and_listing_combinations(self):
+        for option in ['--user-entry','--template-entry']:
+            for mode in ['--lookup','--lookup-english','--lookup-english-reading','--list-categories']:
+                with self.subTest(option=option,mode=mode):
+                    result=self.run_cli(option,'あ','Fixture','1','0',mode,'あ',ok=False)
+                    self.assertIn(b'fixture entries apply',result.stderr)
+
     def tearDown(self):self.temp.cleanup()
     def run_cli(self,*args,input=None,ok=True):
         r=subprocess.run([CLI,'--data',str(self.data),*args],input=input,capture_output=True)

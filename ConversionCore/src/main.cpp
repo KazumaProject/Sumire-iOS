@@ -1,5 +1,7 @@
 #include "engine.hpp"
 #include <chrono>
+#include <charconv>
+#include <limits>
 #include <cstdlib>
 #include <iostream>
 #include <sstream>
@@ -31,6 +33,14 @@ size_t number(const std::string &s) {
     throw std::runtime_error("invalid integer");
   return n;
 }
+int64_t fixture_integer(const std::string &text, int64_t minimum, int64_t maximum) {
+  int64_t parsed = 0;
+  const auto result = std::from_chars(text.data(), text.data() + text.size(), parsed);
+  if (text.empty() || result.ec != std::errc{} || result.ptr != text.data() + text.size() ||
+      parsed < minimum || parsed > maximum)
+    throw std::runtime_error("invalid fixture entry integer: " + text);
+  return parsed;
+}
 void usage() {
   std::cout << "Sumire C++20 offline conversion CLI\n"
                "  sumire-cli --data DIR [--categories all|none|name,name] "
@@ -61,6 +71,9 @@ void usage() {
                "--lookup-english returns raw exact English entries; input is case-sensitive.\n"
                "--lookup-english-reading returns raw exact kana-to-English entries, "
                "ranked by word cost; no case variants. Requires english_reading.sud.\n"
+               "--user-entry READING TEXT CONTEXT_ID SCORE adds a repeatable personal lexical entry.\n"
+               "--template-entry READING TEXT CONTEXT_ID SCORE adds a repeatable exact-input-only template.\n"
+               "Entry context IDs are uint16 connection IDs; scores are signed int32. Entries apply to conversion/English prediction, never raw lookup or category listing.\n"
                "--lookup returns exact dictionary entries only, retaining "
                "duplicate surfaces/POS.\n"
                "Maximum input: 8192 UTF-16 units; longer input is rejected, "
@@ -70,6 +83,7 @@ int main(int argc, char **argv) {
   try {
     std::string dir;
     std::vector<std::string> categories, readings;
+    std::vector<sumire::PersonalEntry> personal_entries;
     bool prefix_candidates = false;
     bool japanese_prediction = false;
     bool bunsetsu_search = false;
@@ -104,6 +118,12 @@ int main(int argc, char **argv) {
           if (v.empty() || v.back() == ',')
             throw std::runtime_error("empty category");
         }
+      } else if (a == "--user-entry" || a == "--template-entry") {
+        const auto reading = value();
+        const auto text = value();
+        const auto context = fixture_integer(value(), 0, std::numeric_limits<uint16_t>::max());
+        const auto score = fixture_integer(value(), std::numeric_limits<int32_t>::min(), std::numeric_limits<int32_t>::max());
+        personal_entries.push_back({reading, text, uint16_t(context), int32_t(score), a == "--template-entry"});
       } else if (a == "--nbest")
         count = number(value());
       else if (a == "--max-states")
@@ -143,6 +163,8 @@ int main(int argc, char **argv) {
       else
         readings.push_back(a);
     }
+    if (!personal_entries.empty() && (list || lookup || english || english_words))
+      throw std::runtime_error("fixture entries apply to conversion or English prediction, not lookup modes or --list-categories");
     if (list) {
       auto names = sumire::category_names();
       std::cout << "{\"categories\":[";
@@ -176,6 +198,8 @@ int main(int argc, char **argv) {
       throw std::runtime_error("invalid search limits");
     auto start = std::chrono::steady_clock::now();
     sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates, standalone_priority);
+    const auto personal = personal_entries.empty() ? std::shared_ptr<const sumire::PersonalDictionary>{}
+                                                 : engine.personal_dictionary(std::move(personal_entries));
     sumire::Workspace workspace;
     double load = std::chrono::duration<double, std::milli>(
                       std::chrono::steady_clock::now() - start)
@@ -183,8 +207,8 @@ int main(int argc, char **argv) {
     bool failed = false;
     auto run = [&](const std::string &reading) {
       try {
-        auto r = (predict_english || english_candidates) ? engine.predict_english(reading, count, english_candidates) : english_words ? engine.lookup_english(reading, count) : english ? engine.lookup_english_reading(reading, count) : lookup ? engine.lookup(reading, count)
-                        : engine.convert(reading, count, limit, omission, nullptr, nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search);
+        auto r = (predict_english || english_candidates) ? engine.predict_english(reading, count, english_candidates, personal.get()) : english_words ? engine.lookup_english(reading, count) : english ? engine.lookup_english_reading(reading, count) : lookup ? engine.lookup(reading, count)
+                        : engine.convert(reading, count, limit, omission, personal.get(), nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search);
         std::cout << "{\"reading\":" << json(reading)
                   << ",\"mode\":" << json(bunsetsu_search ? "bunsetsu" : english_candidates ? "english" : predict_english ? "english-predict" : english_words ? "english-lookup" : english ? "english-reading-lookup" : lookup ? "lookup" : "convert")
                   << ",\"complete\":" << (r.complete ? "true" : "false")
