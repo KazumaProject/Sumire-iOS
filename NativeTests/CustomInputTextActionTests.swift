@@ -78,6 +78,84 @@ final class CustomInputTextActionTests: XCTestCase {
         }
     }
 
+    func testCustomShiftConsumesTextButNotCommandsOrInputTextWithoutRebuilding() throws {
+        let fixture = try Fixture(actions: [("shift", "ShiftKey"), ("a", "Text:a"),
+            ("punct", "InputText:-"), ("noop", "DoNothing"), ("empty", "Text:")])
+        let original = try XCTUnwrap(fixture.find("custom-shift"))
+        try fixture.tap("shift")
+        XCTAssertEqual(original.accessibilityValue, "ON")
+        try fixture.tap("noop"); try fixture.tap("punct"); try fixture.tap("empty")
+        XCTAssertEqual(original.accessibilityValue, "ON")
+        try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "-A")
+        XCTAssertEqual(original.accessibilityValue, "OFF")
+        XCTAssertTrue(fixture.find("custom-shift") === original)
+        try fixture.tap("a"); XCTAssertEqual(fixture.reading, "-Aa")
+    }
+    func testCustomCapsLockDirectTextIsAsciiOnlyAndTogglesOff() throws {
+        let fixture = try Fixture(actions: [("caps", "CapLockKey"), ("text", "Text:aßéあ"),
+            ("shift", "ShiftKey")], direct: true)
+        try fixture.tap("caps"); try fixture.tap("text"); try fixture.tap("text")
+        XCTAssertEqual(fixture.inserted, "AßéあAßéあ")
+        XCTAssertEqual(fixture.find("custom-caps")?.accessibilityValue, "Caps Lock")
+        try fixture.tap("shift"); try fixture.tap("text")
+        XCTAssertEqual(fixture.inserted, "AßéあAßéあaßéあ")
+    }
+    func testDefaultRomajiShiftSingleUnitUppercasesPrefixAndPreservesTail() throws {
+        let fixture = try Fixture(actions: [("tail", "Text:あい"), ("left", "MoveCursorLeft"),
+            ("k", "Text:k"), ("a", "Text:a"), ("shift", "ShiftKey")], romaji: true)
+        try fixture.tap("tail"); try fixture.tap("left"); try fixture.tap("k")
+        XCTAssertEqual(fixture.reading, "あkい")
+        try fixture.tap("shift"); try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "あKAい")
+        XCTAssertEqual(fixture.selection.location, "あKA".utf16.count)
+        XCTAssertEqual(fixture.find("custom-shift")?.accessibilityValue, "OFF")
+    }
+    func testDefaultRomajiShiftMultiUnitConvertsShiftedText() throws {
+        let fixture = try Fixture(actions: [("shift", "ShiftKey"), ("ka", "Text:ka")], romaji: true)
+        try fixture.tap("shift"); try fixture.tap("ka")
+        XCTAssertEqual(fixture.reading, "KA")
+        XCTAssertEqual(fixture.find("custom-shift")?.accessibilityValue, "OFF")
+    }
+
+    func testCustomRomajiSingleUnitConvertsThenAppliesShift() throws {
+        let fixture = try Fixture(actions: [("shift", "ShiftKey"), ("a", "Text:a")], romaji: true)
+        var library = RomajiLibrary()
+        let profile = RomajiProfile(name: "Shift fixture", rules: ["a": RomajiRule("x", 1)])
+        library.profiles = [profile]; library.activeID = profile.id
+        try library.save(defaults: fixture.defaults); fixture.surface.reloadRomaji()
+        try fixture.tap("shift"); try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "X")
+        XCTAssertEqual(fixture.find("custom-shift")?.accessibilityValue, "OFF")
+    }
+
+    func testCanonicalShiftPromotesSecondTapToCapsWithoutReplacingControls() async throws {
+        let fixture = try Fixture(actions: [("shift", "ShiftKeyPressed"), ("a", "Text:a")])
+        let original = try XCTUnwrap(fixture.find("custom-shift"))
+        try fixture.tap("shift")
+        XCTAssertEqual(original.accessibilityValue, "ON")
+        try await Task.sleep(nanoseconds: 70_000_000)
+        try fixture.tap("shift")
+        XCTAssertEqual(original.accessibilityValue, "Caps Lock")
+        XCTAssertTrue(fixture.find("custom-shift") === original)
+        try fixture.tap("a"); try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "AA")
+    }
+
+    func testCustomShiftResetsOnEnglishReturnButSurvivesAppearanceRefresh() throws {
+        let fixture = try Fixture(actions: [("caps", "CapLockKey"), ("a", "Text:a"),
+            ("mode", "ChangeInputMode")])
+        try fixture.tap("caps")
+        fixture.surface.reloadAppearance()
+        XCTAssertEqual(fixture.find("custom-caps")?.accessibilityValue, "Caps Lock")
+        try fixture.tap("mode")
+        let back = try XCTUnwrap(fixture.find("custom-input-mode-return") as? UIButton)
+        back.sendActions(for: .touchUpInside)
+        XCTAssertEqual(fixture.find("custom-caps")?.accessibilityValue, "OFF")
+        try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "a")
+    }
+
     func testCursorCommandsPreserveMarkedReadingAndDelegateOutsideComposition() throws {
         let fixture = try Fixture(actions: [("word", "Text:あ👩‍💻い"),
             ("left", "MoveCursorLeft"), ("right", "MoveCursorRight")])

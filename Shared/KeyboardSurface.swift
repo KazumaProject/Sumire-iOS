@@ -350,6 +350,7 @@ final class KeyboardSurface: UIInputView {
     private var displayedInputMode: InputMode { customEnglishVisible ? .english : inputMode }
     private func setCustomEnglishPresentation(_ visible: Bool) {
         beforeInput?(); tapCycle.reset()
+        if !visible { customShift = .off }
         customPresentationOwner = visible ? activeCustomID : nil
         if visible { customPresentation = .english }
         refreshCustomPresentationLanguage()
@@ -421,7 +422,9 @@ final class KeyboardSurface: UIInputView {
         } else { insert?(text) }
     }
     private var customLayouts: [ImportedCustomLayout] = []
-    private var activeCustomID: String?
+    private var activeCustomID: String? {
+        didSet { if activeCustomID != oldValue { customShift = .off } }
+    }
     private var storedCustomID: String?
     func reloadCustomLayouts() {
         do {
@@ -438,6 +441,7 @@ final class KeyboardSurface: UIInputView {
             customModeOverrides = customModeOverrides.filter { id, _ in
                 layouts.first(where: { $0.id == id }) == customLayouts.first(where: { $0.id == id })
             }
+            customShift = .off
             customLayouts = layouts
             storedCustomID = library.activeID
             activeCustomID = library.activeID ?? layouts.first?.id
@@ -448,9 +452,16 @@ final class KeyboardSurface: UIInputView {
             rebuild()
         } catch { showDataNotice(error.localizedDescription) }
     }
+    private var customShift = CustomKeyboardShiftState.off
+    private var customDisplayRefreshes: [() -> Void] = []
+    private var isDefaultCustomRomaji = true
     private var romaji = try? RomajiConverter.standard()
     func reloadRomaji() {
-        do { romaji = try RomajiLibrary.load(defaults: settingsDefaults).converter() }
+        do {
+            let library = try RomajiLibrary.load(defaults: settingsDefaults)
+            romaji = try library.converter()
+            isDefaultCustomRomaji = library.activeID == nil
+        }
         catch { showDataNotice("ローマ字設定: " + error.localizedDescription) }
     }
     private var containsRomaji = false
@@ -1022,6 +1033,7 @@ final class KeyboardSurface: UIInputView {
             addRow(["50音", "🌐"], palette: palette, special: true)
             return
         }
+        customDisplayRefreshes = []
         let layout = presentation ?? ownerLayout
         let targets = CustomLayoutTargets(layouts: customLayouts)
         let tapController = CustomDoubleTapController()
@@ -1065,6 +1077,36 @@ final class KeyboardSurface: UIInputView {
                 tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
             let normalAction = tapAction
+            let textLabels = Set(((runtime.map { Self.customActions(in: $0, targets: targets) } ?? []) + [normalAction]).compactMap { action -> String? in
+                if case .text(let value) = action { return value }
+                return nil
+            })
+            if let flick = key as? MultiStageFlickKey {
+                flick.displayTransform = { [weak self] value in
+                    textLabels.contains(value) ? (self?.customShift.applying(to: value) ?? value) : value
+                }
+            }
+            let refreshDisplay = { [weak self, weak key] in
+                guard let self, let key else { return }
+                let transformMain: Bool
+                if case .text = normalAction { transformMain = true }
+                else { transformMain = !special && type != "NORMAL" }
+                if transformMain {
+                    let title = self.customShift.applying(to: label)
+                    key.setTitle(title, for: .normal); key.accessibilityLabel = title
+                }
+                if case .command(let command) = normalAction, command == .shift || command == .capsLock {
+                    let icon: KeyboardIcon = command == .shift
+                        ? (self.customShift == .locked ? .capsLock : self.customShift == .oneShot ? .shiftActive : .shift)
+                        : (self.customShift == .locked ? .capsLock : .capsLockOutline)
+                    key.setTitle(nil, for: .normal); key.setImage(icon.image, for: .normal)
+                    key.tintColor = palette.foreground
+                    key.accessibilityValue = self.customShift == .locked ? "Caps Lock" : self.customShift == .oneShot ? "ON" : "OFF"
+                }
+                (key as? MultiStageFlickKey)?.refreshDisplayedText()
+            }
+            self.customDisplayRefreshes.append(refreshDisplay)
+            refreshDisplay()
             if case .command(let command) = normalAction, command == .switchDirect || command == .switchRomaji {
                 let mode = self.customInputMode(for: ownerLayout)
                 let icon: KeyboardIcon = command == .switchDirect
@@ -1200,6 +1242,7 @@ final class KeyboardSurface: UIInputView {
         switch action {
         case .unsupported(_, let reason): status.text = reason
         case .switchLayout(let id):
+            customShift = .off
             customModeOverrides.removeValue(forKey: id)
             activeCustomID = id; rememberKeyboard(); rebuild()
         case .inputText(let token):
@@ -1216,6 +1259,8 @@ final class KeyboardSurface: UIInputView {
         case .command(let command):
             switch command {
             case .doNothing: break
+            case .shift: customShift.tapShift(); refreshCustomShiftDisplay()
+            case .capsLock: customShift.tapCapsLock(); refreshCustomShiftDisplay()
             case .delete, .backspace: pressed("⌫")
             case .space, .convert:
                 if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { pressed("空白") }
@@ -1267,15 +1312,30 @@ final class KeyboardSurface: UIInputView {
             composition.append(text); refreshConversion()
         }
     }
+    private func refreshCustomShiftDisplay() {
+        customDisplayRefreshes.forEach { $0() }
+    }
     private func insertCustomText(_ text: String, layout: ImportedCustomLayout) {
         guard !text.isEmpty else { return }
+        let shiftedText = customShift.applying(to: text)
+        defer { customShift.consumeText(text); refreshCustomShiftDisplay() }
         if customInputMode(for: layout).direct {
-            insertCustomDirect(text)
+            insertCustomDirect(shiftedText)
         } else if customInputMode(for: layout).romaji, let romaji {
-            containsRomaji = true; composition.appendRomaji(text, using: romaji); refreshConversion()
+            containsRomaji = true
+            if text.utf16.count == 1 {
+                if isDefaultCustomRomaji && customShift.isActive {
+                    composition.append(text)
+                    composition.transformPrefix { customShift.applying(to: $0) }
+                } else {
+                    composition.appendRomaji(text, using: romaji)
+                    if !isDefaultCustomRomaji { composition.transformPrefix { customShift.applying(to: $0) } }
+                }
+            } else { composition.appendRomaji(shiftedText, using: romaji) }
+            refreshConversion()
         } else {
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
-            containsRomaji = false; composition.append(text); refreshConversion()
+            containsRomaji = false; composition.append(shiftedText); refreshConversion()
         }
     }
     private func addSumireGrid(palette: KeyboardPalette) {
@@ -1987,6 +2047,7 @@ final class KeyboardSurface: UIInputView {
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()
         let previousEnglishComposition = englishComposition
+        customShift = .off
         customPresentationOwner = nil
         if mode == .custom, let customID { customModeOverrides.removeValue(forKey: customID) }
         inputMode = mode

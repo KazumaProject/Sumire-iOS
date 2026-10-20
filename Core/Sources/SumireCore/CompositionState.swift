@@ -39,6 +39,15 @@ public struct CompositionState {
         generation += 1
         phase = .editing
     }
+    /// Transform only the reading before the composing caret, preserving its tail.
+    public mutating func transformPrefix(_ transform: (String) -> String) {
+        let boundary = reading.index(reading.startIndex, offsetBy: cursor)
+        let prefix = transform(String(reading[..<boundary]))
+        reading = prefix + reading[boundary...]
+        cursor = min(prefix.count, reading.count)
+        generation += 1
+        phase = reading.isEmpty ? .idle : .editing
+    }
     @discardableResult public mutating func flushRomaji(using converter: RomajiConverter) -> Bool {
         let boundary = reading.index(reading.startIndex, offsetBy: cursor)
         let prefix = converter.flush(String(reading[..<boundary]))

@@ -4,6 +4,7 @@ import SumireCore
 /// Dedicated nine-direction / circular overlay. It never intercepts the active
 /// touch, and does not collapse diagonal or additional donut slots to five keys.
 final class MultiStageFlickPopupView: UIView {
+    var displayTransform: (String) -> String = { $0 }
     enum Content {
         case grid([MultiFlickDirection: String], selected: MultiFlickDirection?)
         case circle([CircularFlickSlot: CircularFlickOutput], ranges: [CircularFlickSlot: CircularFlickRange], selected: CircularFlickSlot, expanded: Bool)
@@ -41,6 +42,7 @@ final class MultiStageFlickPopupView: UIView {
         frame = CGRect(x: x, y: y, width: width, height: height)
     }
     private func text(_ text: String, in rect: CGRect, selected: Bool, bold: Bool = false) {
+        let text = displayTransform(text)
         let paragraph = NSMutableParagraphStyle(); paragraph.alignment = .center
         let fittedSize = min(fontSize, max(8, rect.width / CGFloat(max(1, text.count))))
         let font = UIFont.systemFont(ofSize: fittedSize, weight: bold ? .bold : .regular)
