@@ -115,6 +115,11 @@ void sumire_result_destroy(sumire_result *result);
 size_t sumire_result_count(const sumire_result *result);
 int sumire_result_candidate(const sumire_result *result, size_t index,
                             sumire_candidate *out);
+/* Optional reading-correction metadata, owned by the result. Non-correction
+ * candidates return empty strings. Display/commit only candidate.text; raw
+ * payload may contain a TAB delimiter. Returns -1 for invalid arguments. */
+int sumire_result_reading_correction(const sumire_result *result, size_t index,
+                                     sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
 /* Interior UTF-16 reading offsets from this candidate's own path. No

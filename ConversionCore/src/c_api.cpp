@@ -220,6 +220,14 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
           0, consumed, c.segments.size()};
   return 0;
 }
+int sumire_result_reading_correction(const sumire_result *result, size_t index,
+                                     sumire_string *raw, sumire_string *reading) {
+  if (!result || !raw || !reading || index >= sumire_result_count(result)) return -1;
+  const auto &candidate = result->snapshot->value.candidates[index];
+  *raw = string(candidate.raw_text);
+  *reading = string(candidate.corrected_reading);
+  return 0;
+}
 int sumire_result_segment(const sumire_result *result, size_t candidate,
                           size_t index, sumire_segment *out) {
   if (!result || !out || candidate >= sumire_result_count(result))
