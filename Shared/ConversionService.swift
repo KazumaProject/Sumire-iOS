@@ -76,7 +76,7 @@ final class ConversionService {
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
-        let locations = ["standard-mozc-scoring-auxiliary-english", "cli-priority-v1", "cli-english-v1"].flatMap { name in
+        let locations = ["standard-mozc-scoring-auxiliary-correction-english", "standard-mozc-scoring-auxiliary-english", "cli-priority-v1", "cli-english-v1"].flatMap { name in
             [bundle.appendingPathComponent(name, isDirectory: true),
              bundle.appendingPathComponent("PlugIns/SumireKeyboard.appex/" + name, isDirectory: true)]
         }

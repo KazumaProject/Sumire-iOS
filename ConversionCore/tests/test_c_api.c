@@ -98,6 +98,26 @@ static void test_category_prediction(const char *directory) {
     found = 1;
   }
   CHECK(found);
+  int correction_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    sumire_string raw, corrected;
+    CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+    CHECK(sumire_result_reading_correction(result,i,&raw,&corrected) == 0);
+    if (!raw.size) { CHECK(corrected.size == 0); continue; }
+    CHECK(raw.size == strlen("訂正\tていせい") &&
+          memcmp(raw.data,"訂正\tていせい",raw.size) == 0);
+    CHECK(corrected.size == strlen("ていせい") &&
+          memcmp(corrected.data,"ていせい",corrected.size) == 0);
+    CHECK(candidate.text.size == strlen("訂正") &&
+          memcmp(candidate.text.data,"訂正",candidate.text.size) == 0);
+    CHECK(candidate.length_utf16 == 3 && candidate.score == 8200);
+    correction_found = 1;
+  }
+  CHECK(correction_found);
+  sumire_string unused;
+  CHECK(sumire_result_reading_correction(NULL,0,&unused,&unused) == -1);
+  CHECK(sumire_result_reading_correction(result,sumire_result_count(result),&unused,&unused) == -1);
   sumire_result_destroy(result);
 }
 static void test_pathless_kana_ranges(const char *directory) {

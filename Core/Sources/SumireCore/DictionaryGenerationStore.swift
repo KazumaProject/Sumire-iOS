@@ -42,7 +42,7 @@ public struct DictionaryGenerationStore {
     private var currentPointer: URL { directory.appendingPathComponent("current.json") }
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
     private static let knownFiles = Set((DictionaryArchivePlan.categoryIDs + [
-        "system", "english", "english_reading", "connection"
+        "system", "english", "english_reading", "connection", "reading_correction"
     ]).map { $0 + ".sud" })
 
     /// Reads only pointer/manifest metadata and verifies all referenced files

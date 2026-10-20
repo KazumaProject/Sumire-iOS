@@ -14,6 +14,8 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         try Data("base system".utf8).write(to: base.appendingPathComponent("system.sud"))
         try Data("base connection".utf8).write(to: base.appendingPathComponent("connection.sud"))
         try Data("base person".utf8).write(to: base.appendingPathComponent("person.sud"))
+        let correction = Data("immutable reading correction".utf8)
+        try correction.write(to: base.appendingPathComponent("reading_correction.sud"))
         let systemImport = incoming.appendingPathComponent("system.sud")
         try Data("imported system".utf8).write(to: systemImport)
 
@@ -22,6 +24,7 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: first.directory.appendingPathComponent("connection.sud")), Data("base connection".utf8))
         XCTAssertEqual(try Data(contentsOf: first.directory.appendingPathComponent("person.sud")), Data("base person".utf8))
         XCTAssertEqual(store.loadCurrent()?.generation, first.generation)
+        XCTAssertEqual(try Data(contentsOf: first.directory.appendingPathComponent("reading_correction.sud")), correction)
 
         let personImport = incoming.appendingPathComponent("person.sud")
         try Data("imported person".utf8).write(to: personImport)
@@ -30,6 +33,7 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertEqual(try Data(contentsOf: second.directory.appendingPathComponent("system.sud")), Data("imported system".utf8))
         XCTAssertEqual(try Data(contentsOf: second.directory.appendingPathComponent("person.sud")), Data("imported person".utf8))
         XCTAssertEqual(store.loadCurrent()?.generation, second.generation)
+        XCTAssertEqual(try Data(contentsOf: second.directory.appendingPathComponent("reading_correction.sud")), correction)
 
         try Data("interrupted pointer".utf8).write(to: store.directory.appendingPathComponent("current.json"), options: .atomic)
         let recovered = try XCTUnwrap(store.loadCurrent())

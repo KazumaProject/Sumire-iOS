@@ -40,11 +40,11 @@ python3 Scripts/build_dictionary.py --english --english-reading \
 
 v5の単独読み優先辞書も検証して`standalone.sud`へ変換します。優先フラグはスコアと独立しており、分類辞書の完全一致はN-best件数とは別に統合します。同点の主候補はUTF-16の表記順です。CLIの`standalone_priority_available`で搭載を確認できます。旧辞書は読めますが、この値がfalseのとき単独読み優先は利用できません。既定の生成処理は文節探索用GNKG v3/v4とMozcの採点資産も、元値を変えずに辞書世代へコピーします。
 
-iOS Simulator/実機ビルドのresource folderは、リポジトリの隣にある`../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english`です。アプリ用世代は次のように別の空ディレクトリへ生成します（既存世代は上書きしません）。
+iOS Simulator/実機ビルドのresource folderは、リポジトリの隣にある`../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english`です。アプリ用世代は次のように別の空ディレクトリへ生成します（既存世代は上書きしません）。
 
 ```sh
 python3 Scripts/build_dictionary.py --english --english-reading \
-  --output ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english
+  --output ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english
 ```
 
 入力・出力のハッシュ、出典とライセンス通知は生成先の `manifest.json` と `licenses/` に保存します。各辞書の条件はプログラムのライセンスと別に確認が必要です。特に英語データの適用ライセンスには未確認事項があり、配布条件の確認完了を意味しません。
@@ -116,11 +116,11 @@ git -C "$SUMIRE_REFERENCE_ASSETS" rev-parse HEAD
 swift test --package-path Core --filter DictionarySourceValidationTests
 ```
 
-実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` です。
+実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english` です。
 
 ```sh
 export SUMIRE_REFERENCE_SOURCE_ZIP=/path/to/android-dictionary.zip
-export SUMIRE_REFERENCE_NATIVE_DICTIONARIES="$HOME/sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english"
+export SUMIRE_REFERENCE_NATIVE_DICTIONARIES="$HOME/sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english"
 export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
 xcodegen generate
 xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
@@ -131,7 +131,7 @@ xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
 
 参照manifestの `source_revision` は固定Android revision `df1f38315bf56d860d32919a3eaed6a75499e91e` と照合し、変換された34ファイルのSHA-256を比較します。このSimulatorテストは実機App Groups共有やキーボード拡張のFull Access OFF動作を検証するものではありません。
 
-`project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
+`project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
 
