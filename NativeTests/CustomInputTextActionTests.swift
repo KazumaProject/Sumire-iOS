@@ -17,13 +17,19 @@ final class CustomInputTextActionTests: XCTestCase {
         var inserted = ""
         var selection = NSRange(location: 0, length: 0)
         var rawParts: [(left: String, tail: String)] = []
-        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false) throws {
+        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
             editor.setInputMode(romaji: romaji, direct: direct)
             for (index, item) in actions.enumerated() {
                 editor.putKey(id: item.0, label: item.0, action: item.1, special: true,
                               row: 0, column: index * 2, height: 2, width: 2)
+            }
+            if flickToggle {
+                try editor.setKeyType(id: "toggle", type: "STANDARD_FLICK")
+                try editor.setGestureMappings(id: "toggle", field: "flicks", mappings: [
+                    .object(["flickDirection": .string("UP"), "actionType": .string("TOGGLE_CASE")])
+                ])
             }
             var library = CustomKeyboardLibrary()
             try library.append([editor.validated()])
@@ -154,6 +160,57 @@ final class CustomInputTextActionTests: XCTestCase {
         XCTAssertEqual(fixture.find("custom-caps")?.accessibilityValue, "OFF")
         try fixture.tap("a")
         XCTAssertEqual(fixture.reading, "a")
+    }
+
+    func testCustomCaseCommandsModifyLatinAndKanaAtCaretWithoutTouchingTail() throws {
+        for command in ["a/A", "小゛゜"] {
+            let fixture = try Fixture(actions: [("word", "Text:a👩‍💻い"), ("left", "MoveCursorLeft"), ("toggle", command)])
+            try fixture.tap("word"); try fixture.tap("left"); try fixture.tap("left")
+            try fixture.tap("toggle")
+            XCTAssertEqual(fixture.reading, "A👩‍💻い")
+            XCTAssertEqual(fixture.selection.location, 1)
+            XCTAssertEqual(fixture.inserted, "")
+            try fixture.tap("toggle"); XCTAssertEqual(fixture.reading, "a👩‍💻い")
+        }
+        let kana = try Fixture(actions: [("word", "Text:つ尾"), ("left", "MoveCursorLeft"), ("toggle", "a/A")])
+        try kana.tap("word"); try kana.tap("left")
+        for expected in ["っ尾", "づ尾", "つ尾"] {
+            try kana.tap("toggle"); XCTAssertEqual(kana.reading, expected)
+        }
+    }
+    func testCustomCaseFlickExecutesCommandAndNeverInsertsActionName() throws {
+        let fixture = try Fixture(actions: [("word", "Text:z"), ("toggle", "a/A")], flickToggle: true)
+        try fixture.tap("word"); try fixture.numberFlick("toggle", .up)
+        XCTAssertEqual(fixture.reading, "Z")
+        XCTAssertEqual(fixture.inserted, "")
+    }
+    func testCustomCaseNoopsAtStartDirectEditorAndUnsupportedUnicode() throws {
+        let direct = try Fixture(actions: [("word", "Text:abc"), ("toggle", "a/A")], direct: true)
+        try direct.tap("word"); try direct.tap("toggle")
+        XCTAssertEqual(direct.inserted, "abc"); XCTAssertEqual(direct.reading, "")
+        for text in ["か\u{3099}", "a\u{301}", "👩‍💻", "ア"] {
+            let fixture = try Fixture(actions: [("word", "Text:" + text), ("toggle", "a/A"), ("left", "MoveCursorLeft")])
+            try fixture.tap("word"); try fixture.tap("toggle")
+            XCTAssertEqual(Array(fixture.reading.utf16), Array(text.utf16))
+            XCTAssertEqual(fixture.inserted, "")
+            try fixture.tap("left"); try fixture.tap("toggle")
+            XCTAssertEqual(Array(fixture.reading.utf16), Array(text.utf16))
+        }
+    }
+
+    func testCustomCaseCommandsPreservePendingShiftAndCapsLock() throws {
+        for state in [("shift", "ShiftKeyPressed", "ON"), ("caps", "CapLockKey", "Caps Lock")] {
+            let fixture = try Fixture(actions: [(state.0, state.1), ("word", "Text:a"), ("toggle", "a/A")])
+            try fixture.tap("word")
+            try fixture.tap(state.0)
+            try fixture.tap("toggle")
+            XCTAssertEqual(fixture.reading, "A")
+            XCTAssertEqual(fixture.find("custom-" + state.0)?.accessibilityValue, state.2)
+            try fixture.tap("word")
+            XCTAssertEqual(fixture.reading, "AA")
+            XCTAssertEqual(fixture.find("custom-" + state.0)?.accessibilityValue,
+                           state.0 == "shift" ? "OFF" : "Caps Lock")
+        }
     }
 
     func testCursorCommandsPreserveMarkedReadingAndDelegateOutsideComposition() throws {

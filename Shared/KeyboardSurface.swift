@@ -1272,7 +1272,7 @@ final class KeyboardSurface: UIInputView {
             case .deleteUntilBoundary: executeSpecialAction(.deleteUntilBoundary, prepareInput: false)
             case .openSymbols: showSymbolKeyboard()
             case .nextKeyboard: pressed("🌐")
-            case .modifier: pressed("゛")
+            case .modifier, .toggleCase: applyCustomCharacterModifier()
             case .changeMode: setCustomEnglishPresentation(!customNumberVisible)
             case .switchKana: setCustomEnglishPresentation(false)
             case .switchEnglish: setCustomEnglishPresentation(true)
@@ -1296,6 +1296,12 @@ final class KeyboardSurface: UIInputView {
                 if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { commitRawAtCursorAndSpace() }
             }
         }
+    }
+    private func applyCustomCharacterModifier() {
+        guard let previous = composition.characterBeforeCursor,
+              let changed = CustomCharacterModifier.modified(previous) else { return }
+        _ = composition.replaceLast(String(changed))
+        refreshConversion()
     }
     private func applyCustomInputMarker(_ marker: SumireFlickMarker) {
         guard let previous = composition.characterBeforeCursor,

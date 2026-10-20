@@ -203,6 +203,7 @@ public enum CustomMultiStageFlick {
             case .capsLock: return "Caps Lock"
             case .nextKeyboard: return "🌐"
             case .modifier: return "゛"
+            case .toggleCase: return "a/A"
             case .changeMode: return "モード"
             case .moveCustomKeyboardTab: return "配列"
             }

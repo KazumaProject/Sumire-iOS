@@ -13,6 +13,7 @@ public enum CustomKeyAction: Codable, Equatable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
         case paste = "Paste", cursorLeft = "MoveCursorLeft", cursorRight = "MoveCursorRight", nextKeyboard = "SwitchToNextIme"
+        case toggleCase = "a/A"
         case modifier = "小゛゜", changeMode = "ChangeInputMode", moveCustomKeyboardTab = "MoveCustomKeyboardTab"
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
@@ -42,7 +43,7 @@ public enum CustomKeyAction: Codable, Equatable {
                        "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "MOVE_CURSOR_RIGHT": "MoveCursorRight",
                        "SWITCH_TO_KANA_LAYOUT": "SwitchToKanaLayout", "SWITCH_TO_ENGLISH_LAYOUT": "SwitchToEnglishLayout",
                        "SWITCH_TO_NUMBER_LAYOUT": "SwitchToNumberLayout", "DELETE_UNTIL_SYMBOL": "DeleteUntilSymbol", "SHOW_EMOJI_KEYBOARD": "ShowEmojiKeyboard", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
-                       "TOGGLE_DAKUTEN": "小゛゜", "CHANGE_INPUT_MODE": "ChangeInputMode"]
+                       "TOGGLE_DAKUTEN": "小゛゜", "TOGGLE_CASE": "a/A", "CHANGE_INPUT_MODE": "ChangeInputMode"]
         if let command = decodedCommand(aliases[type] ?? type) { return .command(command) }
         return .unsupported(raw: type + ":" + (value ?? ""), reason: "このフリック操作はiOS側で未対応です")
     }
