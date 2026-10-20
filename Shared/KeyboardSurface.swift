@@ -16,6 +16,7 @@ final class KeyboardSurface: UIInputView {
     var updateMarkedText: ((String) -> Void)?
     var updateMarkedSelection: ((String, NSRange) -> Void)?
     var commitMarkedText: ((String) -> Void)?
+    var commitRawTextAndSpace: ((String, String) -> Void)?
     var liveConversion = false {
         didSet {
             guard oldValue != liveConversion else { return }
@@ -1158,7 +1159,7 @@ final class KeyboardSurface: UIInputView {
                 if layout.source["layout"]?["isDirectMode"] == .bool(true) { insert?(" ") }
                 else if hasComposition { pressed("空白") }
                 else { insert?(command == .fullSpace ? "　" : " ") }
-            case .commitAndSpace: commitComposition(); insert?(" ")
+            case .commitAndSpace: commitRawAtCursorAndSpace()
             }
         }
     }
@@ -1815,6 +1816,27 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = index
         commitComposition()
     }
+    private func commitRawAtCursorAndSpace() {
+        guard let commitRawTextAndSpace else {
+            showDataNotice("この入力先では読みの確定と空白挿入を実行できません")
+            return
+        }
+        let parts = composition.commitRawAtCursorAndSpace()
+        // This action commits raw text, never the selected surface or a learned
+        // candidate. Clearing the generation also rejects in-flight results.
+        containsRomaji = false
+        englishComposition = false
+        converted = []
+        resultGeneration = nil
+        selectedCandidate = nil
+        candidateBar.isUpdating = false
+        candidateBar.candidates = []
+        converter.reset()
+        commitRawTextAndSpace(parts.left, parts.tail)
+        status.text = "Sumire · C++変換"
+        updateSumireKeys()
+    }
+
     private func commitComposition() {
         if selectedCandidate == nil, containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)

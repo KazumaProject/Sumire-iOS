@@ -278,6 +278,14 @@ struct InputHarness: UIViewRepresentable {
                 text.insertText(value)
             }
         }
+        surface.commitRawTextAndSpace = { [weak text, weak coordinator] left, tail in
+            coordinator?.perform {
+                guard let text else { return }
+                RawSpaceCommit.apply(left: left, tail: tail,
+                    setMarked: { text.setMarkedText($0, selectedRange: $1) },
+                    unmark: { text.unmarkText() }, insert: { text.insertText($0) })
+            }
+        }
         surface.moveCursorLeft = { [weak text, weak coordinator] in
             coordinator?.perform {
                 guard let text, text.selectedRange.location > 0 else { return }

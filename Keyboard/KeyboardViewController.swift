@@ -60,6 +60,13 @@ final class KeyboardViewController: UIInputViewController {
             // operation, so a following cursor action does not target marked text.
             self.perform { $0.insertText(text) }
         }
+        surface.commitRawTextAndSpace = { [weak self] left, tail in
+            self?.perform { proxy in
+                RawSpaceCommit.apply(left: left, tail: tail,
+                    setMarked: { proxy.setMarkedText($0, selectedRange: $1) },
+                    unmark: { proxy.unmarkText() }, insert: { proxy.insertText($0) })
+            }
+        }
         surface.moveCursorLeft = { [weak self] in
             guard let self, let last = self.textDocumentProxy.documentContextBeforeInput?.last else { return }
             self.perform { $0.adjustTextPosition(byCharacterOffset: -String(last).utf16.count) }

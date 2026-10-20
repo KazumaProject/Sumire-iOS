@@ -16,6 +16,7 @@ final class CustomInputTextActionTests: XCTestCase {
         var reading = ""
         var inserted = ""
         var selection = NSRange(location: 0, length: 0)
+        var rawParts: [(left: String, tail: String)] = []
         init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
@@ -37,6 +38,11 @@ final class CustomInputTextActionTests: XCTestCase {
             surface.insert = { [weak self] in self?.inserted += $0 }
             surface.commitMarkedText = { [weak self] text in
                 self?.inserted += text
+                self?.reading = ""
+            }
+            surface.commitRawTextAndSpace = { [weak self] left, tail in
+                self?.rawParts.append((left, tail))
+                self?.inserted += left + " " + tail
                 self?.reading = ""
             }
             surface.reloadCustomLayouts()
@@ -249,6 +255,41 @@ final class CustomInputTextActionTests: XCTestCase {
         XCTAssertEqual(keyboardCalls, 1)
         XCTAssertEqual(fixture.inserted, "2")
         XCTAssertEqual(fixture.reading, "")
+    }
+
+    func testRawSpaceCommitsAtCaretAndKeepsPendingRomajiLiteral() throws {
+        let middle = try Fixture(actions: [("word", "Text:あ👩‍💻い"),
+            ("left", "MoveCursorLeft"), ("space", "CommitAndInsertSpace")])
+        try middle.tap("word"); try middle.tap("left"); try middle.tap("space")
+        XCTAssertEqual(middle.rawParts.first?.left, "あ👩‍💻")
+        XCTAssertEqual(middle.rawParts.first?.tail, "い")
+        XCTAssertEqual(middle.inserted, "あ👩‍💻 い")
+        XCTAssertEqual(middle.reading, "")
+        XCTAssertTrue(middle.surface.candidateBar.candidates.isEmpty)
+        try middle.tap("space")
+        XCTAssertEqual(middle.inserted, "あ👩‍💻 い ")
+        let pending = try Fixture(actions: [("n", "Text:n"), ("space", "CommitAndInsertSpace")], romaji: true)
+        try pending.tap("n"); try pending.tap("space")
+        XCTAssertEqual(pending.inserted, "n ")
+        XCTAssertEqual(pending.rawParts.first?.left, "n")
+        XCTAssertEqual(pending.reading, "")
+    }
+
+    func testRawSpaceIgnoresSelectedConversionSurface() throws {
+        let fixture = try Fixture(actions: [("word", "Text:にほんご"), ("convert", "Convert"),
+            ("space", "CommitAndInsertSpace")])
+        try fixture.tap("word")
+        let ready = expectation(for: NSPredicate { _, _ in
+            fixture.surface.candidateBar.candidates.contains("日本語")
+        }, evaluatedWith: nil)
+        wait(for: [ready], timeout: 10)
+        try fixture.tap("convert")
+        XCTAssertNotEqual(fixture.reading, "にほんご", "Selected preview must differ from raw reading")
+        try fixture.tap("space")
+        XCTAssertEqual(fixture.inserted, "にほんご ")
+        XCTAssertEqual(fixture.rawParts.first?.left, "にほんご")
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertTrue(fixture.surface.candidateBar.candidates.isEmpty)
     }
 
     func testKanaMarkersModifyPriorKanaWithoutInsertingTheirNames() throws {
