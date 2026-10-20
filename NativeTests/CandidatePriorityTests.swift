@@ -36,7 +36,7 @@ final class CandidatePriorityTests: XCTestCase {
     }
     func testCategoryOriginsReachSwiftAndLegacyGenerationReportsMissingPriority() throws {
         let all = try convert(ConversionService(categoryMask: 0x3fff_ffff), "とうきょう", generation: 1)
-        XCTAssertTrue(all.candidates.contains { $0.text == "Tokyo" && $0.dictionaries.contains("place") })
+        XCTAssertTrue(all.candidates.contains { $0.text == "Tokyo" && $0.classifiedCategories.contains("place") })
         let source = try XCTUnwrap(ConversionService.bundledDictionary)
         let legacy = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         try FileManager.default.createDirectory(at: legacy, withIntermediateDirectories: true)

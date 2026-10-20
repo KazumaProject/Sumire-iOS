@@ -1,7 +1,30 @@
 import XCTest
 import UIKit
+import SumireCore
 
 final class CandidateBarTests: XCTestCase {
+    func testProductionBridgePreservesPrimaryNumericAndPersonalOrigins() throws {
+        let service = ConversionService(categoryMask: 0)
+        func convert(_ reading: String, generation: UInt64) throws -> [ConversionCandidate] {
+            let completed = expectation(description: "Primary presentation metadata")
+            var response: Result<ConversionResponse, Error>?
+            service.convert(reading, generation: generation, editStart: 0) { response = $0; completed.fulfill() }
+            wait(for: [completed], timeout: 20)
+            return try XCTUnwrap(response).get().candidates
+        }
+        for (index, entry) in [("12", "[半]"), ("１２", "[全]")].enumerated() {
+            let candidates = try convert(entry.0, generation: UInt64(index + 1))
+            let primary = try XCTUnwrap(candidates.first { $0.text == entry.0 && !$0.dictionaries.isEmpty })
+            XCTAssertEqual(primary.displayAnnotation, entry.1)
+        }
+        var personal = PersonalLexicon()
+        personal.words = [PersonalWord(word: "１", reading: "ばっじ", posScore: -10000)]
+        service.setPersonal(personal)
+        let candidates = try convert("ばっじ", generation: 3)
+        let user = try XCTUnwrap(candidates.first { $0.text == "１" && $0.dictionaries.contains("user") })
+        XCTAssertNil(user.displayAnnotation)
+        XCTAssertEqual(user.presentationKind, .none)
+    }
     private func withBar(rows: Int = 1, _ body: @escaping (CandidateBar, UICollectionView) -> Void) {
         let finished = expectation(description: "Rendered candidate bar")
         DispatchQueue.main.async {
@@ -79,17 +102,56 @@ final class CandidateBarTests: XCTestCase {
 
     func testDisplayMergePreservesFirstBehaviorAndUnionsDictionaryLabels() {
         let first = ConversionCandidate(id: 11, text: "橋", score: 90,
-            range: NSRange(location: 0, length: 1), dictionaries: ["system"], isReadingPrefix: true)
+            range: NSRange(location: 0, length: 1), dictionaries: ["system"], isReadingPrefix: true,
+            classifiedCategories: ["term"])
         let duplicate = ConversionCandidate(id: 12, text: "橋", score: 1,
-            range: NSRange(location: 0, length: 2), dictionaries: ["category", "system"])
+            range: NSRange(location: 0, length: 2), dictionaries: ["category", "system"],
+            presentationKind: .fullWidth, classifiedCategories: ["person", "term"])
         let distinct = ConversionCandidate(id: 13, text: "箸", score: 2,
             range: NSRange(location: 0, length: 2), dictionaries: [])
         let merged = ConversionCandidate.mergedForDisplay([first, distinct, duplicate])
         XCTAssertEqual(merged.map(\.id), [11, 13])
         XCTAssertEqual(merged[0].score, 90)
         XCTAssertEqual(merged[0].range, first.range)
-        XCTAssertEqual(merged[0].displayAnnotation, "[部]")
-        XCTAssertEqual(merged[0].dictionaries, ["system", "category"])
+        XCTAssertEqual(merged[0].displayAnnotation, "[部] [人名・用語]")
+        XCTAssertEqual(merged[0].dictionaries, ["system"])
+        XCTAssertEqual(merged[0].presentationKind, .none)
+    }
+
+    func testOriginBadgesDoNotInferPrimaryKindFromSurface() {
+        func candidate(_ text: String, _ kind: ConversionCandidate.PresentationKind) -> ConversionCandidate {
+            ConversionCandidate(id: 1, text: text, score: 1,
+                range: NSRange(location: 0, length: 1), dictionaries: ["person"], presentationKind: kind)
+        }
+        XCTAssertNil(candidate("ｶﾞ", .none).displayAnnotation)
+        XCTAssertEqual(candidate("ｶﾞ", .halfWidth).displayAnnotation, "[半]")
+        XCTAssertEqual(candidate("Ａ", .fullWidth).displayAnnotation, "[全]")
+        for text in ["1", "!?", " "] { XCTAssertEqual(candidate(text, .numericSymbol).displayAnnotation, "[半]") }
+        for text in ["１", "！？", "　"] { XCTAssertEqual(candidate(text, .numericSymbol).displayAnnotation, "[全]") }
+        for text in ["abc", "123", "Ａ", "ｶﾞ", "1！", ""] { XCTAssertNil(candidate(text, .numericSymbol).displayAnnotation, text) }
+    }
+
+    func testCorrectionAndCategoryBadgesRenderAndKeepCommitIdentity() {
+        let candidate = ConversionCandidate(id: 50, text: "橋", score: 4,
+            range: NSRange(location: 0, length: 1), dictionaries: ["system"],
+            rawText: "橋\tはし", correctedReading: "はし", isReadingPrefix: true,
+            classifiedCategories: ["term", "unknown", "person", "term"])
+        XCTAssertEqual(candidate.displayAnnotation, "[読] はし [人名・用語]")
+        for expanded in [false, true] {
+            withBar { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                bar.setCandidates([.init(text: candidate.text, annotation: candidate.displayAnnotation)])
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                let cell = list.cellForItem(at: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(cell?.accessibilityValue, candidate.displayAnnotation)
+                var selected: ConversionCandidate?
+                bar.onSelect = { _ in selected = candidate }
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(selected?.id, 50)
+                XCTAssertEqual(selected?.text, "橋")
+                XCTAssertEqual(selected?.range.length, 1)
+            }
+        }
     }
 
     func testMergedCandidatesSelectFirstIdentityInNormalAndExpandedBars() {

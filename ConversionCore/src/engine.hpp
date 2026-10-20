@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 namespace sumire {
+enum class CandidatePresentationKind : uint32_t {
+  none = 0, half_width = 1, full_width = 2, numeric_symbol = 3
+};
 struct Segment {
   std::string text, dictionary;
   uint32_t start, length;
@@ -24,6 +27,7 @@ struct Candidate {
   std::string corrected_reading{};
   // Reference type 5: a yomiPartList match shorter than the input (type 2 otherwise).
   bool is_reading_prefix = false;
+  CandidatePresentationKind presentation_kind = CandidatePresentationKind::none;
 };
 struct CandidateSplitPattern {
   std::string surface;

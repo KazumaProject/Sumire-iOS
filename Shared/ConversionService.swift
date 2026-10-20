@@ -4,6 +4,7 @@ import os
 import SumireCore
 
 struct ConversionCandidate {
+    enum PresentationKind: UInt32 { case none = 0, halfWidth = 1, fullWidth = 2, numericSymbol = 3 }
     let id: UInt64
     let text: String
     let score: Int64
@@ -12,12 +13,49 @@ struct ConversionCandidate {
     let rawText: String?
     let correctedReading: String?
     let isReadingPrefix: Bool
+    let presentationKind: PresentationKind
+    let classifiedCategories: [String]
     var displayAnnotation: String? {
-        if let correctedReading, !correctedReading.isEmpty { return "[読] " + correctedReading }
-        return isReadingPrefix ? "[部]" : nil
+        let badge: String
+        if let correctedReading, !correctedReading.isEmpty { badge = "[読] " + correctedReading }
+        else if isReadingPrefix { badge = "[部]" }
+        else {
+            switch presentationKind {
+            case .none: badge = ""
+            case .halfWidth: badge = "[半]"
+            case .fullWidth: badge = "[全]"
+            case .numericSymbol:
+                let units = Array(text.utf16)
+                if (1...2).contains(units.count), units.allSatisfy(Self.halfWidthNumericSymbol) { badge = "[半]" }
+                else if (1...2).contains(units.count), units.allSatisfy(Self.fullWidthNumericSymbol) { badge = "[全]" }
+                else { badge = "" }
+            }
+        }
+        let labels = Self.categoryLabels.filter { classifiedCategories.contains($0.0) }.map(\.1)
+        let categoryBadge = labels.isEmpty ? "" : "[" + labels.joined(separator: "・") + "]"
+        let value = [badge, categoryBadge].filter { !$0.isEmpty }.joined(separator: " ")
+        return value.isEmpty ? nil : value
+    }
+    // Pinned df1f383 ClassifiedDictionaries order and Japanese label resources.
+    private static let categoryLabels: [(String, String)] = [
+        ("person", "人名"), ("character", "キャラクター"), ("mythological_figure", "神話・伝承"),
+        ("place", "地名"), ("address", "住所"), ("station", "駅・停留所"), ("facility", "施設"),
+        ("transport_route", "交通路線"), ("organization", "組織"), ("lineage", "家系・氏族"),
+        ("product", "商品・サービス"), ("vehicle", "車両・船舶"), ("event", "イベント・事件"),
+        ("award", "賞"), ("agreement", "条約・協定"), ("initiative", "事業・キャンペーン"),
+        ("term", "用語"), ("work_franchise", "作品シリーズ"), ("work_manga", "漫画"),
+        ("work_anime", "アニメ"), ("work_film", "映画"), ("work_program", "番組"),
+        ("work_book", "書籍"), ("work_game", "ゲーム"), ("work_music", "音楽"),
+        ("work_stage", "舞台"), ("work_periodical", "定期刊行物"), ("work_other", "その他作品"),
+        ("kampo", "漢方・生薬"), ("medical", "医療")]
+    private static func halfWidthNumericSymbol(_ unit: UInt16) -> Bool {
+        (0x20...0x40).contains(unit) || (0x5b...0x60).contains(unit) || (0x7b...0x7e).contains(unit)
+    }
+    private static func fullWidthNumericSymbol(_ unit: UInt16) -> Bool {
+        unit == 0x3000 || (0xff01...0xff20).contains(unit) || (0xff3b...0xff40).contains(unit) || (0xff5b...0xff5e).contains(unit)
     }
     /// Match the pinned Android display merger: raw UTF-16 identity, first
-    /// candidate behavior/order, and dictionary labels from equal commits.
+    /// candidate behavior/order, and classified labels from equal commits.
     /// Swift String equality folds canonical equivalents; Kotlin does not.
     static func mergedForDisplay(_ candidates: [ConversionCandidate]) -> [ConversionCandidate] {
         var positions: [[UInt16]: Int] = [:]
@@ -32,15 +70,16 @@ struct ConversionCandidate {
             }
             let first = merged[index]
             guard first.text.utf16.elementsEqual(candidate.text.utf16) else { continue }
-            var dictionaries = first.dictionaries
-            for name in candidate.dictionaries where !dictionaries.contains(name) {
-                dictionaries.append(name)
+            var categories = first.classifiedCategories
+            for name in candidate.classifiedCategories where !categories.contains(name) {
+                categories.append(name)
             }
-            guard dictionaries != first.dictionaries else { continue }
+            guard categories != first.classifiedCategories else { continue }
             merged[index] = ConversionCandidate(id: first.id, text: first.text,
-                score: first.score, range: first.range, dictionaries: dictionaries,
+                score: first.score, range: first.range, dictionaries: first.dictionaries,
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
-                correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix)
+                correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
+                presentationKind: first.presentationKind, classifiedCategories: categories)
         }
         return merged
     }
@@ -50,7 +89,8 @@ struct ConversionCandidate {
 
     init(id: UInt64, text: String, score: Int64, range: NSRange,
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
-         rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false) {
+         rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
+         presentationKind: PresentationKind = .none, classifiedCategories: [String] = []) {
         self.id = id
         self.text = text
         self.score = score
@@ -60,6 +100,8 @@ struct ConversionCandidate {
         self.rawText = rawText
         self.correctedReading = correctedReading
         self.isReadingPrefix = isReadingPrefix
+        self.presentationKind = presentationKind
+        self.classifiedCategories = classifiedCategories
     }
 }
 struct ConversionResponse {
@@ -197,6 +239,11 @@ final class ConversionService {
                     guard sumire_result_candidate_flags(result, index, &candidateFlags) == 0 else {
                         throw NativeError("候補の種類を取得できませんでした")
                     }
+                    var kind: UInt32 = 0
+                    guard sumire_result_candidate_presentation_kind(result, index, &kind) == 0,
+                          let presentationKind = ConversionCandidate.PresentationKind(rawValue: kind) else {
+                        throw NativeError("候補の表示情報が不正です")
+                    }
                     let range = NSRange(location: Int(candidate.start_utf16), length: Int(candidate.length_utf16))
                     // Auxiliary and predicted entries can be malformed for this
                     // input range. They must not make the complete conversion fail
@@ -216,13 +263,14 @@ final class ConversionService {
                         let name = Self.copy(segment.dictionary)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
                     }
+                    var classifiedCategories: [String] = []
                     for categoryIndex in 0..<sumire_result_category_count(result, index) {
                         var category = sumire_string()
                         guard sumire_result_category(result, index, categoryIndex, &category) == 0 else {
                             throw NativeError("候補の辞書分類が不正です")
                         }
                         let name = Self.copy(category)
-                        if !dictionaries.contains(name) { dictionaries.append(name) }
+                        if !classifiedCategories.contains(name) { classifiedCategories.append(name) }
                     }
                     var bunsetsu: [BunsetsuSegment] = []
                     if includeBunsetsu || bunsetsuSearch {
@@ -248,7 +296,9 @@ final class ConversionService {
                                                           dictionaries: dictionaries, bunsetsu: bunsetsu,
                                                           rawText: rawText.isEmpty ? nil : rawText,
                                                           correctedReading: correctedReading.isEmpty ? nil : correctedReading,
-                                                          isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0))
+                                                          isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0,
+                                                          presentationKind: presentationKind,
+                                                          classifiedCategories: classifiedCategories))
                 }
                 candidates = ConversionCandidate.mergedForDisplay(candidates)
                 state.lastReading = reading
