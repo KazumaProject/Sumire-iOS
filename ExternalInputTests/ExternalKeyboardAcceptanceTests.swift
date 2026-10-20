@@ -1,9 +1,12 @@
 import XCTest
 
 /// Cross-process tests. The host contains no keyboard implementation or InputHarness.
-/// Install the Sumire containing app on the destination, enable Sumire manually,
-/// and select its Japanese Sumire/TenKey/50音 layout first. The scheme builds
-/// the containing app, but Xcode installs only this test host automatically.
+/// Before running, enable Sumire manually and select its Japanese Sumire/TenKey/50音
+/// layout. The scheme builds the containing app and keyboard extension as well as
+/// this host/runner. The generated .xctestrun may include them as dependent products:
+/// inspect its staging paths and keep app/extension binaries from the same source
+/// revision and signing configuration. Do not assume running this scheme installs
+/// only the test host or preserves an existing Sumire installation unchanged.
 /// Set SUMIRE_REQUIRE_EXTENSION=1 in the test environment after setup to make
 /// missing/crashed extension visibility fail instead of skipping. Pass the explicit
 /// xcodebuild setting `SUMIRE_REQUIRE_EXTENSION=1` with scheme
