@@ -52,6 +52,7 @@ final class CustomInputTextActionTests: XCTestCase {
             let callback = try XCTUnwrap(key.onCommittedPress)
             callback(true)
         }
+        func find(_ id: String) -> UIView? { descendants(surface).first { $0.accessibilityIdentifier == id } }
         func contains(_ id: String) -> Bool {
             descendants(surface).contains { $0.accessibilityIdentifier == id }
         }
@@ -125,6 +126,78 @@ final class CustomInputTextActionTests: XCTestCase {
         try fixture.tap("word"); try fixture.tap("space")
         XCTAssertEqual(fixture.inserted, "abc ")
         XCTAssertEqual(fixture.reading, "")
+    }
+
+    func testCustomEnglishProxyReturnsWithoutChangingLastUsedOrComposition() throws {
+        let fixture = try Fixture(actions: [("word", "Text:あ👩‍💻い"),
+            ("left", "MoveCursorLeft"), ("mode", "ChangeInputMode")])
+        let saved = fixture.defaults.string(forKey: "keyboard.lastUsed")
+        try fixture.tap("word"); try fixture.tap("left")
+        let selection = fixture.selection
+        try fixture.tap("mode")
+        XCTAssertTrue(fixture.contains("qwerty-character-a"))
+        XCTAssertTrue(fixture.contains("custom-input-mode-return"))
+        XCTAssertEqual(fixture.reading, "あ👩‍💻い")
+        XCTAssertEqual(fixture.selection, selection)
+        XCTAssertEqual(fixture.defaults.string(forKey: "keyboard.lastUsed"), saved)
+        let button = try XCTUnwrap(fixture.find("custom-input-mode-return") as? UIButton)
+        button.sendActions(for: .touchUpInside)
+        XCTAssertTrue(fixture.contains("custom-word"))
+        XCTAssertFalse(fixture.contains("custom-input-mode-return"))
+        XCTAssertEqual(fixture.reading, "あ👩‍💻い")
+        XCTAssertEqual(fixture.selection, selection)
+        XCTAssertEqual(fixture.inserted, "")
+        XCTAssertEqual(fixture.defaults.string(forKey: "keyboard.lastUsed"), saved)
+    }
+
+    func testCustomProxyPagingAndEnglishTypingKeepReturnOwner() throws {
+        let fixture = try Fixture(actions: [("mode", "ChangeInputMode")])
+        let saved = fixture.defaults.string(forKey: "keyboard.lastUsed")
+        try fixture.tap("mode")
+        let letter = try XCTUnwrap(fixture.find("qwerty-character-a") as? Sumire.FlickKey)
+        XCTAssertTrue(letter.accessibilityActivate())
+        XCTAssertEqual(fixture.reading, "a")
+        for _ in 0..<2 {
+            let page = try XCTUnwrap(fixture.find("qwerty-page-toggle") as? UIButton)
+            page.sendActions(for: .touchUpInside)
+            XCTAssertTrue(fixture.contains("custom-input-mode-return"))
+        }
+        XCTAssertTrue(fixture.contains("qwerty-character-a"))
+        XCTAssertEqual(fixture.defaults.string(forKey: "keyboard.lastUsed"), saved)
+        let back = try XCTUnwrap(fixture.find("custom-input-mode-return") as? UIButton)
+        back.sendActions(for: .touchUpInside)
+        XCTAssertTrue(fixture.contains("custom-mode"))
+        XCTAssertEqual(fixture.reading, "a")
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testCustomProxyRoundTripPreservesPendingRomaji() throws {
+        let fixture = try Fixture(actions: [("n", "Text:n"), ("a", "Text:a"),
+            ("mode", "ChangeInputMode")], romaji: true)
+        try fixture.tap("n"); try fixture.tap("mode")
+        let back = try XCTUnwrap(fixture.find("custom-input-mode-return") as? UIButton)
+        back.sendActions(for: .touchUpInside)
+        try fixture.tap("a")
+        XCTAssertEqual(fixture.reading, "な")
+        XCTAssertEqual(fixture.inserted, "")
+    }
+
+    func testRemovingProxyOwnerRecomputesConversionLanguage() throws {
+        let fixture = try Fixture(actions: [("a", "Text:a"), ("mode", "ChangeInputMode")])
+        try fixture.tap("a"); try fixture.tap("mode")
+        var editor = CustomLayoutEditor(name: "Replacement", rows: 1, columns: 1)
+        editor.putKey(id: "space", label: "space", action: "ForceFullWidthSpace", special: true,
+                      row: 0, column: 0, height: 2, width: 2)
+        var library = CustomKeyboardLibrary()
+        try library.append([editor.validated()])
+        library.activeID = try XCTUnwrap(library.layouts().first?.id)
+        try library.save(defaults: fixture.defaults)
+        try KeyboardSelection(ids: ["custom:" + library.activeID!]).save(defaults: fixture.defaults)
+        fixture.surface.reloadCustomLayouts(); fixture.surface.reloadAppearance()
+        XCTAssertFalse(fixture.contains("custom-input-mode-return"))
+        try fixture.tap("space")
+        XCTAssertEqual(fixture.reading, "a")
+        XCTAssertEqual(fixture.inserted, "")
     }
 
     func testKanaMarkersModifyPriorKanaWithoutInsertingTheirNames() throws {
