@@ -107,6 +107,18 @@ public struct CompositionState {
         phase = .committed
         return text
     }
+    /// Commit the raw reading around the composing caret, without conversion or
+    /// romaji flushing. The host inserts left + space + tail, leaving its caret
+    /// before the committed tail. No suffix remains composing after this action.
+    public mutating func commitRawAtCursorAndSpace() -> (left: String, tail: String) {
+        let boundary = reading.index(reading.startIndex, offsetBy: cursor)
+        let result = (left: String(reading[..<boundary]), tail: String(reading[boundary...]))
+        reading = ""
+        cursor = 0
+        generation += 1
+        phase = .committed
+        return result
+    }
     /// Consume a candidate's UTF-16 reading prefix, retaining the unconverted
     /// suffix. Only Character boundaries are valid; rejected ranges do not mutate
     /// the input or invalidate an outstanding conversion result.
