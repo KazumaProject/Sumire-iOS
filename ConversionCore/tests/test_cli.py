@@ -609,11 +609,16 @@ class Tests(unittest.TestCase):
     def test_prediction_kana_symbol_and_prefix_order(self):
         self.install_auxiliary_dictionary_fixture()
         dictionary(self.data/'system.sud', [('あ','Prefix',1,100), ('あいう','Primary',1,100)])
-        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--nbest','1','あいう').stdout)['candidates']]
-        self.assertLess(texts.index('EMOJI'),texts.index('あいう'))
+        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--nbest','20','あいう').stdout)['candidates']]
+        # df1f383 getCandidatesOriginal:1341 (tabs default OFF), not the
+        # alternate getCandidates:2858 symbol-after-prefix ordering.
+        self.assertLess(texts.index('EMOJI'),texts.index('SYMBOL'))
+        self.assertLess(texts.index('SYMBOL'),texts.index('あいう'))
         self.assertLess(texts.index('ｱｲｳ'),texts.index('Prefix'))
-        self.assertLess(texts.index('Prefix'),texts.index('SYMBOL'))
-        self.assertLess(texts.index('SYMBOL'),texts.index('SINGLE-KANJI'))
+        self.assertLess(texts.index('Prefix'),texts.index('SINGLE-KANJI'))
+        no_prediction=[c['text'] for c in json.loads(self.run_cli('--prefix-candidates','--nbest','20','あいう').stdout)['candidates']]
+        self.assertLess(no_prediction.index('EMOJI'),no_prediction.index('SYMBOL'))
+        self.assertLess(no_prediction.index('SYMBOL'),no_prediction.index('Prefix'))
         dictionary(self.data/'emoji.sud',[('あ','EMOJI',0,6000)])
         dictionary(self.data/'symbol.sud',[('あ','SYMBOL',0,3000)])
         texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--nbest','1','あ').stdout)['candidates']]
