@@ -179,7 +179,7 @@ final class KeyboardSurface: UIInputView {
         .load(keyboardKind, group: special ? .special : .normal, defaults: settingsDefaults)
     }
     private var keyboardKind: KeyboardKind {
-        switch inputMode {
+        switch displayedInputMode {
         case .kana: return .gojuon
         case .tenKey: return .tenKey
         case .sumire: return .sumire
@@ -190,6 +190,7 @@ final class KeyboardSurface: UIInputView {
     }
     func configureAppearancePreview(_ kind: KeyboardKind, defaults: UserDefaults) {
         settingsDefaults = defaults
+        customEnglishOwner = nil
         if !isAppearancePreview {
             stackLeading.isActive = false; stackTrailing.isActive = false
             stackLeading = stack.leadingAnchor.constraint(equalTo: leadingAnchor, constant: geometry.horizontalInset)
@@ -220,6 +221,10 @@ final class KeyboardSurface: UIInputView {
         }), let first = choices.first {
             inputMode = first.mode
             if let id = first.customID { activeCustomID = id }
+        }
+        if customEnglishOwner != nil && !customEnglishVisible {
+            customEnglishOwner = nil
+            refreshCustomPresentationLanguage()
         }
         if !isAppearancePreview,
            let saved = settingsDefaults.string(forKey: "keyboard.lastUsed"),
@@ -329,6 +334,27 @@ final class KeyboardSurface: UIInputView {
     private var englishPage = 0 // letters, numbers, symbols
     private enum InputMode { case kana, tenKey, sumire, romaji, english, custom }
     private var inputMode: InputMode = .kana
+    // A temporary English surface belongs to the selected custom layout. It is
+    // independent of the user's enabled keyboard list and last-used layout.
+    private var customEnglishOwner: String?
+    private var customEnglishVisible: Bool {
+        inputMode == .custom && customEnglishOwner == activeCustomID && customEnglishOwner != nil
+            && customLayouts.contains { $0.id == customEnglishOwner }
+    }
+    private var displayedInputMode: InputMode { customEnglishVisible ? .english : inputMode }
+    private func setCustomEnglishPresentation(_ visible: Bool) {
+        beforeInput?(); tapCycle.reset()
+        customEnglishOwner = visible ? activeCustomID : nil
+        refreshCustomPresentationLanguage()
+        rebuild()
+    }
+    private func refreshCustomPresentationLanguage() {
+        let wasEnglish = englishComposition
+        updateModeConversionLanguage()
+        if hasComposition && wasEnglish != englishComposition {
+            composition.optionsChanged(); refreshConversion()
+        }
+    }
     private var customLayouts: [ImportedCustomLayout] = []
     private var activeCustomID: String?
     private var storedCustomID: String?
@@ -340,6 +366,10 @@ final class KeyboardSurface: UIInputView {
             customLayouts = layouts
             storedCustomID = library.activeID
             activeCustomID = library.activeID ?? layouts.first?.id
+            if customEnglishOwner != nil && !customEnglishVisible {
+                customEnglishOwner = nil
+                refreshCustomPresentationLanguage()
+            }
             rebuild()
         } catch { showDataNotice(error.localizedDescription) }
     }
@@ -500,6 +530,7 @@ final class KeyboardSurface: UIInputView {
         status.adjustsFontSizeToFitWidth = true
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(candidateBar)
+        if customEnglishVisible { addQwertyGrid(palette: palette); return }
         if inputMode == .custom {
             addCustomGrid(palette: palette)
             return
@@ -781,7 +812,7 @@ final class KeyboardSurface: UIInputView {
     private func addQwertyGrid(palette: KeyboardPalette) {
         let japanese = inputMode == .romaji
         let page = japanese ? romajiPage : englishPage
-        let pageColumn = japanese ? 1 : 0
+        let pageColumn = japanese || customEnglishVisible ? 1 : 0
         let characters: [String]
         switch page {
         case 1: characters = japanese ? ["1234567890", "-/:@()「」￥&", "。、?!'"] : ["1234567890", "-/:;()¥&@\"", ".,?!'"]
@@ -790,7 +821,7 @@ final class KeyboardSurface: UIInputView {
         }
         var values = characters.map { $0.map(String.init) }
         values[2] = [page == 0 ? "⇧" : page == 1 ? "#+=" : "123"] + values[2] + ["⌫"]
-        values.append((japanese ? [romajiLatin ? "aあ" : "あa"] : []) + [page == 0 ? "123" : "ABC", "🌐", "空白", "改行"])
+        values.append((customEnglishVisible ? ["あa1"] : japanese ? [romajiLatin ? "aあ" : "あa"] : []) + [page == 0 ? "123" : "ABC", "🌐", "空白", "改行"])
         let rows = values.enumerated().map { row, values in
             values.enumerated().map { column, value -> UIView in
                 let special = row == 3 || row == 2 && (column == 0 || column == values.count - 1)
@@ -815,12 +846,18 @@ final class KeyboardSurface: UIInputView {
                     if qwertyCapsLock { key.setImage(UIImage(systemName: "capslock.fill"), for: .normal) }
                     key.addAction(UIAction { [weak self] _ in self?.pressed("⇧") }, for: .touchUpInside)
                 }
+                else if customEnglishVisible && row == 3 && column == 0 {
+                    key.accessibilityIdentifier = "custom-input-mode-return"
+                    key.accessibilityLabel = "カスタム配列に戻る"
+                    key.addAction(UIAction { [weak self] _ in self?.setCustomEnglishPresentation(false) }, for: .touchUpInside)
+                }
                 else if japanese && row == 3 && column == 0 {
                     key.accessibilityIdentifier = "qwerty-input-mode"
                     key.addAction(UIAction { [weak self] _ in
                         self?.romajiLatin.toggle(); self?.rebuild()
                     }, for: .touchUpInside)
                 } else if row == 3 && column == pageColumn || row == 2 && column == 0 && page != 0 {
+                    key.accessibilityIdentifier = row == 3 ? "qwerty-page-toggle" : "qwerty-symbol-page-toggle"
                     key.addAction(UIAction { [weak self] _ in
                         guard let self else { return }
                         let next = row == 3 ? (page == 0 ? 1 : 0) : (page == 1 ? 2 : 1)
@@ -879,7 +916,7 @@ final class KeyboardSurface: UIInputView {
             if (direction == .up && up || direction == .down && down) && output.isEmpty { return }
             guard direction != .tap && !output.isEmpty else { self.pressed(outputs[0]); return }
             self.beforeInput?(); self.tapCycle.reset()
-            if self.inputMode == .english {
+            if self.displayedInputMode == .english {
                 self.insertEnglish(output)
             } else {
                 if self.containsRomaji, let romaji = self.romaji { _ = self.composition.flushRomaji(using: romaji) }
@@ -1079,7 +1116,7 @@ final class KeyboardSurface: UIInputView {
             case .openSymbols: showSymbolKeyboard()
             case .nextKeyboard: pressed("🌐")
             case .modifier: pressed("゛")
-            case .changeMode: status.text = "このモード切替操作は移植中です"
+            case .changeMode: setCustomEnglishPresentation(true)
             case .moveCustomKeyboardTab:
                 guard !customLayouts.isEmpty else { status.text = "切り替え先のカスタム配列がありません"; return }
                 let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
@@ -1809,6 +1846,7 @@ final class KeyboardSurface: UIInputView {
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
         beforeInput?(); tapCycle.reset()
         let previousEnglishComposition = englishComposition
+        customEnglishOwner = nil
         inputMode = mode
         if let customID { activeCustomID = customID }
         rememberKeyboard()
@@ -1902,7 +1940,7 @@ final class KeyboardSurface: UIInputView {
             consumeQwertyShift()
         default:
             defer { consumeQwertyShift() }
-            if inputMode == .english { insertEnglish(value) }
+            if displayedInputMode == .english { insertEnglish(value) }
             else if inputMode == .romaji && romajiLatin { commitComposition(); insert?(value) }
             else if inputMode == .romaji, let romaji {
                 containsRomaji = true
@@ -1917,7 +1955,7 @@ final class KeyboardSurface: UIInputView {
         }
     }
     private func updateModeConversionLanguage() {
-        let englishMode = inputMode == .english
+        let englishMode = displayedInputMode == .english
             || (inputMode == .tenKey && tenKeyMode == .english)
             || (inputMode == .sumire && sumireMode == .english)
             || (inputMode == .kana && gojuonMode == .english)
@@ -1938,7 +1976,7 @@ final class KeyboardSurface: UIInputView {
         refreshConversion()
     }
     private func consumeQwertyShift() {
-        guard inputMode == .english || inputMode == .romaji else { return }
+        guard displayedInputMode == .english || inputMode == .romaji else { return }
         qwertyLastShiftTap = 0
         if shifted && !qwertyCapsLock { shifted = false; updateQwertyCase() }
     }
