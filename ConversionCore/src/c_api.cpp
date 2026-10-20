@@ -229,6 +229,12 @@ int sumire_result_candidate_flags(const sumire_result *result, size_t index,
              ? SUMIRE_CANDIDATE_READING_PREFIX : 0;
   return 0;
 }
+int sumire_result_candidate_presentation_kind(const sumire_result *result,
+                                             size_t index, uint32_t *out) {
+  if (!result || !out || index >= sumire_result_count(result)) return -1;
+  *out = static_cast<uint32_t>(result->snapshot->value.candidates[index].presentation_kind);
+  return 0;
+}
 int sumire_result_reading_correction(const sumire_result *result, size_t index,
                                      sumire_string *raw, sumire_string *reading) {
   if (!result || !raw || !reading || index >= sumire_result_count(result)) return -1;

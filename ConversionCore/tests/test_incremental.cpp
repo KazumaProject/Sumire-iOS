@@ -13,6 +13,7 @@ void equal(const Result &a, const Result &b) {
     check(x.text == y.text && x.score == y.score && x.bunsetsu_boundaries == y.bunsetsu_boundaries &&
           x.standalone_unigram_matched == y.standalone_unigram_matched &&
           x.is_reading_prefix == y.is_reading_prefix &&
+          x.presentation_kind == y.presentation_kind &&
           x.system_ngram_matched == y.system_ngram_matched && x.classified_categories == y.classified_categories &&
           x.segments.size() == y.segments.size(), "candidate order/surface/score/path changed");
     for (size_t j = 0; j < x.segments.size(); ++j) {
@@ -38,6 +39,16 @@ int main(int argc, char **argv) {
     check(workspace.retained_bytes() <= 4 * 1024 * 1024, "retained cache budget exceeded");
     return actual;
   };
+  auto kana = run("が",false,true,true,20,200000);
+  bool half_found = false;
+  for (const auto &candidate : kana.candidates) {
+    if (candidate.text == "ｶﾞ" && candidate.segments.empty()) {
+      check(candidate.presentation_kind == CandidatePresentationKind::half_width,
+            "half-width kana origin lost");
+      half_found = true;
+    }
+  }
+  check(half_found, "half-width kana candidate missing");
   for (bool omission : {false,true}) {
     for (const std::string &s : {"あ", "あい", "あいあ", "あいあい", "あいあいあ", "あいあい", "あいあ", "あああ", "あああ",
                                "😀あいあい", "😁あいあい", "があい", "かあい", "👩‍💻あい", "👩‍💻あ",

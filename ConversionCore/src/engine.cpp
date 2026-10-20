@@ -1097,6 +1097,25 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
           c.classified_categories.push_back(n.dict->name);
       }
+      // Pinned FindPath.resolveCandidateType: personal sources take priority
+      // over numeric-width badges on system/unknown complete paths.
+      const bool personalSource = std::any_of(path.begin(), path.end(),
+          [&](size_t id) { return nodes[id].personal != nullptr; });
+      if (!personalSource) {
+        const auto units = utf16(c.text);
+        if (!units.empty() && units.size() <= 2) {
+          const bool half = std::all_of(units.begin(), units.end(), [](char16_t c) {
+            return (c >= 0x20 && c <= 0x40) || (c >= 0x5b && c <= 0x60) ||
+                   (c >= 0x7b && c <= 0x7e);
+          });
+          const bool full = std::all_of(units.begin(), units.end(), [](char16_t c) {
+            return c == 0x3000 || (c >= 0xff01 && c <= 0xff20) ||
+                   (c >= 0xff3b && c <= 0xff40) || (c >= 0xff5b && c <= 0xff5e);
+          });
+          if (full) c.presentation_kind = CandidatePresentationKind::full_width;
+          else if (half) c.presentation_kind = CandidatePresentationKind::half_width;
+        }
+      }
       require(state.contains_digit == has_digit(c.text),
               "candidate digit state differs from materialized surface");
       c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
@@ -1382,6 +1401,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         candidates.push_back({
             text, dictionary.costs[token],
             {{text, dictionary.name, 0, uint32_t(end)}}});
+        if (dictionary.name == "symbol")
+          candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
       });
       // Android includes an exact symbol/emoji reading regardless of the
       // prediction minimum, then permits up to three extra UTF-16 units when
@@ -1400,6 +1421,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                    // The longer dictionary reading selects the completion, but
                    // this candidate replaces only the currently typed input.
                    {{text, dictionary.name, 0, uint32_t(reading.size())}}});
+              if (dictionary.name == "symbol")
+                candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
             });
         result.complete = result.complete && complete;
       }
@@ -1440,6 +1463,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.push_back({utf8(reading), 6000, {}});
     result.candidates.push_back({utf8(katakana), 6000, {}});
     result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
+    result.candidates.back().presentation_kind = CandidatePresentationKind::half_width;
     append_candidates(emoji_and_emoticon_candidates);
     append_candidates(symbol_candidates);
   } else {
@@ -1452,6 +1476,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       result.candidates.push_back({utf8(reading), 6000, {}});
       result.candidates.push_back({utf8(katakana), 6000, {}});
       result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
+      result.candidates.back().presentation_kind = CandidatePresentationKind::half_width;
     }
   }
   // Reference dev 9506a0b yomiPartList: longest matching reading first,

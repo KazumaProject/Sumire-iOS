@@ -125,6 +125,14 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
 #define SUMIRE_CANDIDATE_READING_PREFIX (1u << 0)
 int sumire_result_candidate_flags(const sumire_result *result, size_t index,
                                    uint32_t *out);
+/* Additive presentation metadata; never infer origin from the visible surface.
+ * 0=none, 1=half width, 2=full width, 3=symbol with short numeric-width badge. */
+enum {
+  SUMIRE_PRESENTATION_NONE = 0, SUMIRE_PRESENTATION_HALF_WIDTH = 1,
+  SUMIRE_PRESENTATION_FULL_WIDTH = 2, SUMIRE_PRESENTATION_NUMERIC_SYMBOL = 3
+};
+int sumire_result_candidate_presentation_kind(const sumire_result *result,
+                                             size_t index, uint32_t *out);
 /* Optional reading-correction metadata, owned by the result. Non-correction
  * candidates return empty strings. Display/commit only candidate.text; raw
  * payload may contain a TAB delimiter. Returns -1 for invalid arguments. */
