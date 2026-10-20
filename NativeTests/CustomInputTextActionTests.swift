@@ -84,6 +84,26 @@ final class CustomInputTextActionTests: XCTestCase {
         }
     }
 
+    func testNextCustomTabResetsShiftEvenWhenOnlyOneLayoutExists() throws {
+        for (arm, expected) in [("shift", "ON"), ("caps", "Caps Lock")] {
+            let fixture = try Fixture(actions: [("word", "Text:あ👩‍💻い"), ("left", "MoveCursorLeft"),
+                ("shift", "ShiftKey"), ("caps", "CapLockKey"), ("next", "MoveCustomKeyboardTab"), ("a", "Text:a")])
+            let lastUsed = fixture.defaults.string(forKey: "keyboard.lastUsed")
+            try fixture.tap("word"); try fixture.tap("left"); try fixture.tap(arm)
+            XCTAssertEqual(fixture.find("custom-" + arm)?.accessibilityValue, expected)
+            let selection = fixture.selection
+            try fixture.tap("next")
+            XCTAssertEqual(fixture.find("custom-shift")?.accessibilityValue, "OFF")
+            XCTAssertEqual(fixture.find("custom-caps")?.accessibilityValue, "OFF")
+            XCTAssertEqual(fixture.reading, "あ👩‍💻い")
+            XCTAssertEqual(fixture.selection, selection)
+            XCTAssertEqual(fixture.defaults.string(forKey: "keyboard.lastUsed"), lastUsed)
+            try fixture.tap("a")
+            XCTAssertEqual(fixture.reading, "あ👩‍💻aい")
+            XCTAssertEqual(fixture.inserted, "")
+        }
+    }
+
     func testCustomShiftConsumesTextButNotCommandsOrInputTextWithoutRebuilding() throws {
         let fixture = try Fixture(actions: [("shift", "ShiftKey"), ("a", "Text:a"),
             ("punct", "InputText:-"), ("noop", "DoNothing"), ("empty", "Text:")])
