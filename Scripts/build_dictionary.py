@@ -11,8 +11,12 @@ AUXILIARY_DICTIONARIES = {
     'emoji': ('emoji', 'emoji'),
     'emoticon': ('emoticon', 'emoticon'),
     'symbol': ('symbol', 'symbol'),
+    'reading_correction': ('reading_correction', 'reading_correction'),
 }
 AUXILIARY_ASSET_SHA256 = {
+    'reading_correction/yomi_reading_correction.dat': 'e9d2348bd7caf264e14da611effba1bc524467ac211afe158243f794eb81432b',
+    'reading_correction/tango_reading_correction.dat': '3f102aa7f31a51657473352fb3cb35f4c48fb0943efbe2b057ccecade2de08d6',
+    'reading_correction/token_reading_correction.dat': '8cefa1af8298363347674221f6a1620494b328face07873e1296f3fce51f3720',
     'single_kanji/yomi_singleKanji.dat': 'a9d02f6e81ad2e48ec187bc5c03c57660de7178f34204149ba45482178e98f76',
     'single_kanji/tango_singleKanji.dat': '30f5a78cea54d6359a3591b741896674002b3e2bac580bc59269eb8c593f929b',
     'single_kanji/token_singleKanji.dat': '4d60dc524cfdffdb576102429a3a5a7c625f0c3581ba248a81fbc852eaa33166',
@@ -26,6 +30,13 @@ AUXILIARY_ASSET_SHA256 = {
     'symbol/tango_symbol.dat': '5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca',
     'symbol/token_symbol.dat': '22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb',
 }
+
+def read_pinned_asset(assets, name):
+    raw = (assets / name).read_bytes()
+    expected = AUXILIARY_ASSET_SHA256.get(name)
+    if expected is not None and hashlib.sha256(raw).hexdigest() != expected:
+        raise ValueError('pinned auxiliary asset hash mismatch: ' + name)
+    return raw
 
 class JavaArrays:
     def __init__(self, data):
@@ -218,9 +229,7 @@ def build(source,output,english_reading=False,english=False):
     subprocess.run(['git','-C',str(source),'diff','--exit-code','HEAD','--']+['app/src/main/assets/'+p for p in paths],check=True,stdout=subprocess.DEVNULL)
     hashes={}
     def read(name):
-        raw=(assets/name).read_bytes();hashes[name]=hashlib.sha256(raw).hexdigest()
-        expected=AUXILIARY_ASSET_SHA256.get(name)
-        if expected is not None and hashes[name]!=expected:raise ValueError('pinned auxiliary asset hash mismatch: '+name)
+        raw=read_pinned_asset(assets,name);hashes[name]=hashlib.sha256(raw).hexdigest()
         if not name.endswith('.zip'):return raw
         with zipfile.ZipFile(assets/name) as z:
             files=z.infolist()
