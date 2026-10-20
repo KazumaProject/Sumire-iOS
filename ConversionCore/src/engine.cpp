@@ -1454,6 +1454,45 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.insert(result.candidates.end(), candidates.begin(),
                              candidates.end());
   };
+  // Pinned getCandidatesOriginal adds deterministic mixed-alphanumeric case
+  // and full-width ASCII choices before the auxiliary/kana/prefix sections.
+  // Numeric inputs take an earlier, separate Android route (including temporal
+  // candidates); do not claim that route by adding type-30 variants here.
+  if (japanese_prediction && !reading.empty() &&
+      std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= 0x20 && c <= 0x7e; }) &&
+      !std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; })) {
+    const bool mixed = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
+      return is_ascii_alphabet(c) || (c >= u'0' && c <= u'9');
+    }) && std::any_of(reading.begin(), reading.end(), is_ascii_alphabet) &&
+        std::any_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; });
+    if (mixed) {
+      auto capitalized = reading, uppercase = reading;
+      if (capitalized.front() >= u'a' && capitalized.front() <= u'z') capitalized.front() -= 0x20;
+      for (auto &c : uppercase) if (c >= u'a' && c <= u'z') c -= 0x20;
+      std::unordered_set<std::string> variants;
+      const std::u16string values[] = {reading, capitalized, uppercase};
+      for (size_t index = 0; index < 3; ++index) {
+        auto text = utf8(values[index]);
+        if (variants.insert(text).second)
+          result.candidates.push_back({text, 10000 + int64_t(index), {}});
+      }
+    }
+    auto lower_width = reading, upper_width = reading;
+    for (auto &c : lower_width) {
+      if (c >= u'A' && c <= u'Z') c += 0x20;
+      c = c == u' ' ? 0x3000 : c + 0xfee0;
+    }
+    for (auto &c : upper_width) {
+      if (c >= u'a' && c <= u'z') c -= 0x20;
+      c = c == u' ' ? 0x3000 : c + 0xfee0;
+    }
+    // Android preserves both raw entries when lower/upper surfaces coincide;
+    // the displayed-list merger, not this provider, handles duplicates.
+    for (const auto &value : {lower_width, upper_width}) {
+      result.candidates.push_back({utf8(value), 30000, {}});
+      result.candidates.back().presentation_kind = CandidatePresentationKind::full_width;
+    }
+  }
   // Pinned Android df1f383 prediction paths include these three kana choices
   // even when no dictionary completion matches. One UTF-16 unit places them
   // before emoji/symbols; retain the existing no-prediction CLI behavior.
