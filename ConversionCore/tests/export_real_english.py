@@ -201,7 +201,8 @@ def main():
         command = ['./gradlew', '--offline', ':app:testFullStandardDebugUnitTest', '--rerun', '--tests', '*SumireIOSRealEnglishBaselineTest', '--no-configuration-cache', '--max-workers=2', '-Dorg.gradle.parallel=false']
         with raw.open_build_log(output / 'android-build.log') as log:
             subprocess.run(command, cwd=build, env={**os.environ, 'JAVA_HOME': str(args.java_home), 'ANDROID_HOME': str(args.android_sdk)}, stdout=log, stderr=subprocess.STDOUT, check=True)
-        xml = ET.fromstring((build / 'app/build/test-results/testFullStandardDebugUnitTest/TEST-com.kazumaproject.markdownhelperkeyboard.converter.SumireIOSRealEnglishBaselineTest.xml').read_bytes())
+        xml_bytes = (build / 'app/build/test-results/testFullStandardDebugUnitTest/TEST-com.kazumaproject.markdownhelperkeyboard.converter.SumireIOSRealEnglishBaselineTest.xml').read_bytes()
+        xml = ET.fromstring(xml_bytes)
         if tuple(xml.get(k) for k in ('tests', 'failures', 'errors', 'skipped')) != ('1', '0', '0', '0'):
             raise ValueError('actual exporter test did not pass')
         baseline = (build / 'app/build/reports/sumire-ios-real-english.jsonl').read_bytes()
@@ -209,7 +210,7 @@ def main():
             factory_patched_sha256=raw.digest(factory.read_bytes()), command=command,
             launcher_java_version=java_version, pinned_gradle_daemon_jvm_criteria=(build / 'gradle/gradle-daemon-jvm.properties').read_text(),
             source_manifest_sha256=raw.digest((output / 'source-manifest.json').read_bytes()),
-            test_xml_sha256=raw.digest(ET.tostring(xml)),
+            test_xml_sha256=raw.digest(xml_bytes),
             patch_boundary='Test factory FindPath + real EnglishEngine parameter only; pinned production source unmodified')
     rows = [json.loads(line) for line in baseline.decode().splitlines()]
     validate_rows(rows)
