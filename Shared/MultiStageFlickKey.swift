@@ -11,6 +11,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     var blocksSequentialTouches = false
     var feedbackSettings = TouchFeedbackSettings()
     var popupPalette: KeyboardPalette?
+    var displayTransform: (String) -> String = { $0 }
     var styleSettings = FlickStyleSettings()
     // Android reference AVD: density 420 dpi, default slop 8 dp * 3.5.
     // Distances are converted to logical points here; callers may calibrate them
@@ -44,7 +45,13 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     private var gestureSettings = TouchFeedbackSettings()
     private var gestureStyle = FlickStyleSettings()
 
-    private var guideLabels: [(UILabel, CGPoint)] = []
+    private var guideLabels: [(UILabel, CGPoint, String)] = []
+    /// Refresh presentation only; an active gesture keeps its canonical output.
+    func refreshDisplayedText() {
+        for (label, _, raw) in guideLabels { label.text = displayTransform(raw) }
+        popup?.displayTransform = displayTransform
+        popup?.setNeedsDisplay()
+    }
     func configureGuides(visible: Bool, fontSize: CGFloat, color: UIColor) {
         guideLabels.forEach { $0.0.removeFromSuperview() }; guideLabels = []
         guard visible, let definition else { return }
@@ -77,11 +84,11 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
             }
         }
         for (text, position) in items {
-            let label = UILabel(); label.text = text; label.textColor = color
+            let label = UILabel(); label.text = displayTransform(text); label.textColor = color
             label.font = .systemFont(ofSize: fontSize); label.textAlignment = .center
             label.adjustsFontSizeToFitWidth = true; label.minimumScaleFactor = 0.5
             label.isUserInteractionEnabled = false; label.isAccessibilityElement = false
-            addSubview(label); guideLabels.append((label, position))
+            addSubview(label); guideLabels.append((label, position, text))
         }
         setNeedsLayout()
     }
@@ -241,6 +248,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     private func updatePopup() {
         guard gestureSettings.popupVisible, let host = popupHost, let engine else { return }
         if popup == nil { let view = MultiStageFlickPopupView(); host.addSubview(view); popup = view }
+        popup?.displayTransform = displayTransform
         let palette = popupPalette ?? KeyboardPalette(hue: 0.73, dark: traitCollection.userInterfaceStyle == .dark)
         popup?.update(engine.preview, palette: palette, fontSize: gestureStyle.popupTextSize.map { CGFloat($0) } ?? engine.defaultPopupTextSize)
         popup?.place(keyRect: convert(bounds, to: host), host: host,
@@ -248,7 +256,7 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
     }
     override func layoutSubviews() {
         super.layoutSubviews()
-        for (label, position) in guideLabels {
+        for (label, position, _) in guideLabels {
             let size = CGSize(width: bounds.width / 3, height: bounds.height / 3)
             label.frame = CGRect(x: position.x * (bounds.width - size.width), y: position.y * (bounds.height - size.height), width: size.width, height: size.height).insetBy(dx: 1, dy: 1)
         }

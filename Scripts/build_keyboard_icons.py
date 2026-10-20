@@ -6,7 +6,7 @@ SOURCE = ROOT / '.reference/JapaneseKeyboard'
 REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
 ICONS = {'paste':'content_paste_24px', 'left':'baseline_arrow_left_24', 'globe':'language_24dp',
          'delete':'backspace_24px', 'enter':'baseline_keyboard_return_24', 'resize':'keyboard_24px',
-         'done':'baseline_check_24', 'mode':'input_mode_english_custom', 'space':'baseline_space_bar_24', 'shift':'shift_24px', 'right':'baseline_arrow_right_24', 'undo':'undo_24px', 'directOn':'language_japanese_kana_right_24px', 'directOff':'language_japanese_kana_left_24px', 'romajiOn':'language_japanese_kana_left_bold_24px', 'romajiOff':'language_japanese_kana_right_bold_24px'}
+         'done':'baseline_check_24', 'mode':'input_mode_english_custom', 'space':'baseline_space_bar_24', 'shift':'shift_24px', 'shiftActive':'shift_fill_24px', 'capsLock':'caps_lock', 'capsLockOutline':'caps_lock_outline', 'right':'baseline_arrow_right_24', 'undo':'undo_24px', 'directOn':'language_japanese_kana_right_24px', 'directOff':'language_japanese_kana_left_24px', 'romajiOn':'language_japanese_kana_left_bold_24px', 'romajiOff':'language_japanese_kana_right_bold_24px'}
 A = '{http://schemas.android.com/apk/res/android}'
 
 def translate(data):
@@ -50,7 +50,7 @@ def main():
            '    var image: UIImage { Self.images[self]! }',
            '    private func render() -> UIImage {',
            '        let renderer = UIGraphicsImageRenderer(size: CGSize(width: 24, height: 24))',
-           '        return renderer.image { context in', '            UIColor.black.setFill()', '            switch self {']
+           '        return renderer.image { context in', '            UIColor.black.setFill()', '            UIColor.black.setStroke()', '            switch self {']
     notices=[]
     for key,name in ICONS.items():
         file=SOURCE/'core/src/main/res/drawable'/(name+'.xml');root=ET.parse(file).getroot()
@@ -73,7 +73,28 @@ def main():
                 elif child.tag == 'path':
                     result += ['                do {','                    let p = CGMutablePath()']
                     result += ['                    '+line for line in translate(child.attrib[A+'pathData'])]
-                    result += ['                    context.cgContext.addPath(p)','                    context.cgContext.fillPath()', '                }']
+                    fill = child.attrib.get(A+'fillColor', '@android:color/transparent') != '@android:color/transparent'
+                    stroke = child.attrib.get(A+'strokeColor', '@android:color/transparent') != '@android:color/transparent'
+                    if stroke:
+                        width=float(child.attrib.get(A+'strokeWidth', '0'))
+                        if not __import__('math').isfinite(width) or width < 0:
+                            raise ValueError('Invalid vector stroke width')
+                        cap=child.attrib.get(A+'strokeLineCap', 'butt')
+                        join=child.attrib.get(A+'strokeLineJoin', 'miter')
+                        if cap not in ('butt','round','square') or join not in ('miter','round','bevel'):
+                            raise ValueError('Unsupported vector stroke style')
+                        result += ['                    context.cgContext.saveGState()',
+                                   f'                    context.cgContext.setLineWidth({width:g})',
+                                   f'                    context.cgContext.setLineCap(.{cap})',
+                                   f'                    context.cgContext.setLineJoin(.{join})']
+                    result += ['                    context.cgContext.addPath(p)']
+                    if stroke:
+                        result += [f'                    context.cgContext.drawPath(using: .{"fillStroke" if fill else "stroke"})',
+                                   '                    context.cgContext.restoreGState()']
+                    elif fill:
+                        operation='fillPath(using: .evenOdd)' if child.attrib.get(A+'fillType') == 'evenOdd' else 'fillPath()'
+                        result += [f'                    context.cgContext.{operation}']
+                    result += ['                }']
             return result
         lines += emit(root)
     lines += ['            }','        }.withRenderingMode(.alwaysTemplate)','    }','}']

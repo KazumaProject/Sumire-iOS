@@ -16,6 +16,7 @@ public enum CustomKeyAction: Codable, Equatable {
         case modifier = "小゛゜", changeMode = "ChangeInputMode", moveCustomKeyboardTab = "MoveCustomKeyboardTab"
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
+        case shift = "ShiftKeyPressed", capsLock = "CapLockKey"
         case deleteUntilBoundary = "DeleteUntilSymbol", openSymbols = "ShowEmojiKeyboard"
         case switchKana = "SwitchToKanaLayout", switchEnglish = "SwitchToEnglishLayout", switchNumber = "SwitchToNumberLayout"
         case switchDirect = "SwitchDirectMode", switchRomaji = "SwitchRomajiEnglish"
@@ -25,6 +26,7 @@ public enum CustomKeyAction: Codable, Equatable {
         SumireFlickMarker(rawValue: token) != nil || ["^_^", ":", "-"].contains(token)
     }
     public static func tap(_ raw: String, targets: CustomLayoutTargets) -> Self {
+        if raw == "ShiftKey" { return .command(.shift) }
         if raw.hasPrefix("Text:") { return .text(String(raw.dropFirst(5))) }
         if raw.hasPrefix("InputText:") { return .inputText(String(raw.dropFirst(10))) }
         if raw.hasPrefix("MoveToCustomKeyboard:") { return targets.resolve(String(raw.dropFirst(21)), raw: raw) }
@@ -32,6 +34,7 @@ public enum CustomKeyAction: Codable, Equatable {
         return .unsupported(raw: raw, reason: "この操作はiOS側で未対応です")
     }
     public static func flick(type: String, value: String?, targets: CustomLayoutTargets) -> Self {
+        if type == "ShiftKey" { return .command(.shift) }
         if type == "INPUT_TEXT" { return .text(value ?? "") }
         if type == "MoveToCustomKeyboard" { return targets.resolve(value ?? "", raw: type + ":" + (value ?? "")) }
         let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "SPACE": "Space",
