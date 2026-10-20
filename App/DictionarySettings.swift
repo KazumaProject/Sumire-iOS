@@ -180,8 +180,11 @@ struct DictionarySettings: View {
             let report = try DictionarySourceArchiveConverter.convert(archiveAt: archive, into: staging)
             defer { try? FileManager.default.removeItem(at: report.outputDirectory) }
 
+            guard let bundledSupport = ConversionService.bundledDictionary else {
+                throw ImportError(message: "取り込みに必要な同梱の補助辞書が見つかりません")
+            }
             var base: URL?
-            let baseCandidates = store.loadCandidates().map(\.directory) + [ConversionService.bundledDictionary].compactMap { $0 }
+            let baseCandidates = store.loadCandidates().map(\.directory) + [bundledSupport]
             for candidate in baseCandidates {
                 do {
                     try Self.validateNativeDictionaries(at: candidate)
@@ -195,7 +198,7 @@ struct DictionarySettings: View {
             let files = Dictionary(uniqueKeysWithValues: report.convertedFiles.map {
                 ($0, report.outputDirectory.appendingPathComponent($0))
             })
-            let loaded = try store.publish(importedFiles: files, from: base) { directory in
+            let loaded = try store.publish(importedFiles: files, from: base, supportFallback: bundledSupport) { directory in
                 try Self.validateNativeDictionaries(at: directory)
             }
             return DictionaryImportOutcome(
