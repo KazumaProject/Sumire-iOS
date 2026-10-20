@@ -100,10 +100,49 @@ static void test_category_prediction(const char *directory) {
   CHECK(found);
   sumire_result_destroy(result);
 }
+static void test_pathless_kana_ranges(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  CHECK(sumire_engine_open(directory,0,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  const char *readings[] = {"が", "あ😀"};
+  const char *outputs[] = {"ｶﾞ", "ｱ😀"};
+  const uint32_t lengths[] = {1,3};
+  for (size_t j = 0; j < 2; ++j) {
+    sumire_request request = {j+1,readings[j],strlen(readings[j]),0,1,200000,12};
+    sumire_result *result = NULL;
+    CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+    int found = 0;
+    size_t selected = 0;
+    for (size_t i = 0; i < sumire_result_count(result); ++i) {
+      sumire_candidate candidate;
+      CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+      if (candidate.text.size != strlen(outputs[j]) ||
+          memcmp(candidate.text.data,outputs[j],candidate.text.size) != 0) continue;
+      CHECK(candidate.segment_count == 0 && candidate.score == 6000);
+      CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == lengths[j]);
+      CHECK(sumire_session_commit(session,j+1,candidate.candidate_id,error,sizeof error) == 0);
+      selected = i;
+      found = 1;
+    }
+    CHECK(found);
+    // A reset/commit cannot change the independently owned result's range.
+    sumire_session_reset(session);
+    sumire_candidate retained;
+    CHECK(sumire_result_candidate(result,selected,&retained) == 0);
+    CHECK(retained.length_utf16 == lengths[j] && retained.start_utf16 == 0);
+    CHECK(retained.text.size == strlen(outputs[j]) &&
+          memcmp(retained.text.data,outputs[j],retained.text.size) == 0);
+    sumire_result_destroy(result);
+  }
+  sumire_session_destroy(session); sumire_engine_close(engine);
+}
 int main(int argc, char **argv) {
   CHECK(argc == 2);
   test_edit_reuse(argv[1]);
   test_category_prediction(argv[1]);
+  test_pathless_kana_ranges(argv[1]);
   char error[256];
   sumire_engine *engine = NULL;
   sumire_session *session = NULL;
