@@ -103,6 +103,17 @@ class DisplayComparisonTests(unittest.TestCase):
             with self.subTest(mutation=mutation), self.assertRaises(ValueError):
                 comparison.compare(android, ios)
 
+    def test_visible_badge_whitespace_is_not_silently_discarded(self):
+        android, ios = self.snapshots()
+        next(row for row in android if row['path'] == comparison.ROUTE)['adapter_items'][0]['type_label'] = ' [部] '
+        result = comparison.compare(android, ios)
+        self.assertFalse(result['compared_fields_parity_achieved'])
+        self.assertEqual(result['metrics']['full_compared_fields_equal'], 49)
+        self.assertEqual(result['conditions'][0]['differences'][0]['fields'], ['annotation'])
+        emoji = dict(text='🤍', type=11, commit_text='🤍', length_utf16=4, score=1)
+        self.assertEqual(comparison.android_signature(emoji, dict(type_label='  '), 'しろい')['annotation'], '')
+        self.assertEqual(comparison.android_signature(emoji, dict(type_label='   '), 'しろい')['annotation'], '   ')
+
     def test_reports_order_range_and_annotation_differences(self):
         android, ios = self.snapshots()
         ios['conditions'][0]['candidates'][0]['length_utf16'] = 2

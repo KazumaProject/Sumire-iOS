@@ -137,7 +137,7 @@ def android_signature(c, item, reading):
     semantic = raw.split('\t', 1)[0] if c.get('type') == 15 else raw
     return dict(raw_text=raw, display_text=semantic, effective_commit_text=android_effective_commit_text(c, reading),
                 corrected_reading=c.get('correction_reading'), consumed_utf16=consumed,
-                score=c['score'], annotation=item['type_label'].strip(), is_reading_prefix=c.get('type') == 5)
+                score=c['score'], annotation=('' if c['type'] in {11, 12, 13} and item['type_label'] == '  ' else item['type_label']), is_reading_prefix=c.get('type') == 5)
 
 
 def ios_signature(c):
@@ -170,7 +170,7 @@ def compare(android, ios):
     metrics = {name: sum(c[name] for c in conditions) for name in
                ('count_equal', 'ordered_top1_text_score_equal', 'ordered_top10_text_score_equal', 'full_compared_fields_equal')}
     return dict(schema_version=1, source_revision=REVISION, ios_source_revision=ios['provenance']['source_revision'], route=ROUTE, n=20, conditions_compared=50,
-                scope='Synthetic Android pure pipeline + actual Adapter vs iOS service + actual CandidateBar. No physical keyboard/editor/commit acceptance.',
+                scope='Synthetic Android pure pipeline + actual Adapter vs iOS service + actual CandidateBar. Only documented title padding and exact two-space no-badge placeholders for types11/12/13 are normalized; visible badge whitespace is preserved. No physical keyboard/editor/commit acceptance.',
                 compared_fields=list(ios_signature(dict(text='', length_utf16=1, score=0, is_reading_prefix=False))),
                 unpaired_metadata=['Android lexical reading length/type/POS/yomi/category metadata vs iOS provenance labels', 'Actual editor commit and learning'],
                 android_commit_projection='Pinned IMEService processCandidate25950/handlePartialOrExcessLength25900: type9/11/13/15 consume full input; other observed types consume min(inputUTF16,candidate.length). Lexical length retained in original export.',
