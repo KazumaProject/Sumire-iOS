@@ -554,6 +554,40 @@ class Tests(unittest.TestCase):
         self.assertEqual([c['corrected_reading'] for c in correction],['あ','い'])
         self.assertEqual([c['text'] for c in correction],['同じ','同じ'])
 
+    def test_japanese_ascii_generated_variants_preserve_scores_order_and_duplicates(self):
+        connection(self.data/'connection.sud',1842)
+        for reading, expected in [('a',[('ａ',30000),('Ａ',30000)]),
+                                  ('Ab',[('ａｂ',30000),('ＡＢ',30000)]),
+                                  ('ABC',[('ａｂｃ',30000),('ＡＢＣ',30000)]),
+                                  ('a1',[('a1',10000),('A1',10001),('ａ１',30000),('Ａ１',30000)]),
+                                  ('A1',[('A1',10000),('ａ１',30000),('Ａ１',30000)]),
+                                  ('AB12',[('AB12',10000),('ａｂ１２',30000),('ＡＢ１２',30000)]),
+                                  ('+',[('＋',30000),('＋',30000)]),
+                                  ('a+b',[('ａ＋ｂ',30000),('Ａ＋Ｂ',30000)]),
+                                  ('a b',[('ａ　ｂ',30000),('Ａ　Ｂ',30000)]),
+                                  (' ',[('　',30000),('　',30000)])]:
+            with self.subTest(reading=reading):
+                candidates=json.loads(self.run_cli('--predict-japanese','--nbest','1',reading).stdout)['candidates']
+                generated=[c for c in candidates if c['score'] in [10000,10001,10002,30000] and not c['segments']]
+                self.assertEqual([(c['text'],c['score']) for c in generated],expected)
+                first=next(i for i,c in enumerate(candidates) if c is generated[0])
+                kana=next(i for i,c in enumerate(candidates) if c['score']==6000)
+                self.assertLess(first,kana)
+        for reading in ['あ','aあ','é','ＡＢ','123','１２３']:
+            candidates=json.loads(self.run_cli('--predict-japanese',reading).stdout)['candidates']
+            self.assertFalse(any(c['score']==30000 and not c['segments'] for c in candidates),reading)
+        ordinary=json.loads(self.run_cli('a1').stdout)['candidates']
+        self.assertFalse(any(not c['segments'] and c['score'] in [10000,10001,10002,30000] for c in ordinary))
+        dictionary(self.data/'english.sud',[('abc',-2,0,100)])
+        english=json.loads(self.run_cli('--english','ab').stdout)['candidates']
+        self.assertFalse(any(c['text'] in ['ａｂ','ＡＢ'] for c in english))
+
+    def test_c_api_generated_ascii_fullwidth_ranges(self):
+        if not C_API: self.skipTest('C ABI fixture executable not supplied')
+        connection(self.data/'connection.sud',1842)
+        result=subprocess.run([C_API,str(self.data),'--ascii-generated'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+
     def test_japanese_prediction_includes_kana_without_dictionary_completion(self):
         for reading, katakana, halfwidth in [('あ', 'ア', 'ｱ'),
                                               ('がぱゔ', 'ガパヴ', 'ｶﾞﾊﾟゔ'),

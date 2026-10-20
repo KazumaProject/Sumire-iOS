@@ -160,6 +160,35 @@ static void test_category_prediction(const char *directory) {
   CHECK(sumire_result_reading_correction(result,sumire_result_count(result),&unused,&unused) == -1);
   sumire_result_destroy(result);
 }
+static void test_generated_ascii_fullwidth_ranges(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  CHECK(sumire_engine_open(directory,0,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  const char *inputs[] = {"a1", "+", "a b"};
+  const uint32_t lengths[] = {2,1,3};
+  for (size_t index = 0; index < 6; ++index) {
+    size_t input = index % 3;
+    sumire_request request = {index+1,inputs[input],strlen(inputs[input]),0,1,200000,index < 3 ? 12u : 13u};
+    sumire_result *result = NULL;
+    CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+    size_t generated = 0;
+    for (size_t i = 0; i < sumire_result_count(result); ++i) {
+      sumire_candidate candidate;
+      CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+      if (candidate.score != 30000 || candidate.segment_count != 0) continue;
+      uint32_t kind, flags;
+      CHECK(sumire_result_candidate_presentation_kind(result,i,&kind) == 0 && kind == SUMIRE_PRESENTATION_FULL_WIDTH);
+      CHECK(sumire_result_candidate_flags(result,i,&flags) == 0 && flags == 0);
+      CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == lengths[input]);
+      ++generated;
+    }
+    CHECK(generated == 2);
+    sumire_result_destroy(result);
+  }
+  sumire_session_destroy(session); sumire_engine_close(engine);
+}
 static void test_primary_presentation(const char *directory) {
   char error[256];
   sumire_engine *engine = NULL;
@@ -289,6 +318,10 @@ static void test_auxiliary_completion_ranges(const char *directory) {
 }
 
 int main(int argc, char **argv) {
+  if (argc == 3 && strcmp(argv[2],"--ascii-generated") == 0) {
+    test_generated_ascii_fullwidth_ranges(argv[1]);
+    return 0;
+  }
   if (argc == 3 && strcmp(argv[2],"--aux-completion") == 0) {
     test_auxiliary_completion_ranges(argv[1]);
     return 0;
