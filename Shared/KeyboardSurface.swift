@@ -1303,6 +1303,9 @@ final class KeyboardSurface: UIInputView {
             let rawID = key.accessibilityIdentifier == "keyboard-switch" ? "switch_next_ime" :
                 String((key.accessibilityIdentifier ?? "").dropFirst("sumire-".count))
             if let specialID = SumireSpecialKeyID.resolve(rawID, arrangement: arrangement, mode: sumireMode) {
+                if let directional = key as? DirectionalActionKey {
+                    configureSpecialKeyGuides(directional, key: specialID, arrangement: arrangement)
+                }
                 if specialID == .katakanaToggle {
                     key.setTitle(hasComposition ? "カナ" : "123", for: .normal)
                     key.accessibilityLabel = hasComposition ? "カタカナ切り替え" : "数字モード"
@@ -1324,6 +1327,37 @@ final class KeyboardSurface: UIInputView {
             }
         }
     }
+    private static let specialGuideDirections: [(FlickDirection, SumireSpecialKeyGesture)] = [
+        (.left, .left), (.up, .up), (.right, .right), (.down, .down)]
+    private static let specialGuideLabels: [SumireSpecialKeyAction: String] = [
+            .deleteBackward: "削除", .deleteAfterCursorUntilBoundary: "後削除",
+            .undoDelete: "戻す", .cursorLeft: "←", .cursorRight: "→", .cursorUp: "↑", .cursorDown: "↓",
+            .paste: "貼付", .copy: "コピー", .cut: "切取", .selectAll: "全選択", .space: "空白",
+            .convert: "変換", .enter: "改行", .confirm: "確定", .nextKeyboard: "次配列",
+            .keyboardMenu: "配列", .changeInputMode: "モード", .switchKana: "かな", .switchEnglish: "ABC",
+            .switchNumber: "123", .toggleKatakana: "カナ", .toggleDakuten: "小゛゜", .openSymbols: "記号",
+            .insertColon: ":", .insertHyphen: "-"]
+    private func configureSpecialKeyGuides(_ button: DirectionalActionKey, key: SumireSpecialKeyID,
+                                           arrangement: SumireKeyArrangement) {
+        let appearance = keyAppearance(special: true)
+        let color = button.titleColor(for: .normal) ?? button.tintColor ?? UIColor.label
+        guard appearance.guidesVisible else {
+            button.configureGuides(titles: [:], visible: false, fontSize: appearance.guideFontSize, color: color)
+            return
+        }
+        var titles: [FlickDirection: String] = [:]
+        for (direction, gesture) in Self.specialGuideDirections {
+            let action = specialKeySettings.action(for: key, gesture: gesture, arrangement: arrangement,
+                                                   mode: sumireMode, hasComposition: hasComposition)
+            if action != .doNothing, action.unavailabilityReason(for: key, gesture: gesture) == nil {
+                titles[direction] = action == .deleteUntilBoundary
+                    ? (hasComposition ? "全削除" : "区切削除") : (Self.specialGuideLabels[action] ?? action.title)
+            }
+        }
+        button.configureGuides(titles: titles, visible: appearance.guidesVisible,
+                               fontSize: appearance.guideFontSize, color: color)
+    }
+
     private func executeSpecialKey(_ key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture,
                                    arrangement: SumireKeyArrangement) {
         beforeInput?()
