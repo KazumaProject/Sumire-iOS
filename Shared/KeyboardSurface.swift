@@ -959,7 +959,7 @@ final class KeyboardSurface: UIInputView {
             if let repeating = key as? RepeatingKey {
                 repeating.exclusiveTouchAction = needsExclusiveTouch
                 repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
-                repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft)].contains(normalAction)
+                repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft), .command(.cursorRight)].contains(normalAction)
                 switch normalAction {
                 case .switchLayout, .command(.changeMode), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
@@ -1069,11 +1069,14 @@ final class KeyboardSurface: UIInputView {
             case .doNothing: break
             case .delete, .backspace: pressed("⌫")
             case .space: pressed("空白")
-            case .convert: if hasComposition { pressed("空白") }
+            case .convert: pressed("空白")
             case .enter, .newLine: pressed("改行")
-            case .confirm: commitComposition()
+            case .confirm: pressed("改行")
             case .paste: sumireAction(.paste)
             case .cursorLeft: sumireAction(.cursorLeft)
+            case .cursorRight: moveCompositionCursor(by: 1)
+            case .deleteUntilBoundary: executeSpecialAction(.deleteUntilBoundary, prepareInput: false)
+            case .openSymbols: showSymbolKeyboard()
             case .nextKeyboard: pressed("🌐")
             case .modifier: pressed("゛")
             case .changeMode: status.text = "このモード切替操作は移植中です"
@@ -1082,9 +1085,13 @@ final class KeyboardSurface: UIInputView {
                 let currentIndex = customLayouts.firstIndex { $0.id == activeCustomID } ?? -1
                 activeCustomID = customLayouts[(currentIndex + 1) % customLayouts.count].id
                 rememberKeyboard(); rebuild()
-            case .forceNewLine: commitComposition(); insert?("\n")
-            case .halfSpace, .commitAndSpace: commitComposition(); insert?(" ")
-            case .fullSpace: commitComposition(); insert?("　")
+            case .forceNewLine:
+                if hasComposition { commitComposition() } else { insert?("\n") }
+            case .halfSpace, .fullSpace:
+                if layout.source["layout"]?["isDirectMode"] == .bool(true) { insert?(" ") }
+                else if hasComposition { pressed("空白") }
+                else { insert?(command == .fullSpace ? "　" : " ") }
+            case .commitAndSpace: commitComposition(); insert?(" ")
             }
         }
     }

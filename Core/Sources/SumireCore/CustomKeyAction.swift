@@ -12,10 +12,11 @@ public enum CustomKeyAction: Codable, Equatable {
     public enum Command: String, Codable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
-        case paste = "Paste", cursorLeft = "MoveCursorLeft", nextKeyboard = "SwitchToNextIme"
+        case paste = "Paste", cursorLeft = "MoveCursorLeft", cursorRight = "MoveCursorRight", nextKeyboard = "SwitchToNextIme"
         case modifier = "小゛゜", changeMode = "ChangeInputMode", moveCustomKeyboardTab = "MoveCustomKeyboardTab"
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
+        case deleteUntilBoundary = "DeleteUntilSymbol", openSymbols = "ShowEmojiKeyboard"
     }
     /// Pinned IMEService InputText actions; ordinary Text payloads stay literal.
     public static func supportsInputText(_ token: String) -> Bool {
@@ -33,7 +34,8 @@ public enum CustomKeyAction: Codable, Equatable {
         if type == "MoveToCustomKeyboard" { return targets.resolve(value ?? "", raw: type + ":" + (value ?? "")) }
         let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "SPACE": "Space",
                        "NEW_LINE": "NewLine", "ENTER": "Enter", "CONFIRM": "Confirm", "CONVERT": "Convert",
-                       "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
+                       "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "MOVE_CURSOR_RIGHT": "MoveCursorRight",
+                       "DELETE_UNTIL_SYMBOL": "DeleteUntilSymbol", "SHOW_EMOJI_KEYBOARD": "ShowEmojiKeyboard", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
                        "TOGGLE_DAKUTEN": "小゛゜", "CHANGE_INPUT_MODE": "ChangeInputMode"]
         if let command = Command(rawValue: aliases[type] ?? type) { return .command(command) }
         return .unsupported(raw: type + ":" + (value ?? ""), reason: "このフリック操作はiOS側で未対応です")
