@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import CoreText
 import SumireCore
 @testable import Sumire
 
@@ -248,6 +249,112 @@ final class CandidateBarTests: XCTestCase {
                 XCTAssertEqual(selected, text)
                 let size = bar.collectionView(list, layout: list.collectionViewLayout, sizeForItemAt: path)
                 XCTAssertEqual(size.width, min(max(44, HistoricKanaFont.attributed(text).size().width + 32), max(44, list.bounds.width)))
+            }
+        }
+    }
+
+    func testProductionConversionHistoricKanaReachesCandidateCellWithoutScalarLoss() throws {
+        let font = try XCTUnwrap(HistoricKanaFont.fallback(size: 18))
+        let characterSet = CTFontCopyCharacterSet(font as CTFont) as CharacterSet
+        let bundledDictionary = try XCTUnwrap(ConversionService.bundledDictionary)
+        let readings = ["を", "にほんご", "とうきょう", "かっこんとう"]
+        let categoryMasks: [UInt32] = [0, 0x3fff_ffff]
+        var generation: UInt64 = 1
+        var foundWholeCandidateForWo = false
+        var historicScalars = Set<UInt32>()
+        var displayCandidates: [(text: String, annotation: String?)] = []
+
+        for categoryMask in categoryMasks {
+            let service = ConversionService(directory: bundledDictionary, categoryMask: categoryMask)
+            service.setPersonal(PersonalLexicon())
+            service.setLearning(url: nil)
+            service.setEnglishReading(true)
+            for reading in readings {
+                let converted = expectation(description: "Production conversion candidate fixture")
+                var result: Result<ConversionResponse, Error>?
+                service.convert(reading, generation: generation, editStart: 0) {
+                    result = $0
+                    converted.fulfill()
+                }
+                wait(for: [converted], timeout: 20)
+                generation += 1
+
+                let response = try XCTUnwrap(result).get()
+                XCTAssertTrue(response.complete)
+                if categoryMask == 0 && reading == "を" {
+                    foundWholeCandidateForWo = response.candidates.contains {
+                        $0.text.unicodeScalars.map(\.value) == [0x1B005]
+                    }
+                }
+
+                for candidate in response.candidates where candidate.text.unicodeScalars.contains(where: {
+                    (0x1B000...0x1B16F).contains($0.value)
+                }) {
+                    if !displayCandidates.contains(where: { $0.text == candidate.text && $0.annotation == candidate.displayAnnotation }) {
+                        displayCandidates.append((candidate.text, candidate.displayAnnotation))
+                    }
+                    for scalar in candidate.text.unicodeScalars where (0x1B000...0x1B16F).contains(scalar.value) {
+                        historicScalars.insert(scalar.value)
+                        XCTAssertTrue(characterSet.contains(scalar), String(format: "U+%05X is absent from the bundled font", scalar.value))
+                        let attributed = HistoricKanaFont.attributed(String(scalar))
+                        let selectedFont = attributed.attribute(.font, at: 0, effectiveRange: nil) as? UIFont
+                        XCTAssertEqual(selectedFont?.fontName, HistoricKanaFont.assetName,
+                                       String(format: "U+%05X did not select the bundled font", scalar.value))
+
+                        let line = CTLineCreateWithAttributedString(attributed)
+                        let runs = CTLineGetGlyphRuns(line) as! [CTRun]
+                        var glyphs: [CGGlyph] = []
+                        for run in runs {
+                            let count = CTRunGetGlyphCount(run)
+                            var runGlyphs = [CGGlyph](repeating: 0, count: count)
+                            CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &runGlyphs)
+                            glyphs.append(contentsOf: runGlyphs)
+                        }
+                        XCTAssertFalse(glyphs.isEmpty, String(format: "U+%05X produced no glyph", scalar.value))
+                        XCTAssertTrue(glyphs.allSatisfy { $0 != 0 }, String(format: "U+%05X produced a missing glyph", scalar.value))
+                    }
+                    XCTAssertEqual(HistoricKanaFont.attributed(candidate.text).string.unicodeScalars.map(\.value),
+                                   candidate.text.unicodeScalars.map(\.value),
+                                   "Historic-kana font attribution must preserve candidate scalars")
+                }
+            }
+        }
+
+        XCTAssertTrue(foundWholeCandidateForWo, "The production fixture for を should include whole-candidate U+1B005")
+        XCTAssertTrue(historicScalars.contains(0x1B005), "The production fixtures should exercise U+1B005")
+        XCTAssertFalse(displayCandidates.isEmpty, "Production fixtures should include historical-kana candidates")
+
+        withBar(rows: 3) { bar, list in
+            bar.useExpandedLayout()
+            bar.setCandidates(displayCandidates.map { .init(text: $0.text, annotation: $0.annotation) })
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            XCTAssertEqual(list.numberOfItems(inSection: 0), displayCandidates.count)
+            for (index, candidate) in displayCandidates.enumerated() {
+                let path = IndexPath(item: index, section: 0)
+                list.scrollToItem(at: path, at: .centeredVertically, animated: false)
+                list.layoutIfNeeded()
+                let cell = list.cellForItem(at: path)
+                let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }.first
+                XCTAssertEqual(label?.attributedText?.string.unicodeScalars.map(\.value), candidate.text.unicodeScalars.map(\.value))
+                XCTAssertEqual(cell?.accessibilityLabel?.unicodeScalars.map(\.value), candidate.text.unicodeScalars.map(\.value))
+                if let cell {
+                    let image = UIGraphicsImageRenderer(bounds: cell.bounds).image { _ in
+                        cell.drawHierarchy(in: cell.bounds, afterScreenUpdates: true)
+                    }
+                    let attachment = XCTAttachment(image: image)
+                    attachment.name = "historic-kana-candidate-\(index)"
+                    attachment.lifetime = .keepAlways
+                    self.add(attachment)
+                }
+                var offset = 0
+                for scalar in candidate.text.unicodeScalars {
+                    if (0x1B000...0x1B16F).contains(scalar.value) {
+                        let selectedFont = label?.attributedText?.attribute(.font, at: offset, effectiveRange: nil) as? UIFont
+                        XCTAssertEqual(selectedFont?.fontName, HistoricKanaFont.assetName,
+                                       String(format: "Candidate %d U+%05X", index, scalar.value))
+                    }
+                    offset += scalar.utf16.count
+                }
             }
         }
     }
