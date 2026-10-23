@@ -4,7 +4,9 @@ import UniformTypeIdentifiers
 import CryptoKit
 import SumireCore
 
-/// All database and image work is serialized off the UI queue. Clipboard reads require the host's permission gate.
+/// All database and image work is serialized off the UI queue. Clipboard reads
+/// require the host's permission gate except for content delivered by the
+/// system after an explicit UIPasteControl selection.
 final class ClipboardHistoryController {
     var onInsertText: ((String) -> Void)?
     var onHistoryEnabledChanged: ((Bool) -> Void)?
@@ -84,7 +86,11 @@ final class ClipboardHistoryController {
         else if let image { accept(.image(image)) }
     }
     private func receiveProviders(_ providers: [NSItemProvider]) {
-        guard allowed, let provider = providers.first else { onNotice?("クリップボードの読み込みにはフルアクセスが必要です"); return }
+        guard let provider = providers.first else { onNotice?("クリップボードを読み込めませんでした"); return }
+        guard allowed else {
+            insertExplicitlySelectedText(provider)
+            return
+        }
         let token = generation
         let image = provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
         let type = image ? UTType.image.identifier : UTType.utf8PlainText.identifier
@@ -107,6 +113,28 @@ final class ClipboardHistoryController {
                     self.accept(content)
                 }
             } catch { self.notice(error.localizedDescription, token: token) }
+        }
+    }
+    /// With Full Access OFF, accept only the user-selected text provider from
+    /// UIPasteControl and send it directly through the keyboard text proxy.
+    /// This path never reads UIPasteboard or writes clipboard/history storage.
+    private func insertExplicitlySelectedText(_ provider: NSItemProvider) {
+        guard provider.canLoadObject(ofClass: NSString.self) else {
+            onNotice?(provider.hasItemConformingToTypeIdentifier(UTType.image.identifier)
+                ? "画像はキーボードから文字として挿入できません。入力先の貼り付けメニューを使ってください"
+                : "この形式をキーボードから挿入できません")
+            return
+        }
+        let token = generation
+        provider.loadObject(ofClass: NSString.self) { [weak self] object, _ in
+            DispatchQueue.main.async { [weak self] in
+                guard let self, !self.allowed, self.generation == token else { return }
+                guard let text = object as? String, !text.isEmpty else {
+                    self.onNotice?("クリップボードを読み込めませんでした")
+                    return
+                }
+                self.onInsertText?(text)
+            }
         }
     }
     private func accept(_ content: ClipboardHistoryStore.Content) {

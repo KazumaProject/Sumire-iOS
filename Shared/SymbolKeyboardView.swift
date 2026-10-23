@@ -21,7 +21,18 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     var onDelete: (() -> Void)?
     var onClipboardProviders: (([NSItemProvider]) -> Void)?
     var onClipboardThumbnailRequested: ((String) -> Void)?
-    var clipboardAccessAllowed = true { didSet { pasteControl.isEnabled = clipboardAccessAllowed } }
+    var clipboardAccessAllowed = true {
+        didSet {
+            // UIPasteControl is a system-mediated, user-initiated selection and
+            // remains available with Full Access OFF. The host still gates
+            // automatic reads and persistent history separately.
+            pasteControl.isEnabled = true
+            if mode == .clipboard {
+                rebuildCategories()
+                reloadItems()
+            }
+        }
+    }
     private let pasteControl: UIPasteControl = {
         let configuration = UIPasteControl.Configuration()
         configuration.displayMode = .iconAndLabel
@@ -152,7 +163,9 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     }
 
     override func paste(itemProviders: [NSItemProvider]) {
-        guard clipboardAccessAllowed else { return }
+        // This delegate is reached for an explicit system paste action. Do not
+        // inspect UIPasteboard here; the provider contains only the selection
+        // the user approved through UIPasteControl.
         onClipboardProviders?(itemProviders)
     }
     /// Thumbnails live in the host's bounded cache or visible cells, not in every metadata row.
@@ -207,8 +220,11 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
     private func rebuildCategories() {
         categoryStack.arrangedSubviews.forEach { categoryStack.removeArrangedSubview($0); $0.removeFromSuperview() }
         if mode == .clipboard {
-            let label = UILabel(); label.text = "履歴を保存"; label.textColor = palette.foreground
-            categoryStack.addArrangedSubview(label); categoryStack.addArrangedSubview(clipboardSwitch)
+            let label = UILabel()
+            label.text = clipboardAccessAllowed ? "履歴を保存" : "フルアクセスOFF"
+            label.textColor = palette.foreground
+            categoryStack.addArrangedSubview(label)
+            if clipboardAccessAllowed { categoryStack.addArrangedSubview(clipboardSwitch) }
             categoryStack.addArrangedSubview(pasteControl)
         } else {
             for (index, category) in categories.enumerated() {
@@ -246,7 +262,13 @@ final class SymbolKeyboardView: UIView, UICollectionViewDataSource, UICollection
         symbols = mode == .emoji && !isHistory ? values.map { EmojiSkinToneVariants.applying(defaultSkinTone, to: $0) } : values
         collection.reloadData(); collection.setContentOffset(.zero, animated: false)
         emptyLabel.isHidden = mode == .clipboard ? !clipboardItems.isEmpty : !symbols.isEmpty
-        emptyLabel.text = mode == .clipboard ? "コピーした内容はここに表示します。\n上のペーストボタンで読み込みます。" : "このカテゴリには項目がありません。"
+        if mode == .clipboard {
+            emptyLabel.text = clipboardAccessAllowed
+                ? "コピーした内容はここに表示します。\n上のペーストボタンで読み込みます。"
+                : "フルアクセスOFFでは、システムのペーストボタンで選択した文字を入力します。履歴には保存しません。"
+        } else {
+            emptyLabel.text = "このカテゴリには項目がありません。"
+        }
     }
     func numberOfSections(in collectionView: UICollectionView) -> Int { mode == .clipboard ? 2 : 1 }
     func collectionView(_ collectionView: UICollectionView, numberOfItemsInSection section: Int) -> Int {

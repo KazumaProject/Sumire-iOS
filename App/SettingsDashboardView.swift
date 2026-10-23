@@ -39,14 +39,14 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable {
-    case keyboards, customKeyboard, romaji, specialKeys, conversion, touchFeedback, flickStyle, appearance, theme, candidates
-    case personalDictionary, dictionaries, dictionaryBrowser, learning, symbols, clipboard, backup, setup, licenses
+    case keyboards, toolbar, customKeyboard, romaji, specialKeys, conversion, touchFeedback, flickStyle, appearance, theme, candidates
+    case personalDictionary, textMacros, dictionaries, dictionaryBrowser, learning, symbols, clipboard, backup, setup, licenses
     var id: String { rawValue }
     var category: SettingsCategory {
         switch self {
-        case .keyboards, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback, .flickStyle: return .input
+        case .keyboards, .toolbar, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback, .flickStyle: return .input
         case .appearance, .theme, .candidates: return .appearance
-        case .personalDictionary, .dictionaries, .dictionaryBrowser, .learning: return .dictionaries
+        case .personalDictionary, .textMacros, .dictionaries, .dictionaryBrowser, .learning: return .dictionaries
         case .symbols, .clipboard, .backup: return .data
         case .setup, .licenses: return .app
         }
@@ -54,6 +54,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
     var title: String {
         switch self {
         case .keyboards: return "キーボードの選択・順序"
+        case .toolbar: return "ツールバーの項目と順序"
         case .customKeyboard: return "Custom Keyboard"
         case .romaji: return "カスタムローマ字"
         case .specialKeys: return "Sumire の特殊キー操作"
@@ -64,6 +65,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "キーボードの配色"
         case .candidates: return "候補欄の段数"
         case .personalDictionary: return "ユーザー辞書・定型文"
+        case .textMacros: return "定型マクロ"
         case .dictionaryBrowser: return "辞書の単語を見る"
         case .dictionaries: return "分類辞書・英語辞書"
         case .learning: return "変換の学習"
@@ -77,6 +79,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
     var subtitle: String {
         switch self {
         case .keyboards: return "使う配列を選んで、好きな順番に"
+        case .toolbar: return "キーボード上部の操作を選んで並べ替え"
         case .customKeyboard: return "自分だけの配列を作成・編集"
         case .romaji: return "ローマ字からかなへの変換ルール"
         case .specialKeys: return "タップ・フリック・長押しの動作"
@@ -87,6 +90,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "好きな色とライト・ダーク表示"
         case .candidates: return "候補を1・2・3段で表示"
         case .personalDictionary: return "名前、よく使うことば、決まり文句"
+        case .textMacros: return "読み・日付・選択文字を含めて展開"
         case .dictionaryBrowser: return "収録した読み・表記を検索して確認"
         case .dictionaries: return "30のカテゴリと英語の読みを選択"
         case .learning: return "学習の有効化と履歴の削除"
@@ -100,6 +104,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
     var icon: String {
         switch self {
         case .keyboards: return "list.bullet"
+        case .toolbar: return "ellipsis.rectangle"
         case .customKeyboard: return "square.grid.3x3"
         case .romaji: return "textformat.abc"
         case .specialKeys: return "hand.draw"
@@ -110,6 +115,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .theme: return "paintpalette"
         case .candidates: return "rectangle.split.3x1"
         case .personalDictionary: return "book.closed"
+        case .textMacros: return "text.badge.plus"
         case .dictionaryBrowser: return "text.book.closed"
         case .dictionaries: return "books.vertical"
         case .learning: return "sparkles"
@@ -123,6 +129,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
     private var searchTerms: String {
         switch self {
         case .keyboards: return "テンキー TenKey QWERTY 50音 五十音 Sumire 配列"
+        case .toolbar: return "ショートカット toolbar shortcut 並べ替え"
         case .customKeyboard: return "カスタム 配列 編集 JSON"
         case .conversion: return "文節 文節区切り 文節ごと かな漢字変換"
         case .touchFeedback: return "フリック ポップアップ popup マルチタッチ 二本指 長押し"

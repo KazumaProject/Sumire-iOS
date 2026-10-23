@@ -15,6 +15,10 @@ final class KeyboardViewController: UIInputViewController {
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
         surface.translatesAutoresizingMaskIntoConstraints = false
         view.addSubview(surface)
+        surface.candidateBar.bindKeyboardPicker(
+            target: self,
+            action: #selector(handleInputModeList(from:with:))
+        )
         NSLayoutConstraint.activate([
             surface.topAnchor.constraint(equalTo: view.topAnchor),
             surface.bottomAnchor.constraint(equalTo: view.bottomAnchor),
@@ -27,6 +31,11 @@ final class KeyboardViewController: UIInputViewController {
         surface.onHeightChange = { [weak self] height in self?.keyboardHeight.constant = height }
         surface.beforeInput = { [weak self] in self?.validateContext() }
         surface.insert = { [weak self] text in self?.perform { $0.insertText(text) } }
+        surface.candidateBar.onInsertShortcutText = { [weak self] text in
+            guard let self, !self.surface.hasComposition else { return }
+            self.surface.beforeInput?()
+            self.surface.insert?(text)
+        }
         surface.delete = { [weak self] in self?.perform { $0.deleteBackward() } }
         surface.deleteUntilBoundary = { [weak self] in
             guard let self else { return }
@@ -77,6 +86,9 @@ final class KeyboardViewController: UIInputViewController {
             self.perform { $0.adjustTextPosition(byCharacterOffset: String(first).utf16.count) }
         }
         surface.nextKeyboard = { [weak self] in self?.advanceToNextInputMode() }
+        surface.executeTextMacro = { [weak self] id, clipboard in
+            self?.executeTextMacro(id: id, clipboard: clipboard)
+        }
     }
 
     override func viewWillAppear(_ animated: Bool) {
@@ -102,6 +114,7 @@ final class KeyboardViewController: UIInputViewController {
         let learningReset = LocalDataReset(store: .learning, url: PersonalDataLocation.learningURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
         surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: hasFullAccess) : nil, localReset: learningReset)
         surface.learnFirstCandidate = defaults.bool(forKey: "learnFirstCandidate")
+        updateTextMacroContext()
         surface.reloadSizing()
         do {
             let loaded = try PersonalDataLocation.readableStore().load()
@@ -114,6 +127,7 @@ final class KeyboardViewController: UIInputViewController {
         surface.englishReadingEnabled = defaults.object(forKey: "englishReadingEnabled") as? Bool ?? true
         surface.categoryMask = UInt32(defaults.integer(forKey: "categoryMask") & 0x3fff_ffff)
         surface.candidateRowCount = rows
+        surface.candidateBar.reloadToolbarSettings(defaults: defaults)
         keyboardHeight.constant = surface.requestedHeight
         ProcessMemory.record("extension.visible")
     }
@@ -140,8 +154,78 @@ final class KeyboardViewController: UIInputViewController {
         }
         expectedContext = current
     }
-    override func textDidChange(_ textInput: UITextInput?) { validateContext() }
-    override func selectionDidChange(_ textInput: UITextInput?) { validateContext() }
+    override func textDidChange(_ textInput: UITextInput?) {
+        updateTextMacroContext()
+        validateContext()
+    }
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        updateTextMacroContext()
+        validateContext()
+    }
+
+    private func updateTextMacroContext() {
+        let proxy = textDocumentProxy
+        surface.textMacroSelectionAvailable = proxy.selectedText?.isEmpty == false
+        let traits = proxy as UITextInputTraits
+        let sensitiveTypes: [UITextContentType] = [.password, .newPassword, .oneTimeCode]
+        surface.textMacroContextAllowed = traits.isSecureTextEntry == false &&
+            !sensitiveTypes.contains(where: { traits.textContentType == $0 })
+    }
+
+    private func executeTextMacro(id: String, clipboard: String?) {
+        let proxy = textDocumentProxy
+        let initial = context(for: proxy)
+        guard let macro = surface.personalLexicon.textMacros.first(where: { $0.id == id && $0.enabled }) else {
+            surface.showDataNotice("定型マクロを使用できません")
+            return
+        }
+        do {
+            let compiled = try AndroidTextMacroCompiler.compile(macro.body)
+            let requirements = compiled.requirements
+            guard requirements.isEmpty || surface.textMacroContextAllowed else {
+                throw PersonalDataError("この入力欄では選択文字とクリップボードを使うマクロを停止しています")
+            }
+            if requirements.contains(.clipboard), clipboard == nil {
+                surface.showTextMacroList(requiredMacroID: id)
+                return
+            }
+            let selection: String?
+            if requirements.contains(.selection) {
+                guard let value = proxy.selectedText, !value.isEmpty else {
+                    throw PersonalDataError("使う文字を選択してから実行してください")
+                }
+                selection = value
+            } else { selection = nil }
+            let clipboardValue: String?
+            if requirements.contains(.clipboard) {
+                guard let clipboard, !clipboard.isEmpty else {
+                    throw PersonalDataError("先に貼り付けボタンからクリップボードの文字を許可してください")
+                }
+                clipboardValue = clipboard
+            } else { clipboardValue = nil }
+            let expanded = try compiled.expand(context: AndroidTextMacroContext(
+                selection: selection, clipboard: clipboardValue
+            ))
+            guard context(for: proxy) == initial,
+                  surface.personalLexicon.textMacros.first(where: { $0.id == id }) == macro else {
+                throw PersonalDataError("入力欄またはマクロが変更されたため、展開を中止しました")
+            }
+            let cursorDelta = try expanded.cursorAdjustmentUTF16()
+            perform { current in
+                // insertText replaces the active marked range, matching Android's
+                // clear-composing-then-commit behavior. UIKit text-field and text-view
+                // coverage is in MarkedTextCommitTests; extension-host behavior remains
+                // an external-host acceptance check.
+                current.insertText(expanded.text)
+                if cursorDelta != 0 { current.adjustTextPosition(byCharacterOffset: cursorDelta) }
+            }
+            surface.invalidateComposition()
+            surface.showDataNotice("定型マクロを展開しました")
+        } catch {
+            surface.showDataNotice(error.localizedDescription)
+        }
+    }
+
     override func viewWillDisappear(_ animated: Bool) {
         let proxy = textDocumentProxy
         if markedOwnership.consumeIfMatching(context(for: proxy)) {

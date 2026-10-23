@@ -15,7 +15,7 @@ public final class KeyboardSettingsAccess {
     private let lock = NSRecursiveLock()
     private static let overlayKey = "internal.extensionSettingsOverlay.v1"
     private static let runtimeKeys: Set<String> = [
-        "keyboard.lastUsed", KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape),
+        "keyboard.lastUsed", "liveConversion", KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape),
         SymbolKeyboardHistory.storageKey, EmojiSkinTone.settingsKey, ClipboardHistorySettings.enabledKey
     ]
 
@@ -87,6 +87,7 @@ public final class KeyboardSettingsAccess {
         guard let value else { return true } // An explicit private reset.
         switch key {
         case "keyboard.lastUsed": return (value as? String).map { $0.utf8.count <= 256 } ?? false
+        case "liveConversion": return value is NSNumber
         case KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape):
             guard let data = value as? Data, data.count <= 1024,
                   let size = try? JSONDecoder().decode(KeyboardSize.self, from: data) else { return false }

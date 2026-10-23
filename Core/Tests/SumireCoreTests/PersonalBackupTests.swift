@@ -9,9 +9,21 @@ final class PersonalBackupTests: XCTestCase {
         settings.values["englishReadingEnabled"] = .boolean(false)
         settings.values["candidateRowCount"] = .number(3)
         settings.values["appearance.english.special.keyScale"] = .number(0.85)
+        settings.values[KeyboardToolbarPreferences.storageKey] = .textArray([
+            KeyboardToolbarAction.resize.rawValue,
+            KeyboardToolbarAction.selectDate.rawValue,
+            KeyboardToolbarAction.keyboardPicker.rawValue,
+            KeyboardToolbarAction.liveConversionToggle.rawValue,
+            KeyboardToolbarAction.clipboard.rawValue,
+            KeyboardToolbarAction.template.rawValue,
+            KeyboardToolbarAction.emoji.rawValue,
+            KeyboardToolbarAction.paste.rawValue
+        ])
         let contents = PersonalBackup.Contents(lexicon: lexicon, settings: settings)
         let encoded = try PersonalBackup.encode(contents)
-        XCTAssertEqual(try PersonalBackup.decodeContents(encoded), contents)
+        let restored = try PersonalBackup.decodeContents(encoded)
+        XCTAssertEqual(restored, contents)
+        XCTAssertEqual(restored.settings?.values[KeyboardToolbarPreferences.storageKey], settings.values[KeyboardToolbarPreferences.storageKey])
         XCTAssertEqual(try PersonalBackup.decode(encoded), lexicon)
         let legacy = try PersonalBackup.decodeContents(PersonalBackup.encode(lexicon))
         XCTAssertEqual(legacy.lexicon, lexicon)

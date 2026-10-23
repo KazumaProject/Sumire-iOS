@@ -14,6 +14,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "englishReadingEnabled")
         defaults.set(true, forKey: "bunsetsuSeparation")
+        KeyboardToolbarPreferences.save([.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .emoji, .paste], defaults: defaults)
         defaults.set(0x3fff_ffff, forKey: "categoryMask")
         defaults.set("flick", forKey: "sumire.keyArrangement")
         defaults.set(true, forKey: "qwerty.english.flickUp")
@@ -49,6 +50,8 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         XCTAssertEqual(original.values["theme.saturation"], .number(0.35))
         XCTAssertEqual(original.values["theme.brightness"], .number(0.65))
         XCTAssertEqual(original.values["bunsetsuSeparation"], .boolean(true))
+        XCTAssertEqual(original.values[KeyboardToolbarPreferences.storageKey],
+                       .textArray(["resize", "select_date", "keyboard_picker", "live_conversion_toggle", "emoji", "paste"]))
         let restored = try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(original))
         defaults.removePersistentDomain(forName: name)
         defaults.set("keep", forKey: "unrelated.account")
@@ -76,6 +79,8 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
             ("theme.hue", .number(.nan)), ("theme.saturation", .number(1.1)), ("theme.brightness", .number(-0.1)), ("theme.mode", .text("invalid")),
             ("englishReadingEnabled", .number(0)), ("unknown.key", .boolean(true)),
             ("bunsetsuSeparation", .number(1)),
+            (KeyboardToolbarPreferences.storageKey, .textArray(["unknown_action"])),
+            (KeyboardToolbarPreferences.storageKey, .textArray(["paste", "paste"])),
             ("appearance.english.keyScale", .number(0.1)),
             ("customRomaji.library", .data(Data("{}".utf8))),
             ("customKeyboard.library", .data(Data("{}".utf8))),

@@ -1,8 +1,26 @@
 import XCTest
 import UIKit
 import SumireCore
+@testable import Sumire
 
 final class CandidateBarTests: XCTestCase {
+    @MainActor
+    func testMacroClipboardPasteControlRequiresAnEnabledClipboardMacro() {
+        let disabled = PersonalTextMacro(name: "disabled", body: "{clipboard}", enabled: false)
+        let enabled = PersonalTextMacro(name: "enabled", body: "{clipboard}")
+        let palette = Sumire.KeyboardPalette(hue: 0.73, dark: false)
+
+        func pasteControl(for macros: [PersonalTextMacro], canUseContext: Bool = true) -> UIPasteControl? {
+            let panel = Sumire.KeyboardTextMacroPanel(macros: macros, palette: palette,
+                                                       canUseContext: canUseContext, hasSelection: false)
+            return panel.subviews.compactMap { $0 as? UIPasteControl }
+                .first { $0.accessibilityIdentifier == "text-macro-clipboard-paste" }
+        }
+
+        XCTAssertTrue(pasteControl(for: [disabled])?.isHidden ?? false)
+        XCTAssertFalse(pasteControl(for: [enabled])?.isHidden ?? true)
+        XCTAssertTrue(pasteControl(for: [enabled], canUseContext: false)?.isHidden ?? false)
+    }
     func testProductionBridgePreservesPrimaryNumericAndPersonalOrigins() throws {
         let service = ConversionService(categoryMask: 0)
         func convert(_ reading: String, generation: UInt64) throws -> [ConversionCandidate] {
