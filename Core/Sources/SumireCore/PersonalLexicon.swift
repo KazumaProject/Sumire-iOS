@@ -79,6 +79,41 @@ public struct PersonalImportPreview {
     }
 }
 
+/// Encodes one Android-compatible user dictionary or template export.
+/// Android's import path assigns a fresh database ID to every row, so exported
+/// rows use the same `id: 0` placeholder instead of carrying platform-local IDs.
+public enum PersonalAndroidListExport {
+    private struct Entry: Encodable {
+        let id: Int
+        let word: String
+        let reading: String
+        let posIndex: Int
+        let posScore: Int
+    }
+
+    public static func encode(_ entries: [PersonalWord]) throws -> Data {
+        guard entries.count <= 100_000 else { throw PersonalDataError("登録件数の上限は100000件です") }
+
+        var seen = Set<String>()
+        var textBytes = 0
+        let rows = try entries.map { entry -> Entry in
+            try entry.validate()
+            let key = "\(entry.reading.utf8.count):" + entry.reading + entry.word
+            guard seen.insert(key).inserted else { throw PersonalDataError("同じ読みと表記が重複しています") }
+            textBytes += entry.reading.utf8.count + entry.word.utf8.count
+            guard textBytes <= 16 * 1024 * 1024 else { throw PersonalDataError("ユーザーデータの文字容量は16 MiBまでです") }
+            return Entry(id: 0, word: entry.word, reading: entry.reading,
+                         posIndex: entry.posIndex, posScore: entry.posScore)
+        }
+
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = [.sortedKeys]
+        let data = try encoder.encode(rows)
+        guard data.count <= 32 * 1024 * 1024 else { throw PersonalDataError("JSONファイルが大きすぎます") }
+        return data
+    }
+}
+
 /// Immutable generations plus an atomic pointer. A validated previous pointer is
 /// retained for corruption/interrupted-update recovery; generation files are never overwritten.
 public struct PersonalLexiconStore {
