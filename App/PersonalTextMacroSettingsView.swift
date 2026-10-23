@@ -260,6 +260,19 @@ enum TextMacroEditorMode: String, CaseIterable, Identifiable {
     static func initial(for parsedDocument: AndroidTextMacroEditorDocument?) -> TextMacroEditorMode {
         parsedDocument == nil ? .source : .blocks
     }
+
+    static func sourceAfterLeavingBlocks(
+        currentBody: String,
+        blocks: [AndroidTextMacroEditorBlock]
+    ) -> String {
+        // Every block edit already synchronizes `currentBody`. If parsing source
+        // failed while switching into blocks, `blocks` contains only the empty
+        // recovery placeholder and must never replace the user's original text.
+        guard (try? AndroidTextMacroEditorDocument.parse(currentBody)) != nil else {
+            return currentBody
+        }
+        return AndroidTextMacroEditorDocument(blocks: blocks).toSource()
+    }
 }
 
 private struct RemovedTextMacroEditorBlock: Identifiable {
@@ -333,7 +346,11 @@ private struct PersonalTextMacroEditor: View {
                 }
                 .onChange(of: mode) { oldMode, newMode in
                     switch (oldMode, newMode) {
-                    case (.blocks, .source): synchronizeSource()
+                    case (.blocks, .source):
+                        macro.body = TextMacroEditorMode.sourceAfterLeavingBlocks(
+                            currentBody: macro.body,
+                            blocks: blocks.map(\.block)
+                        )
                     case (.source, .blocks): loadBlocksFromSource()
                     default: break
                     }
