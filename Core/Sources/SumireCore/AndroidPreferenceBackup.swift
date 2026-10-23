@@ -155,7 +155,8 @@ public struct AndroidPreferenceBackup: Equatable {
 
         let shortcutIDs: [String]?
         if let rawShortcuts = root["shortcutIds"], !(rawShortcuts is NSNull) {
-            guard let values = rawShortcuts as? [String],
+            guard version >= 2,
+                  let values = rawShortcuts as? [String],
                   values.count <= maximumEntries,
                   values.allSatisfy({ !$0.isEmpty && $0.utf8.count <= maximumShortcutIDBytes }) else {
                 throw PersonalDataError("Android設定バックアップのツールバー項目が不正です")

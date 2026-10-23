@@ -395,8 +395,9 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
             entry("live_conversion_preference", "null", true)
         ])))
-        XCTAssertEqual(try AndroidPreferenceBackup.decode(json([], version: 1, shortcutIDs: ["emoji"]))
-            .toolbarShortcutImport?.actions, [.emoji])
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([], version: 1, shortcutIDs: ["emoji"])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([], version: 1, shortcutIDs: [])))
+        XCTAssertNil(try AndroidPreferenceBackup.decode(json([], version: 1, nullShortcutIDs: true)).shortcutIDs)
     }
 
     func testShortcutIDsDistinguishOmittedNullEmptyAndSupportedLists() throws {
