@@ -20,11 +20,12 @@ public struct AndroidPreferenceBackup: Equatable {
     private static let maximumShortcutIDBytes = 512
     private enum Mapping {
         case boolean(String)
+        case integer(String, range: ClosedRange<Int>)
         case text(String, values: [String: String])
 
         var targetKey: String {
             switch self {
-            case .boolean(let key), .text(let key, _): return key
+            case .boolean(let key), .integer(let key, _), .text(let key, _): return key
             }
         }
     }
@@ -35,6 +36,8 @@ public struct AndroidPreferenceBackup: Equatable {
         "learn_dictionary_preference": .boolean("learningEnabled"),
         "learn_first_candidate_dictionary_preference": .boolean("learnFirstCandidate"),
         "clipboard_history_preference": .boolean(ClipboardHistorySettings.enabledKey),
+        "clipboard_delete_unpinned_after_hours_preference": .boolean("clipboard.expirationEnabled"),
+        "clipboard_unpinned_retention_hours_preference": .integer("clipboard.retentionHours", range: 1...72),
         "custom_direct_input_replace_composing_preference": .boolean(CustomInputModeStore.replaceKey),
         "symbol_mode_preference": .text(SymbolKeyboardMode.initialModeKey, values: [
             "EMOJI": SymbolKeyboardMode.emoji.rawValue,
@@ -124,6 +127,17 @@ public struct AndroidPreferenceBackup: Equatable {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
                 snapshot.values[targetKey] = .boolean(number.boolValue)
+            case "int":
+                guard case .integer(let targetKey, let range) = mapping,
+                      let number = entry["value"] as? NSNumber,
+                      CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      number.doubleValue.isFinite,
+                      number.doubleValue.rounded() == number.doubleValue,
+                      number.doubleValue >= Double(range.lowerBound),
+                      number.doubleValue <= Double(range.upperBound) else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                snapshot.values[targetKey] = .number(number.doubleValue)
             case "string":
                 guard case .text(let targetKey, let values) = mapping,
                       let value = entry["value"] as? String,

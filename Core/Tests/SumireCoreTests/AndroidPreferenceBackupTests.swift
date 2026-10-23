@@ -10,6 +10,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("learn_dictionary_preference", "boolean", false),
             entry("learn_first_candidate_dictionary_preference", "boolean", true),
             entry("clipboard_history_preference", "boolean", true),
+            entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true),
+            entry("clipboard_unpinned_retention_hours_preference", "int", 24),
             entry("custom_direct_input_replace_composing_preference", "boolean", true),
             entry("symbol_mode_preference", "string", "CLIPBOARD"),
             entry("default_emoji_skin_tone_preference", "string", "1F3FD"),
@@ -18,7 +20,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 9)
+        XCTAssertEqual(backup.importedSettingCount, 11)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -26,6 +28,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(backup.settings.values["learningEnabled"], .boolean(false))
         XCTAssertEqual(backup.settings.values["learnFirstCandidate"], .boolean(true))
         XCTAssertEqual(backup.settings.values[ClipboardHistorySettings.enabledKey], .boolean(true))
+        XCTAssertEqual(backup.settings.values["clipboard.expirationEnabled"], .boolean(true))
+        XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(24))
         XCTAssertEqual(backup.settings.values[CustomInputModeStore.replaceKey], .boolean(true))
         XCTAssertEqual(backup.settings.values[SymbolKeyboardMode.initialModeKey], .text("clipboard"))
         XCTAssertEqual(backup.settings.values[EmojiSkinTone.settingsKey], .text("1F3FD"))
@@ -35,6 +39,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "englishReadingEnabled")
         defaults.set(true, forKey: "omissionSearch")
+        defaults.set(false, forKey: "clipboard.expirationEnabled")
+        defaults.set(1, forKey: "clipboard.retentionHours")
         defaults.set(3, forKey: "candidateRowCount")
         try backup.apply(to: defaults)
 
@@ -44,6 +50,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: "learningEnabled"))
         XCTAssertTrue(defaults.bool(forKey: "learnFirstCandidate"))
         XCTAssertTrue(defaults.bool(forKey: ClipboardHistorySettings.enabledKey))
+        XCTAssertTrue(defaults.bool(forKey: "clipboard.expirationEnabled"))
+        XCTAssertEqual(defaults.integer(forKey: "clipboard.retentionHours"), 24)
         XCTAssertTrue(defaults.bool(forKey: CustomInputModeStore.replaceKey))
         XCTAssertEqual(SymbolKeyboardMode.initialMode(defaults: defaults), .clipboard)
         XCTAssertEqual(EmojiSkinTone.load(defaults: defaults), .medium)
@@ -78,13 +86,16 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         let data = json([
             ["key": "live_conversion_preference", "type": "null"],
             ["key": "clipboard_history_preference", "type": "null"],
+            ["key": "clipboard_delete_unpinned_after_hours_preference", "type": "null"],
+            ["key": "clipboard_unpinned_retention_hours_preference", "type": "null"],
             ["key": "symbol_mode_preference", "type": "null"],
             entry("learn_dictionary_preference", "boolean", true)
         ], version: 2, shortcutIDs: ["symbols", "emoji"])
         let backup = try AndroidPreferenceBackup.decode(data)
         XCTAssertEqual(backup.shortcutIDs, ["symbols", "emoji"])
         XCTAssertEqual(backup.removingKeys, [
-            "liveConversion", ClipboardHistorySettings.enabledKey, SymbolKeyboardMode.initialModeKey
+            "liveConversion", ClipboardHistorySettings.enabledKey, "clipboard.expirationEnabled",
+            "clipboard.retentionHours", SymbolKeyboardMode.initialModeKey
         ])
 
         let suite = "AndroidPreferenceBackupTests." + UUID().uuidString
@@ -92,11 +103,15 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "liveConversion")
         defaults.set(true, forKey: ClipboardHistorySettings.enabledKey)
+        defaults.set(true, forKey: "clipboard.expirationEnabled")
+        defaults.set(24, forKey: "clipboard.retentionHours")
         defaults.set("symbol", forKey: SymbolKeyboardMode.initialModeKey)
         defaults.set(2, forKey: "candidateRowCount")
         try backup.apply(to: defaults)
         XCTAssertNil(defaults.object(forKey: "liveConversion"))
         XCTAssertNil(defaults.object(forKey: ClipboardHistorySettings.enabledKey))
+        XCTAssertNil(defaults.object(forKey: "clipboard.expirationEnabled"))
+        XCTAssertNil(defaults.object(forKey: "clipboard.retentionHours"))
         XCTAssertNil(defaults.object(forKey: SymbolKeyboardMode.initialModeKey))
         XCTAssertTrue(defaults.bool(forKey: "learningEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 2)
@@ -113,14 +128,20 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         }
 
         shared.set(false, forKey: ClipboardHistorySettings.enabledKey)
+        shared.set(false, forKey: "clipboard.expirationEnabled")
+        shared.set(1, forKey: "clipboard.retentionHours")
         shared.set(EmojiSkinTone.standard.rawValue, forKey: EmojiSkinTone.settingsKey)
         let access = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
         local.set(false, forKey: ClipboardHistorySettings.enabledKey)
+        local.set(false, forKey: "clipboard.expirationEnabled")
+        local.set(1, forKey: "clipboard.retentionHours")
         local.set(EmojiSkinTone.standard.rawValue, forKey: EmojiSkinTone.settingsKey)
         access.didWrite([ClipboardHistorySettings.enabledKey, EmojiSkinTone.settingsKey])
 
         let backup = try AndroidPreferenceBackup.decode(json([
             entry("clipboard_history_preference", "boolean", true),
+            entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true),
+            entry("clipboard_unpinned_retention_hours_preference", "int", 24),
             entry("custom_direct_input_replace_composing_preference", "boolean", true),
             entry("symbol_mode_preference", "string", "EMOTICON"),
             entry("default_emoji_skin_tone_preference", "string", EmojiSkinTone.medium.rawValue)
@@ -132,6 +153,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertFalse(access.writesSharedSettings)
         XCTAssertTrue(access.readDefaults.bool(forKey: ClipboardHistorySettings.enabledKey))
+        XCTAssertTrue(access.readDefaults.bool(forKey: "clipboard.expirationEnabled"))
+        XCTAssertEqual(access.readDefaults.integer(forKey: "clipboard.retentionHours"), 24)
         XCTAssertEqual(access.readDefaults.string(forKey: EmojiSkinTone.settingsKey), EmojiSkinTone.medium.rawValue)
         XCTAssertEqual(access.readDefaults.string(forKey: SymbolKeyboardMode.initialModeKey), SymbolKeyboardMode.emoticon.rawValue)
         XCTAssertTrue(access.readDefaults.bool(forKey: CustomInputModeStore.replaceKey))
@@ -148,7 +171,22 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("clipboard_history_preference", "string", "true")
         ])))
         XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_delete_unpinned_after_hours_preference", "int", 1)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
             entry("custom_direct_input_replace_composing_preference", "integer", 1)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_unpinned_retention_hours_preference", "boolean", true)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 0)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 73)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 1.5)
         ])))
         XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
             entry("symbol_mode_preference", "boolean", true)
