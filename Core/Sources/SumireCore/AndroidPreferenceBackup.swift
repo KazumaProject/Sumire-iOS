@@ -12,7 +12,12 @@ public struct AndroidPreferenceBackup: Equatable {
     public let removingKeys: Set<String>
     public let importedKeys: [String]
     public let unsupportedEntryCount: Int
-    public let shortcutIDs: [String]
+    /// Android's optional ordered toolbar list. `nil` means the field was
+    /// absent or null (preserve Android's current selection); an empty array
+    /// is an explicit empty list (Android falls back to `settings`). The iOS
+    /// importer currently reports this field as unsupported and does not apply
+    /// it, but retaining the distinction avoids losing restore semantics.
+    public let shortcutIDs: [String]?
 
     /// Number of iOS setting changes that will be applied, including an
     /// Android effective default synthesized for an omitted preference.
@@ -145,17 +150,21 @@ public struct AndroidPreferenceBackup: Equatable {
             throw PersonalDataError("未対応のAndroid設定バックアップ形式です")
         }
 
-        let shortcutIDs: [String]
-        if let rawShortcuts = root["shortcutIds"], !(rawShortcuts is NSNull) {
-            guard version >= 2,
-                  let values = rawShortcuts as? [String],
-                  values.count <= maximumEntries,
-                  values.allSatisfy({ !$0.isEmpty && $0.utf8.count <= maximumShortcutIDBytes }) else {
-                throw PersonalDataError("Android設定バックアップのツールバー項目が不正です")
+        let shortcutIDs: [String]?
+        if let rawShortcuts = root["shortcutIds"] {
+            if rawShortcuts is NSNull {
+                shortcutIDs = nil
+            } else {
+                guard version >= 2,
+                      let values = rawShortcuts as? [String],
+                      values.count <= maximumEntries,
+                      values.allSatisfy({ !$0.isEmpty && $0.utf8.count <= maximumShortcutIDBytes }) else {
+                    throw PersonalDataError("Android設定バックアップのツールバー項目が不正です")
+                }
+                shortcutIDs = values
             }
-            shortcutIDs = values
         } else {
-            shortcutIDs = []
+            shortcutIDs = nil
         }
 
         var snapshot = KeyboardSettingsSnapshot()

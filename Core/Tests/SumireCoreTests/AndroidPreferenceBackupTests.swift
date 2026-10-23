@@ -292,6 +292,22 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).rotation, .counterclockwise)
     }
 
+    func testShortcutIdsPreserveAbsentNullAndExplicitEmptySemantics() throws {
+        let absent = try AndroidPreferenceBackup.decode(json([], version: 2))
+        XCTAssertNil(absent.shortcutIDs)
+
+        let null = try AndroidPreferenceBackup.decode(Data(#"{"version":2,"entries":[],"shortcutIds":null}"#.utf8))
+        XCTAssertNil(null.shortcutIDs)
+
+        let empty = try AndroidPreferenceBackup.decode(json([], version: 2, shortcutIDs: []))
+        XCTAssertEqual(empty.shortcutIDs, [])
+
+        let populated = try AndroidPreferenceBackup.decode(json([], version: 2, shortcutIDs: ["symbols", "emoji"]))
+        XCTAssertEqual(populated.shortcutIDs, ["symbols", "emoji"])
+
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([], version: 1, shortcutIDs: [])))
+    }
+
     func testImportedSharedSettingsRemainVisibleWithSharedWritesDisabled() throws {
         let sharedName = "AndroidPreferenceBackupShared." + UUID().uuidString
         let localName = "AndroidPreferenceBackupLocal." + UUID().uuidString

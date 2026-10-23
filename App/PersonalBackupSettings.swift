@@ -143,7 +143,16 @@ struct PersonalBackupSettings: View {
     }
 
     private var androidImportConfirmationMessage: String {
-        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込み、記録されていない設定はAndroidの既定値に戻します。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。iOS専用設定、辞書、学習データは変更しません。"
+        let toolbarNote: String
+        switch stagedAndroid?.shortcutIDs {
+        case nil:
+            toolbarNote = "バックアップにツールバー指定がないため、iOS側のツールバーは変更しません。"
+        case .some(let ids) where ids.isEmpty:
+            toolbarNote = "Androidでは空のツールバー指定は「設定」へ戻す意味ですが、iOS側では未対応のためツールバーを変更しません。"
+        case .some(let ids):
+            toolbarNote = "AndroidのツールバーID \(ids.count) 件はiOS側で表示・順序を再現できないため取り込みません。"
+        }
+        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込み、記録されていない設定はAndroidの既定値に戻します。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目は取り込みません。\(toolbarNote)iOS専用設定、辞書、学習データは変更しません。"
         if let hours = stagedAndroidClipboardExpiryWarningHours {
             text += "取込後は期限削除が有効で、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
         }
