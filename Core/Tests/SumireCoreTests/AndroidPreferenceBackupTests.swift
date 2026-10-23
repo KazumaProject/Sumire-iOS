@@ -111,6 +111,49 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(backup.importedSettingCount, 1)
     }
 
+    func testClipboardExpiryWarningCoversNewDeletionRiskWithoutOverwarning() throws {
+        func warning(
+            _ entries: [[String: Any]],
+            currentExpiryEnabled: Bool,
+            currentRetentionHours: Int?
+        ) throws -> Int? {
+            let suite = "AndroidPreferenceBackupWarning." + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            defaults.set(currentExpiryEnabled, forKey: "clipboard.expirationEnabled")
+            if let currentRetentionHours {
+                defaults.set(currentRetentionHours, forKey: "clipboard.retentionHours")
+            }
+            let backup = try AndroidPreferenceBackup.decode(json(entries))
+            return backup.clipboardExpiryDeletionWarningHours(currentDefaults: defaults)
+        }
+
+        XCTAssertEqual(try warning([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 1)
+        ], currentExpiryEnabled: true, currentRetentionHours: 24), 1)
+        XCTAssertNil(try warning([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 24)
+        ], currentExpiryEnabled: true, currentRetentionHours: 24))
+        XCTAssertNil(try warning([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 24)
+        ], currentExpiryEnabled: true, currentRetentionHours: 1))
+        XCTAssertEqual(try warning([
+            entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true)
+        ], currentExpiryEnabled: false, currentRetentionHours: 48), 1)
+        XCTAssertNil(try warning([
+            entry("clipboard_unpinned_retention_hours_preference", "int", 1)
+        ], currentExpiryEnabled: false, currentRetentionHours: 24))
+        XCTAssertNil(try warning([
+            entry("live_conversion_preference", "boolean", true)
+        ], currentExpiryEnabled: true, currentRetentionHours: 24))
+        XCTAssertEqual(try warning([
+            ["key": "clipboard_unpinned_retention_hours_preference", "type": "null"]
+        ], currentExpiryEnabled: true, currentRetentionHours: 24), 1)
+        XCTAssertNil(try warning([
+            ["key": "clipboard_delete_unpinned_after_hours_preference", "type": "null"]
+        ], currentExpiryEnabled: true, currentRetentionHours: 24))
+    }
+
     func testClipboardRetentionAcceptsBothAndroidRangeBoundaries() throws {
         for hours in [1, 72] {
             let backup = try AndroidPreferenceBackup.decode(json([

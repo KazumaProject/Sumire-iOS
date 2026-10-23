@@ -106,8 +106,8 @@ struct PersonalBackupSettings: View {
                 Text("現在の登録を、単語\(staged?.lexicon.words.count ?? 0)件・定型文\(staged?.lexicon.templates.count ?? 0)件に置き換えます。\(staged?.settings == nil ? "設定は変更しません。" : "入力設定もバックアップの内容に置き換えます。")\(staged?.learning == nil ? "学習データは変更しません。" : "学習データも置き換えます。")必要な場合は先に現在のバックアップを保存してください。")
             }
             .confirmationDialog("Android設定を取り込みますか？", isPresented: $confirmingAndroidSettings, titleVisibility: .visible) {
-                if stagedAndroid?.enabledClipboardExpiryRetentionHours != nil {
-                    Button("期限削除を含む設定を取り込む", role: .destructive) {
+                if stagedAndroidClipboardExpiryWarningHours != nil {
+                    Button("期限切れ履歴が削除される可能性を承知して取り込む", role: .destructive) {
                         applyStagedAndroidSettings()
                     }
                 } else {
@@ -144,9 +144,13 @@ struct PersonalBackupSettings: View {
 
     private var androidImportConfirmationMessage: String {
         var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込みます。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。その他のiOS設定、辞書、学習データは変更しません。"
-        if let hours = stagedAndroid?.enabledClipboardExpiryRetentionHours {
-            text += "期限削除も有効になり、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
+        if let hours = stagedAndroidClipboardExpiryWarningHours {
+            text += "取込後は期限削除が有効で、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
         }
         return text
+    }
+
+    private var stagedAndroidClipboardExpiryWarningHours: Int? {
+        stagedAndroid?.clipboardExpiryDeletionWarningHours(currentDefaults: KeyboardSettings.appDefaults)
     }
 }

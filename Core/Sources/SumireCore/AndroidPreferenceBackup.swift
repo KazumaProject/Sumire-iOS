@@ -24,6 +24,45 @@ public struct AndroidPreferenceBackup: Equatable {
         return Int(hours)
     }
 
+    /// Returns the post-import expiry threshold when this import newly enables
+    /// expiry or shortens its active threshold. The caller can use this to warn
+    /// about a later history reload deleting expired, unpinned clipboard entries.
+    public func clipboardExpiryDeletionWarningHours(currentDefaults: UserDefaults) -> Int? {
+        let expiryKey = "clipboard.expirationEnabled"
+        let retentionKey = "clipboard.retentionHours"
+        let updatesExpiry = settings.values[expiryKey] != nil || removingKeys.contains(expiryKey)
+        let updatesRetention = settings.values[retentionKey] != nil || removingKeys.contains(retentionKey)
+        guard updatesExpiry || updatesRetention else { return nil }
+
+        let currentExpiryEnabled = currentDefaults.bool(forKey: expiryKey)
+        let expiryEnabled: Bool
+        if case .boolean(let value)? = settings.values[expiryKey] {
+            expiryEnabled = value
+        } else if removingKeys.contains(expiryKey) {
+            expiryEnabled = false
+        } else {
+            expiryEnabled = currentDefaults.bool(forKey: expiryKey)
+        }
+        guard expiryEnabled else { return nil }
+
+        let importedHours: Int
+        if case .number(let value)? = settings.values[retentionKey] {
+            importedHours = Int(value)
+        } else if removingKeys.contains(retentionKey) {
+            importedHours = 1
+        } else if currentDefaults.object(forKey: retentionKey) == nil {
+            importedHours = 1
+        } else {
+            importedHours = currentDefaults.integer(forKey: retentionKey)
+        }
+        let postImportHours = min(72, max(1, importedHours))
+        let currentHours = min(72, max(1, currentDefaults.object(forKey: retentionKey) == nil
+            ? 1
+            : currentDefaults.integer(forKey: retentionKey)))
+        guard !currentExpiryEnabled || postImportHours < currentHours else { return nil }
+        return postImportHours
+    }
+
     private static let maximumBytes = 128 * 1024 * 1024
     private static let maximumEntries = 100_000
     private static let maximumKeyBytes = 512
