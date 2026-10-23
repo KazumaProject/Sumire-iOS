@@ -17,6 +17,23 @@ final class DictionaryArchivePlanTests: XCTestCase {
         XCTAssertEqual(plan.groups.first?.entries.map(\.container), [.nestedZIP, .rawData, .nestedZIP])
         XCTAssertEqual(plan.groups.first(where: { $0.group == .english })?.entries.map(\.key.role), [.reading, .word, .token])
     }
+    func testAndroidReadingCorrectionAliasesMapToOneJapaneseDictionaryGroup() throws {
+        let plan = try DictionaryArchivePlan(entryNames: [
+            "reading_correction/tango_reading_correction.dat",
+            "backup/reading_correction/yomi_reading_correction.dat",
+            "token_reading_correction.dat"
+        ])
+        let group = try XCTUnwrap(plan.groups.first)
+        XCTAssertEqual(group.group, .readingCorrection)
+        XCTAssertEqual(group.group.id, "reading_correction")
+        XCTAssertEqual(Set(group.entries.map(\.key.role)), Set([.tango, .yomi, .token]))
+        XCTAssertTrue(group.entries.allSatisfy { $0.container == .rawData })
+        XCTAssertTrue(group.canValidate)
+
+        for name in ["reading_correction/tango.dat", "reading_correction/tango_reading_correction.dat.zip"] {
+            guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
+        }
+    }
     func testLegacyAliasesCommonPairAndCase() throws {
         let plan = try DictionaryArchivePlan(entryNames: ["backup/TANGO.dat", "YOMI.DAT", "Token.dat.zip",
                                                          "backup/system/connectionId.dat.zip", "system/pos_table.dat"])
@@ -56,7 +73,7 @@ final class DictionaryArchivePlanTests: XCTestCase {
             guard case .ignored = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
         for name in ["single_kanji/yomi_singleKanji.dat", "tango_emoji.dat", "token_emoticon.dat",
-                     "symbol/yomi.dat", "reading_correction/yomi_reading_correction.dat", "token_kotowaza.dat",
+                     "symbol/yomi.dat", "token_kotowaza.dat",
                      "id.def", "english/qwerty_glide_index.dat"] {
             guard case .unsupported(let reason) = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
             XCTAssertFalse(reason.isEmpty)

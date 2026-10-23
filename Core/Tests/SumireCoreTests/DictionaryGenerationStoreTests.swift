@@ -3,6 +3,31 @@ import CryptoKit
 @testable import SumireCore
 
 final class DictionaryGenerationStoreTests: XCTestCase {
+    func testReadingCorrectionArchiveOutputCanReplaceBundledSupportInGeneration() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let base = root.appendingPathComponent("base", isDirectory: true)
+        let incoming = root.appendingPathComponent("incoming", isDirectory: true)
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("shared/Sumire/Dictionaries", isDirectory: true))
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data("base system".utf8).write(to: base.appendingPathComponent("system.sud"))
+        try Data("base connection".utf8).write(to: base.appendingPathComponent("connection.sud"))
+        try Data("bundled correction".utf8).write(to: base.appendingPathComponent("reading_correction.sud"))
+        let imported = incoming.appendingPathComponent("reading_correction.sud")
+        try Data("imported correction".utf8).write(to: imported)
+
+        let generation = try store.publish(importedFiles: ["reading_correction.sud": imported], from: base)
+
+        XCTAssertEqual(try Data(contentsOf: generation.directory.appendingPathComponent("reading_correction.sud")),
+                       Data("imported correction".utf8))
+        let manifestData = try Data(contentsOf: generation.directory.appendingPathComponent("manifest.json"))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["imported_files"] as? [String], ["reading_correction.sud"])
+        XCTAssertEqual(store.loadCurrent()?.generation, generation.generation)
+    }
+
     func testGenerationsOverlayImmutablyAndRecoverPreviousPointer() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let base = root.appendingPathComponent("base", isDirectory: true)

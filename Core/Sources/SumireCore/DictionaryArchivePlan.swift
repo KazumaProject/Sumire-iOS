@@ -4,7 +4,7 @@ import Foundation
 /// Reference: 9506a0b DictionaryZipEntryNameMapper/DictionaryModels/ClassifiedDictionaries.
 public struct DictionaryArchivePlan {
     public enum Group: Hashable {
-        case common, system, category(String), english, englishReading
+        case common, system, category(String), english, englishReading, readingCorrection
         public var id: String {
             switch self {
             case .common: return "common"
@@ -12,6 +12,7 @@ public struct DictionaryArchivePlan {
             case .category(let id): return "categories/" + id
             case .english: return "english"
             case .englishReading: return "english_reading"
+            case .readingCorrection: return "reading_correction"
             }
         }
         public var requiredRoles: [Role] {
@@ -121,11 +122,25 @@ public struct DictionaryArchivePlan {
             }
             return mapped(.category(tail[1]), role)
         }
-        let unsupported = ["single_kanji", "emoji", "emoticon", "symbol", "reading_correction", "kotowaza"]
+        let readingCorrectionRoles: [String: Role] = [
+            "tango_reading_correction.dat": .tango,
+            "yomi_reading_correction.dat": .yomi,
+            "token_reading_correction.dat": .token
+        ]
+        if let index = path.firstIndex(of: "reading_correction") {
+            let tail = Array(path[index...])
+            guard tail.count == 2, let role = readingCorrectionRoles[tail[1]] else {
+                return .unknown("読み補正辞書のファイル名を認識できません")
+            }
+            return mapped(.readingCorrection, role)
+        }
+        if let role = readingCorrectionRoles[basename] { return mapped(.readingCorrection, role) }
+
+        let unsupported = ["single_kanji", "emoji", "emoticon", "symbol", "kotowaza"]
         if let group = path.dropLast().first(where: { unsupported.contains($0) }) {
             return .unsupported("\(group)辞書の差し替えは現在のiOS取込で未対応です")
         }
-        for suffix in ["singlekanji", "emoji", "emoticon", "symbol", "reading_correction", "kotowaza"] {
+        for suffix in ["singlekanji", "emoji", "emoticon", "symbol", "kotowaza"] {
             if ["tango", "yomi", "token"].contains(where: { raw == "\($0)_\(suffix).dat" }) {
                 return .unsupported("\(suffix)の旧形式辞書は現在のiOS取込で未対応です")
             }

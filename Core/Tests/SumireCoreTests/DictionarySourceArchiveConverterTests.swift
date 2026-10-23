@@ -82,7 +82,8 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
     }
 
     private func sourceFiles(includeMacMetadata: Bool = true, ambiguousInnerZIP: Bool = false,
-                             corruptSystemTokens: Bool = false) -> [(String, Data)] {
+                             corruptSystemTokens: Bool = false,
+                             includeReadingCorrection: Bool = false) -> [(String, Data)] {
         let reading = javaStream([
             .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
             .init(kind: .characters, values: [0, 0x20, 0x3042]), .init(kind: .ints, values: [1])
@@ -107,7 +108,7 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             if ambiguous { entries.append(("unexpected.bin", Data([9]))) }
             return storedZIP(entries)
         }
-        return [
+        var files = [
             ("connectionId.dat.zip", inner("connectionId.dat", matrix)),
             ("pos_table.dat", pos),
             ("system/yomi.dat.zip", inner("yomi.dat", reading)),
@@ -115,6 +116,14 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             ("system/token.dat.zip", inner("token.dat", corruptSystemTokens ? Data([0]) : tokens,
                                                ambiguous: ambiguousInnerZIP))
         ]
+        if includeReadingCorrection {
+            files += [
+                ("reading_correction/tango_reading_correction.dat", surface),
+                ("reading_correction/yomi_reading_correction.dat", reading),
+                ("reading_correction/token_reading_correction.dat", tokens)
+            ]
+        }
+        return files
     }
 
     private func longSurfaceSource(depth: Int) throws -> ValidatedDictionarySource {
@@ -171,6 +180,59 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             let data = try Data(contentsOf: output.appendingPathComponent(name))
             XCTAssertEqual(String(data: data.prefix(8), encoding: .ascii), "SUMIRE01")
         }
+    }
+
+    func testConvertsAndroidReadingCorrectionDictionaryGroup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(sourceFiles(includeReadingCorrection: true)).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles, ["connection.sud", "reading_correction.sud", "system.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        let correction = try Data(contentsOf: output.appendingPathComponent("reading_correction.sud"))
+        XCTAssertEqual(String(data: correction.prefix(8), encoding: .ascii), "SUMIRE01")
+    }
+
+    func testConvertsPinnedAndroidReadingCorrectionArchiveByteForByteWhenConfigured() throws {
+        let referencePath = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_ASSETS"]
+        guard let referencePath, !referencePath.isEmpty else {
+            throw XCTSkip("Set SUMIRE_REFERENCE_ASSETS to verify the pinned Android distribution")
+        }
+        let reference = URL(fileURLWithPath: referencePath, isDirectory: true)
+        let expectedSourceHashes = [
+            "connectionId.dat.zip": "f68938f2c3f48ad4176bb8feec874e2ae6a924343ccc0feec8ae858c92ffd6df",
+            "pos_table.dat": "2aa09e7f5318cb7be2f7d88c4a4473987a480bbecce3269685f7696797ed9f48",
+            "reading_correction/tango_reading_correction.dat": "3f102aa7f31a51657473352fb3cb35f4c48fb0943efbe2b057ccecade2de08d6",
+            "reading_correction/yomi_reading_correction.dat": "e9d2348bd7caf264e14da611effba1bc524467ac211afe158243f794eb81432b",
+            "reading_correction/token_reading_correction.dat": "8cefa1af8298363347674221f6a1620494b328face07873e1296f3fce51f3720"
+        ]
+        var archiveFiles: [(String, Data)] = []
+        for (path, expectedHash) in expectedSourceHashes {
+            let data = try Data(contentsOf: reference.appendingPathComponent(path), options: .mappedIfSafe)
+            let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(actualHash, expectedHash, path)
+            archiveFiles.append((path, data))
+        }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(archiveFiles).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles, ["connection.sud", "reading_correction.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        let converted = try Data(contentsOf: output.appendingPathComponent("reading_correction.sud"), options: .mappedIfSafe)
+        let convertedHash = SHA256.hash(data: converted).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(convertedHash, "f7bbb41a50f2e57bc305319994540e098082447c6b01eed5674be4eb3bb18762")
     }
 
     func testRejectsAmbiguousNestedZIPAndRemovesPartialOutput() throws {
