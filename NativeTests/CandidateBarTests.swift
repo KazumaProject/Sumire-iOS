@@ -1,8 +1,96 @@
 import XCTest
 import UIKit
+import UniformTypeIdentifiers
 import SumireCore
 
 final class CandidateBarTests: XCTestCase {
+    func testSystemPasteControlRemainsAvailableWithoutFullAccess() {
+        let finished = expectation(description: "Paste control is available for user-mediated paste")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            bar.layoutIfNeeded()
+            let pasteControl = bar.subviews.first { $0.accessibilityIdentifier == "clipboard-preview" }
+            XCTAssertNotNil(pasteControl)
+            XCTAssertFalse(pasteControl?.isHidden ?? true)
+            bar.showsShortcuts = false
+            XCTAssertTrue(pasteControl?.isHidden ?? false)
+            window.isHidden = true
+            finished.fulfill()
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
+    func testUserInitiatedTextPasteWorksWithoutFullAccess() {
+        let finished = expectation(description: "User-selected clipboard text reaches the editor")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            bar.captureClipboardHistory = true
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            var capturedHistory = false
+            bar.onClipboardCaptured = { _, _ in capturedHistory = true }
+            bar.onPasteText = { text in
+                XCTAssertEqual(text, "explicit paste text")
+                XCTAssertFalse(capturedHistory)
+                window.isHidden = true
+                finished.fulfill()
+            }
+            let provider = NSItemProvider(object: "explicit paste text" as NSString)
+            bar.paste(itemProviders: [provider])
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
+    func testUserInitiatedImagePasteShowsPreviewWithoutSavingHistory() {
+        let finished = expectation(description: "User-selected image is previewed without clipboard history")
+        DispatchQueue.main.async {
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 844))
+            let controller = UIViewController()
+            window.rootViewController = controller
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            bar.captureClipboardHistory = true
+            controller.view.addSubview(bar)
+            window.isHidden = false
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+                UIColor.systemPink.setFill()
+                context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString).appendingPathExtension("png")
+            guard let data = image.pngData(), (try? data.write(to: url)) != nil,
+                  let provider = NSItemProvider(contentsOf: url) else {
+                XCTFail("Could not make an image item provider")
+                window.isHidden = true
+                finished.fulfill()
+                return
+            }
+            var capturedHistory = false
+            bar.onClipboardCaptured = { _, _ in capturedHistory = true }
+            bar.onClipboardNotice = { notice in
+                XCTAssertTrue(notice.contains("貼り付け"))
+                let preview = bar.subviews.first { $0.accessibilityIdentifier == "clipboard-description" }
+                XCTAssertFalse(preview?.isHidden ?? true)
+                XCTAssertNotNil((preview as? UIButton)?.image(for: .normal))
+                XCTAssertFalse(capturedHistory)
+                window.isHidden = true
+                try? FileManager.default.removeItem(at: url)
+                finished.fulfill()
+            }
+            bar.paste(itemProviders: [provider])
+        }
+        wait(for: [finished], timeout: 10)
+    }
+
     func testProductionBridgePreservesPrimaryNumericAndPersonalOrigins() throws {
         let service = ConversionService(categoryMask: 0)
         func convert(_ reading: String, generation: UInt64) throws -> [ConversionCandidate] {
@@ -25,6 +113,7 @@ final class CandidateBarTests: XCTestCase {
         XCTAssertNil(user.displayAnnotation)
         XCTAssertEqual(user.presentationKind, .none)
     }
+
     private func withBar(rows: Int = 1, _ body: @escaping (CandidateBar, UICollectionView) -> Void) {
         let finished = expectation(description: "Rendered candidate bar")
         DispatchQueue.main.async {
