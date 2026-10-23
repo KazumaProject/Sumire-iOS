@@ -212,6 +212,10 @@ final class KeyboardViewController: UIInputViewController {
             }
             let cursorDelta = try expanded.cursorAdjustmentUTF16()
             perform { current in
+                // insertText replaces the active marked range, matching Android's
+                // clear-composing-then-commit behavior. UIKit text-field and text-view
+                // coverage is in MarkedTextCommitTests; extension-host behavior remains
+                // an external-host acceptance check.
                 current.insertText(expanded.text)
                 if cursorDelta != 0 { current.adjustTextPosition(byCharacterOffset: cursorDelta) }
             }

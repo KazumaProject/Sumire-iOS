@@ -1851,7 +1851,8 @@ final class KeyboardSurface: UIInputView {
     func showTextMacroList(requiredMacroID: String? = nil) {
         beforeInput?()
         guard (!hasComposition || requiredMacroID != nil), expandedCandidates == nil else { return }
-        let macros = personalLexicon.textMacros.filter { requiredMacroID == nil || $0.id == requiredMacroID }
+        let macros = AndroidTextMacroCandidatePolicy.ordered(in: personalLexicon.textMacros)
+            .filter { $0.enabled && (requiredMacroID == nil || $0.id == requiredMacroID) }
         guard !macros.isEmpty else { return }
         let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark,
                                       saturation: saturation, brightness: brightness)

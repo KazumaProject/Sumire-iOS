@@ -20,7 +20,11 @@ final class KeyboardToolbarActionRoutingTests: XCTestCase {
         surface.settingsDefaults = defaults
         surface.settingsWriteDefaults = defaults
         var lexicon = PersonalLexicon()
-        lexicon.textMacros = [PersonalTextMacro(name: "署名", body: "Sumire")]
+        lexicon.textMacros = [
+            PersonalTextMacro(name: "zeta", body: "last"),
+            PersonalTextMacro(name: "Alpha", body: "first"),
+            PersonalTextMacro(name: "beta", body: "middle")
+        ]
         surface.personalLexicon = lexicon
         surface.candidateBar.reloadToolbarSettings(defaults: defaults)
         let toolbar = surface.candidateBar.subviews.compactMap { $0 as? UIStackView }
@@ -41,7 +45,68 @@ final class KeyboardToolbarActionRoutingTests: XCTestCase {
             }
             return nil
         }
-        XCTAssertNotNil(findMacroPanel(in: surface))
+        let panel = try XCTUnwrap(findMacroPanel(in: surface))
+        let macroRowTitles = descendants(of: panel)
+            .compactMap { $0 as? UIButton }
+            .filter { $0.accessibilityIdentifier?.hasPrefix("text-macro-") == true }
+            .compactMap { $0.configuration?.title }
+        XCTAssertEqual(macroRowTitles, ["Alpha", "beta", "zeta"])
+    }
+
+    private func descendants(of view: UIView) -> [UIView] {
+        view.subviews.flatMap { [$0] + descendants(of: $0) }
+    }
+
+    func testRequiredTextMacroPanelRemainsAvailableDuringComposition() throws {
+        let suite = "toolbar-required-macro-composition-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set("builtin:sumire", forKey: "keyboard.lastUsed")
+        defaults.set("toggle", forKey: "sumire.keyArrangement")
+
+        let requestedID = UUID().uuidString.lowercased()
+        let surface = Sumire.KeyboardSurface()
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        surface.textMacroContextAllowed = true
+        var lexicon = PersonalLexicon()
+        lexicon.textMacros = [
+            PersonalTextMacro(name: "Other", body: "plain"),
+            PersonalTextMacro(id: requestedID, name: "Clipboard macro", body: "{clipboard}")
+        ]
+        surface.personalLexicon = lexicon
+        surface.reloadAppearance()
+
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 500))
+        let controller = UIViewController()
+        window.rootViewController = controller
+        window.makeKeyAndVisible()
+        defer { window.isHidden = true }
+        let container = try XCTUnwrap(controller.view)
+        container.addSubview(surface)
+        NSLayoutConstraint.activate([
+            surface.widthAnchor.constraint(equalToConstant: 390),
+            surface.topAnchor.constraint(equalTo: container.topAnchor),
+            surface.leadingAnchor.constraint(equalTo: container.leadingAnchor)
+        ])
+        container.layoutIfNeeded()
+        surface.layoutIfNeeded()
+
+        let character = try XCTUnwrap(descendants(of: surface).first {
+            $0.accessibilityIdentifier == "sumire-a"
+        } as? UIButton)
+        XCTAssertTrue(character.accessibilityActivate())
+        XCTAssertTrue(surface.hasComposition)
+        XCTAssertFalse(surface.candidateBar.showsShortcuts)
+
+        surface.showTextMacroList(requiredMacroID: requestedID)
+        let panel = try XCTUnwrap(descendants(of: surface).compactMap { $0 as? KeyboardTextMacroPanel }.first)
+        let macroRows = descendants(of: panel).compactMap { $0 as? UIButton }
+            .filter { $0.accessibilityIdentifier?.hasPrefix("text-macro-") == true }
+        XCTAssertEqual(macroRows.compactMap { $0.configuration?.title }, ["Clipboard macro"])
+        XCTAssertTrue(macroRows[0].isEnabled)
+        let pasteControl = try XCTUnwrap(descendants(of: panel).compactMap { $0 as? UIPasteControl }.first)
+        XCTAssertFalse(pasteControl.isHidden, "Clipboard access remains explicitly user initiated")
     }
 
     func testImportedClipboardActionOpensClipboardPanelWithFullAccessOff() {

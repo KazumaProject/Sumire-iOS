@@ -168,6 +168,22 @@ final class AndroidTextMacroCompilerTests: XCTestCase {
         )
     }
 
+    func testMacroOrderingUsesSQLiteNoCaseNulTerminationAndStableTies() {
+        let macros = [
+            PersonalTextMacro(name: "A\u{0}z", reading: "yomi", body: "first"),
+            PersonalTextMacro(name: "B", reading: "yomi", body: "second"),
+            PersonalTextMacro(name: "a\u{0}Y", reading: "yomi", body: "third")
+        ]
+
+        let expected = ["A\u{0}z", "a\u{0}Y", "B"]
+        XCTAssertEqual(AndroidTextMacroCandidatePolicy.ordered(in: macros).map(\.name), expected)
+        XCTAssertEqual(
+            AndroidTextMacroCandidatePolicy.candidates(in: macros, reading: "yomi", contextAllowed: true)
+                .map(\.name),
+            expected
+        )
+    }
+
     func testCandidatePolicyAppliesAndroidLimitBeforeContextFiltering() {
         let macros = (1...9).reversed().map { index in
             PersonalTextMacro(

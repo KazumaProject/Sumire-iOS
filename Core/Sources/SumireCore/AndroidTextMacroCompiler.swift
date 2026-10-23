@@ -453,29 +453,37 @@ public enum AndroidTextMacroValidator {
 public enum AndroidTextMacroCandidatePolicy {
     public static let maximumCandidates = 8
 
+    /// Orders macro lists like Android's `ORDER BY name COLLATE NOCASE, id`.
+    /// iOS records do not carry Android's numeric row ID, so source order is
+    /// the stable tie-breaker for names equal under SQLite's ASCII-only NOCASE.
+    public static func ordered(in macros: [PersonalTextMacro]) -> [PersonalTextMacro] {
+        macros.enumerated().sorted { lhs, rhs in
+            let left = AndroidTextMacroNameComparison.sqliteNoCaseKey(lhs.element.name)
+            let right = AndroidTextMacroNameComparison.sqliteNoCaseKey(rhs.element.name)
+            return left == right
+                ? lhs.offset < rhs.offset
+                : left.lexicographicallyPrecedes(right)
+        }.map(\.element)
+    }
+
     public static func candidates(
         in macros: [PersonalTextMacro],
         reading: String,
         contextAllowed: Bool
     ) -> [PersonalTextMacro] {
-        let matching = macros.enumerated().filter { _, macro in
+        let matching = macros.filter { macro in
             macro.enabled && macro.reading == reading
         }
 
-        // Android orders by SQLite NOCASE (ASCII-only case folding), then its
-        // database ID. The source array is stable in insertion/import order and
-        // serves as the corresponding tie-breaker for iOS records.
-        let limited = matching.sorted { lhs, rhs in
-            let left = asciiNoCaseBytes(lhs.1.name)
-            let right = asciiNoCaseBytes(rhs.1.name)
-            return left == right ? lhs.0 < rhs.0 : left.lexicographicallyPrecedes(right)
-        }
-        .prefix(maximumCandidates)
+        // Android orders by SQLite NOCASE, then database ID. The source array
+        // is the stable tie-breaker for UUID-backed iOS records. Apply the SQL
+        // limit before compiling and filtering contextual macros below.
+        let limited = ordered(in: matching).prefix(maximumCandidates)
 
         // Android's DAO applies LIMIT before the IME compiles and filters
         // contextual macros. Keep that order so a hidden macro among the first
         // eight does not cause a later row to be promoted into the candidates.
-        return limited.compactMap { _, macro in
+        return limited.compactMap { macro in
             guard let compiled = try? AndroidTextMacroCompiler.compile(macro.body),
                   !compiled.requirements.contains(.selection),
                   compiled.requirements.isEmpty || contextAllowed else { return nil }
@@ -483,11 +491,6 @@ public enum AndroidTextMacroCandidatePolicy {
         }
     }
 
-    private static func asciiNoCaseBytes(_ value: String) -> [UInt8] {
-        value.utf8.map { byte in
-            (0x41...0x5A).contains(byte) ? byte + 0x20 : byte
-        }
-    }
 }
 
 private extension Calendar {
