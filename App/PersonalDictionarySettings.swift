@@ -2,14 +2,36 @@ import SwiftUI
 import UniformTypeIdentifiers
 import SumireCore
 
+private struct AndroidPersonalListDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.plainText, .json] }
+    let data: Data
+
+    init(data: Data) { self.data = data }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let data = configuration.file.regularFileContents else {
+            throw PersonalDataError("ファイルを読み込めません")
+        }
+        self.data = data
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        FileWrapper(regularFileWithContents: data)
+    }
+}
+
 struct PersonalDictionarySettings: View {
     @ObservedObject var library: PersonalLibrary
     @Environment(\.dismiss) private var dismiss
     @State private var template = false
     @State private var editing: EditItem?
     @State private var importing = false
+    @State private var exporting = false
+    @State private var exportDocument: AndroidPersonalListDocument?
+    @State private var exportFilename = "user_dictionary_backup"
     @State private var preview: ImportItem?
     @State private var error: String?
+    @State private var transferMessage: String?
     private struct EditItem: Identifiable {
         let id = UUID()
         let index: Int?
@@ -34,7 +56,22 @@ struct PersonalDictionarySettings: View {
                     Button("登録を追加") {
                         editing = EditItem(index: nil, word: PersonalWord(word: "", reading: ""), template: template)
                     }.disabled(!library.writable)
-                    Button("Android JSONを取り込む") { importing = true }.disabled(!library.writable)
+                    Button("Android形式を取り込む") { importing = true }.disabled(!library.writable)
+                    if entries.isEmpty {
+                        Text("登録がないため書き出せません").font(.caption).foregroundStyle(.secondary)
+                    }
+                    Button("Android形式で書き出す") {
+                        do {
+                            let snapshot = entries
+                            let data = try PersonalAndroidListExport.encode(snapshot)
+                            exportDocument = AndroidPersonalListDocument(data: data)
+                            exportFilename = template ? "user_template_backup" : "user_dictionary_backup"
+                            transferMessage = nil
+                            error = nil
+                            exporting = true
+                        } catch { self.error = error.localizedDescription }
+                    }.disabled(!library.writable || entries.isEmpty)
+                    if let transferMessage { Text(transferMessage).font(.caption).foregroundStyle(.secondary) }
                     Text(template ? "定型文は読み全体が一致すると候補に表示します。" : "登録した単語を通常の変換探索に加えます。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
@@ -69,7 +106,16 @@ struct PersonalDictionarySettings: View {
                     try library.put(word, index: item.index, original: item.word, template: item.template)
                 }
             }
-            .fileImporter(isPresented: $importing, allowedContentTypes: [.json]) { result in
+            .fileExporter(isPresented: $exporting, document: exportDocument, contentType: .plainText,
+                          defaultFilename: exportFilename) { result in
+                switch result {
+                case .success: transferMessage = "Android互換形式を保存しました"
+                case .failure(let error):
+                    if !(error is CancellationError) { self.error = error.localizedDescription }
+                }
+                exportDocument = nil
+            }
+            .fileImporter(isPresented: $importing, allowedContentTypes: [.json, .plainText]) { result in
                 do {
                     let url = try result.get()
                     let access = url.startAccessingSecurityScopedResource()
