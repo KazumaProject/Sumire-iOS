@@ -54,27 +54,37 @@ final class AndroidTextMacroCompilerTests: XCTestCase {
         }
     }
 
-    func testJavaTextAndTimezoneWidthsDoNotAcquireUnicodeNarrowForms() throws {
+    func testJavaTextAndTimezoneWidthsMatchAndroidSimpleDateFormat() throws {
         func format(_ pattern: String) throws -> String {
             try AndroidTextMacroCompiler.compile("{date:\(pattern)}")
                 .expand(context: fixedContext)
                 .text
         }
 
-        XCTAssertEqual(try format("EEEEE"), "Sunday")
-        XCTAssertEqual(try format("MMMMM"), "August")
-        XCTAssertEqual(try format("LLLLL"), "August")
+        XCTAssertEqual(try format("EEEE"), "Sunday")
+        XCTAssertEqual(try format("EEEEE"), "S")
+        XCTAssertEqual(try format("MMMM"), "August")
+        XCTAssertEqual(try format("MMMMM"), "A")
+        XCTAssertEqual(try format("LLLL"), "August")
+        XCTAssertEqual(try format("LLLLL"), "A")
+        XCTAssertEqual(try format("G"), "AD")
+        XCTAssertEqual(try format("GGGGG"), "Anno Domini")
+
+        XCTAssertEqual(try format("Z"), "-0400")
+        XCTAssertEqual(try format("ZZZ"), "-0400")
+        XCTAssertEqual(try format("ZZZZ"), "GMT-04:00")
+        XCTAssertEqual(try format("ZZZZZ"), "-04:00")
+        XCTAssertEqual(try format("ZZZZZZ"), "-04:00")
 
         for (javaShort, javaWide) in [
             ("E", "EEE"),
-            ("EEEE", "EEEEE"),
-            ("MMMM", "MMMMM"),
-            ("LLLL", "LLLLL"),
-            ("G", "GGGGG"),
+            ("G", "GGG"),
+            ("GGGG", "GGGGG"),
             ("a", "aaaaa"),
             ("z", "zzz"),
             ("zzzz", "zzzzz"),
-            ("Z", "ZZZZZ")
+            ("Z", "ZZZ"),
+            ("ZZZZZ", "ZZZZZZ")
         ] {
             XCTAssertEqual(try format(javaShort), try format(javaWide), "\(javaShort) vs \(javaWide)")
         }
@@ -181,6 +191,20 @@ final class AndroidTextMacroCompilerTests: XCTestCase {
             AndroidTextMacroCandidatePolicy.candidates(in: macros, reading: "yomi", contextAllowed: true)
                 .map(\.name),
             expected
+        )
+    }
+
+    func testCandidatePolicyUsesAndroidBinaryReadingEquality() {
+        let precomposed = PersonalTextMacro(name: "precomposed", reading: "é", body: "one")
+        let decomposed = PersonalTextMacro(name: "decomposed", reading: "e\u{0301}", body: "two")
+
+        XCTAssertEqual(precomposed.reading, decomposed.reading)
+        XCTAssertFalse(precomposed.reading!.utf8.elementsEqual(decomposed.reading!.utf8))
+        XCTAssertEqual(
+            AndroidTextMacroCandidatePolicy.candidates(
+                in: [decomposed, precomposed], reading: "é", contextAllowed: true
+            ).map(\.id),
+            [precomposed.id]
         )
     }
 

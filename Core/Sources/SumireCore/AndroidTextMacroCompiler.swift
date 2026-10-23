@@ -230,21 +230,26 @@ public struct CompiledAndroidTextMacro {
                         .nanosecond! / 1_000_000
                     output.append(contentsOf: quotedLiteral(localizedNumber(milliseconds, minimumDigits: width, locale: locale)).utf16)
                 } else {
-                    // Java's SimpleDateFormat has fewer text widths than
-                    // Unicode/ICU. Without normalization, Java `EEEEE`,
-                    // `MMMMM`, and `ZZZZZ` would become narrow weekday/month
-                    // or ISO-zone fields in Foundation instead of Java's full
-                    // weekday/month and RFC-822 zone forms.
+                    // Java SimpleDateFormat and Unicode/ICU differ for a few
+                    // repeated-letter widths. Preserve Android's narrow E/M/L
+                    // forms and distinct Z forms, while normalizing era and
+                    // out-of-range weekday widths to Android's full/short rules.
                     let foundationWidth: Int
                     switch unit {
-                    case 0x45: // E: Java abbreviated (<4) or full (>=4)
+                    case 0x45: // E: Android uses short, full, narrow, then short widths.
+                        if width == 5 {
+                            foundationWidth = 5
+                        } else if width >= 6 {
+                            foundationWidth = 3
+                        } else {
+                            foundationWidth = width == 4 ? 4 : 3
+                        }
+                    case 0x47: // G: Android uses the long era form for width >= 4.
                         foundationWidth = width >= 4 ? 4 : 3
-                    case 0x47: // G: Java era designator has no narrow form
-                        foundationWidth = 3
-                    case 0x4C, 0x4D: // L/M: Java has no narrow month form
-                        foundationWidth = width >= 4 ? 4 : width
-                    case 0x5A: // Z: Java always emits the RFC-822 offset
-                        foundationWidth = 3
+                    case 0x4C, 0x4D: // L/M: keep narrow width 5 and numeric widths > 5.
+                        foundationWidth = width
+                    case 0x5A: // Z: 1-3 RFC-822, 4 GMT offset, >=5 ISO-like offset.
+                        foundationWidth = width < 4 ? 3 : (width == 4 ? 4 : 5)
                     case 0x61: // a: Java uses the locale's AM/PM strings
                         foundationWidth = 3
                     case 0x7A: // z: Java abbreviated (<4) or full (>=4)
@@ -472,7 +477,12 @@ public enum AndroidTextMacroCandidatePolicy {
         contextAllowed: Bool
     ) -> [PersonalTextMacro] {
         let matching = macros.filter { macro in
-            macro.enabled && macro.reading == reading
+            guard macro.enabled, let macroReading = macro.reading else { return false }
+            // Android queries SQLite TEXT with `reading = :reading` and the
+            // column's default BINARY collation. Swift String equality treats
+            // canonically equivalent spellings as equal, so compare the UTF-8
+            // code units to preserve Android's exact match.
+            return macroReading.utf8.elementsEqual(reading.utf8)
         }
 
         // Android orders by SQLite NOCASE, then database ID. The source array
