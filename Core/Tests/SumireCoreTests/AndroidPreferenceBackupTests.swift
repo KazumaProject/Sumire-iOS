@@ -82,6 +82,44 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         }
     }
 
+    func testEnabledClipboardExpiryUsesAndroidDefaultWhenRetentionIsOmitted() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true)
+        ]))
+
+        XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
+        XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
+        XCTAssertEqual(backup.importedSettingCount, 2)
+        XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
+
+        let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(48, forKey: "clipboard.retentionHours")
+        try backup.apply(to: defaults)
+        XCTAssertTrue(defaults.bool(forKey: "clipboard.expirationEnabled"))
+        XCTAssertEqual(defaults.integer(forKey: "clipboard.retentionHours"), 1)
+    }
+
+    func testDisabledClipboardExpiryDoesNotImportAnOmittedRetentionDefault() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("clipboard_delete_unpinned_after_hours_preference", "boolean", false)
+        ]))
+
+        XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
+        XCTAssertNil(backup.settings.values["clipboard.retentionHours"])
+        XCTAssertEqual(backup.importedSettingCount, 1)
+    }
+
+    func testClipboardRetentionAcceptsBothAndroidRangeBoundaries() throws {
+        for hours in [1, 72] {
+            let backup = try AndroidPreferenceBackup.decode(json([
+                entry("clipboard_unpinned_retention_hours_preference", "int", hours)
+            ]))
+            XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(Double(hours)))
+        }
+    }
+
     func testNullRemovesOnlyMappedPreferenceAndVersionTwoRetainsNoToolbarMutation() throws {
         let data = json([
             ["key": "live_conversion_preference", "type": "null"],

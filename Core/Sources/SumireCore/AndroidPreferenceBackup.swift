@@ -12,7 +12,17 @@ public struct AndroidPreferenceBackup: Equatable {
     public let unsupportedEntryCount: Int
     public let shortcutIDs: [String]
 
-    public var importedSettingCount: Int { importedKeys.count }
+    /// Number of iOS setting changes that will be applied, including an
+    /// Android effective default synthesized for an omitted preference.
+    public var importedSettingCount: Int { settings.values.count + removingKeys.count }
+
+    /// Android's effective retention default applies when an enabled expiry
+    /// preference is exported without its unchanged hour value.
+    public var enabledClipboardExpiryRetentionHours: Int? {
+        guard case .boolean(true)? = settings.values["clipboard.expirationEnabled"] else { return nil }
+        guard case .number(let hours)? = settings.values["clipboard.retentionHours"] else { return 1 }
+        return Int(hours)
+    }
 
     private static let maximumBytes = 128 * 1024 * 1024
     private static let maximumEntries = 100_000
@@ -149,6 +159,16 @@ public struct AndroidPreferenceBackup: Equatable {
                 throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
             }
             imported.append(key)
+        }
+
+        // Android exports only values present in SharedPreferences. If expiry
+        // is explicitly enabled while its unchanged hours value is omitted,
+        // carry Android's effective default (one hour) into the iOS snapshot.
+        // An explicit null remains a removal and resolves to the same iOS default.
+        if snapshot.values["clipboard.expirationEnabled"] == .boolean(true),
+           snapshot.values["clipboard.retentionHours"] == nil,
+           !removals.contains("clipboard.retentionHours") {
+            snapshot.values["clipboard.retentionHours"] = .number(1)
         }
 
         try snapshot.validate()

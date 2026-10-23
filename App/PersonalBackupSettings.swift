@@ -106,14 +106,18 @@ struct PersonalBackupSettings: View {
                 Text("現在の登録を、単語\(staged?.lexicon.words.count ?? 0)件・定型文\(staged?.lexicon.templates.count ?? 0)件に置き換えます。\(staged?.settings == nil ? "設定は変更しません。" : "入力設定もバックアップの内容に置き換えます。")\(staged?.learning == nil ? "学習データは変更しません。" : "学習データも置き換えます。")必要な場合は先に現在のバックアップを保存してください。")
             }
             .confirmationDialog("Android設定を取り込みますか？", isPresented: $confirmingAndroidSettings, titleVisibility: .visible) {
-                Button("対応する設定を取り込む") {
-                    guard let stagedAndroid else { return }
-                    restoreAndroidSettings(stagedAndroid)
-                    self.stagedAndroid = nil
+                if stagedAndroid?.enabledClipboardExpiryRetentionHours != nil {
+                    Button("期限削除を含む設定を取り込む", role: .destructive) {
+                        applyStagedAndroidSettings()
+                    }
+                } else {
+                    Button("対応する設定を取り込む") {
+                        applyStagedAndroidSettings()
+                    }
                 }
                 Button("キャンセル", role: .cancel) { stagedAndroid = nil }
             } message: {
-                Text("iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込みます。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。その他のiOS設定、辞書、学習データは変更しません。")
+                Text(androidImportConfirmationMessage)
             }
         }
     }
@@ -130,5 +134,19 @@ struct PersonalBackupSettings: View {
             case .failure(let error): message = error.localizedDescription
             }
         }
+    }
+
+    private func applyStagedAndroidSettings() {
+        guard let stagedAndroid else { return }
+        restoreAndroidSettings(stagedAndroid)
+        self.stagedAndroid = nil
+    }
+
+    private var androidImportConfirmationMessage: String {
+        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込みます。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。その他のiOS設定、辞書、学習データは変更しません。"
+        if let hours = stagedAndroid?.enabledClipboardExpiryRetentionHours {
+            text += "期限削除も有効になり、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
+        }
+        return text
     }
 }
