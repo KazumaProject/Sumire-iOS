@@ -317,7 +317,7 @@ final class DictionarySourceValidationTests: XCTestCase {
         XCTAssertEqual(Array(sections[9]), [0x41])
     }
 
-    func testConversionRejectsUnpairedUTF16InsteadOfReplacingIt() throws {
+    func testConversionReplacesUnpairedUTF16LikePinnedAndroidDictionaryGeneration() throws {
         let invalidSurface = try parse([
             .init(kind: .longs, values: [0b101]),
             .init(kind: .longs, values: [0b100]),
@@ -327,7 +327,8 @@ final class DictionarySourceValidationTests: XCTestCase {
             reading: trie(), surface: invalidSurface, tokens: japaneseTokens(), posTableCount: 1
         )
 
-        XCTAssertThrowsError(try SumireDictionarySourceConverter.sections(for: source))
+        let sections = try SumireDictionarySourceConverter.sections(for: source)
+        XCTAssertEqual(Array(sections[9]), [0xef, 0xbf, 0xbd])
     }
 
     func testRejectsMalformedColumnsTriesPostingsAndReferences() throws {
@@ -395,7 +396,7 @@ final class DictionarySourceValidationTests: XCTestCase {
             let manifest = try JSONDecoder().decode(ReferenceNativeManifest.self, from: Data(contentsOf: manifestURL))
             XCTAssertEqual(manifest.sourceRevision, pinned.sourceRevision)
             // The current app generation also carries the pinned auxiliary,
-            // GNKG, and Mozc assets; compare every source asset in the pinned
+            // correction, GNKG, and Mozc assets; compare every source asset in the pinned
             // system/category/English fixture without rejecting those extras.
             for (path, expectedHash) in pinned.assetSHA256 {
                 XCTAssertEqual(manifest.assetSHA256[path], expectedHash, path)
@@ -411,7 +412,7 @@ final class DictionarySourceValidationTests: XCTestCase {
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == false }
         let entryNames = assetFiles.map { String($0.path.dropFirst(base.path.count + 1)) }
         let archivePlan = try DictionaryArchivePlan(entryNames: entryNames)
-        XCTAssertEqual(archivePlan.validationCandidates.count, 34)
+        XCTAssertEqual(archivePlan.validationCandidates.count, 39)
 
         func payload(at relativePath: String) throws -> Data {
             let url = base.appendingPathComponent(relativePath)

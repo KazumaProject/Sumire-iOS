@@ -4,14 +4,16 @@ import Foundation
 /// Reference: 9506a0b DictionaryZipEntryNameMapper/DictionaryModels/ClassifiedDictionaries.
 public struct DictionaryArchivePlan {
     public enum Group: Hashable {
-        case common, system, category(String), english, englishReading
+        case common, system, category(String), auxiliary(String), english, englishReading, readingCorrection
         public var id: String {
             switch self {
             case .common: return "common"
             case .system: return "system"
             case .category(let id): return "categories/" + id
+            case .auxiliary(let id): return id
             case .english: return "english"
             case .englishReading: return "english_reading"
+            case .readingCorrection: return "reading_correction"
             }
         }
         public var requiredRoles: [Role] {
@@ -60,6 +62,14 @@ public struct DictionaryArchivePlan {
         "agreement", "initiative", "term", "work_franchise", "work_manga", "work_anime", "work_film",
         "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical",
         "work_other", "kampo", "medical"
+    ]
+    private static let auxiliaryAliases: [String: [String: Role]] = [
+        "single_kanji": ["tango_singlekanji.dat": .tango, "yomi_singlekanji.dat": .yomi,
+                         "token_singlekanji.dat": .token],
+        "emoji": ["tango_emoji.dat": .tango, "yomi_emoji.dat": .yomi, "token_emoji.dat": .token],
+        "emoticon": ["tango_emoticon.dat": .tango, "yomi_emoticon.dat": .yomi,
+                     "token_emoticon.dat": .token],
+        "symbol": ["tango_symbol.dat": .tango, "yomi_symbol.dat": .yomi, "token_symbol.dat": .token]
     ]
     public let entryResults: [EntryResult]
     public let groups: [GroupPlan]
@@ -121,11 +131,30 @@ public struct DictionaryArchivePlan {
             }
             return mapped(.category(tail[1]), role)
         }
-        let unsupported = ["single_kanji", "emoji", "emoticon", "symbol", "reading_correction", "kotowaza"]
-        if let group = path.dropLast().first(where: { unsupported.contains($0) }) {
-            return .unsupported("\(group)辞書の差し替えは現在のiOS取込で未対応です")
+        let readingCorrectionRoles: [String: Role] = [
+            "tango_reading_correction.dat": .tango,
+            "yomi_reading_correction.dat": .yomi,
+            "token_reading_correction.dat": .token
+        ]
+        if let index = path.firstIndex(of: "reading_correction") {
+            let tail = Array(path[index...])
+            guard tail.count == 2, let role = readingCorrectionRoles[tail[1]] else {
+                return .unknown("読み補正辞書のファイル名を認識できません")
+            }
+            return mapped(.readingCorrection, role)
         }
-        for suffix in ["singlekanji", "emoji", "emoticon", "symbol", "reading_correction", "kotowaza"] {
+        if let role = readingCorrectionRoles[basename] { return mapped(.readingCorrection, role) }
+
+        for (group, aliases) in auxiliaryAliases {
+            if let role = aliases[raw] { return mapped(.auxiliary(group), role) }
+        }
+        if let group = path.dropLast().first(where: { auxiliaryAliases[$0] != nil }) {
+            return .unknown("\(group)辞書のファイル役割を認識できません")
+        }
+        if path.dropLast().contains("kotowaza") || ["tango_kotowaza.dat", "yomi_kotowaza.dat", "token_kotowaza.dat"].contains(basename) {
+            return .unsupported("kotowaza辞書の差し替えは現在のiOS取込で未対応です")
+        }
+        for suffix in ["kotowaza"] {
             if ["tango", "yomi", "token"].contains(where: { raw == "\($0)_\(suffix).dat" }) {
                 return .unsupported("\(suffix)の旧形式辞書は現在のiOS取込で未対応です")
             }

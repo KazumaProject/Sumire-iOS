@@ -1,0 +1,34 @@
+{
+  "schema_version": 1,
+  "corpus_sha256": "72a316b113919a0160637ed4f2caf883f177419f3e86dc847d4985d889ec3cae",
+  "dictionary_manifest_sha256": "60f44627887e96ef2618d90571234853e89ec193a0b23c2d0f8ab54ce2265f46",
+  "source_revision": "df1f38315bf56d860d32919a3eaed6a75499e91e",
+  "baseline": {
+    "cases": 92,
+    "minimum_top1_hits": 80,
+    "minimum_top10_hits": 90,
+    "required_complete": 92,
+    "maximum_critical_failures": 0,
+    "baseline_cases_sha256": "b46d3ed571ff0c5e67243e3b0c9f40d5b2c0b82fb2ed3732c1a571decba1e4d7",
+    "cli_sha256": "f2d3f0c3d41fc739e41f98303941c348d1875b82e126ed62f17378c21008f040",
+    "source_file_sha256": {
+      "ConversionCore/src/bunsetsu.hpp": "7b9abf4402e78650ead84e10e7141daba49179472c46af659e7e187456e94565",
+      "ConversionCore/src/c_api.cpp": "51a78ed62e35632b12aac44ec43c594c9144f2be9da77805ec436cfce32edb57",
+      "ConversionCore/src/c_api.h": "385a8a9d89af7506392a18938bff8a1dee5fced37f61e49e562b9b3baceb7237",
+      "ConversionCore/src/dictionary_browser.cpp": "ad0a21b80185c635f079bc681a2f5aedd669b8134d87290b1e5f760674784353",
+      "ConversionCore/src/dictionary_browser.h": "0ef334f9d24d14fa5d15d3fdd9c0c70bb5e065041f7dd589a7c422069acb71f6",
+      "ConversionCore/src/dictionary_format.hpp": "1949f60044a2678237ca1c5b3630752f0a8bf0a345d03c74a95fdbe333a69b56",
+      "ConversionCore/src/engine.cpp": "c96cd12ac9b00136ac708b72c0000ed1dec28fa467ea95b9bd1138c972e51820",
+      "ConversionCore/src/engine.hpp": "111fb93efa8b39f9772a21f3104eb562a3fe3d75955e867b2ca080a7f97eef88",
+      "ConversionCore/src/main.cpp": "992b349b9dec13058344bfa12ad1e962b1df22b697051b97d586b4b9e536669e",
+      "ConversionCore/src/mozc_scoring_data.cpp": "dd0c655aa3cf47838f34590fb414afb14c5aea53e4cd91e3e7ed736ea0e5eff2",
+      "ConversionCore/src/mozc_scoring_data.hpp": "cb2de397c1496d7436afc5c37cbb870dcac3613f2f6adac08eaba5d24e465a49",
+      "ConversionCore/src/standalone_dictionary.hpp": "6bda666239ec3619d27d22895e467d9e1118e549d029f848df229a146704975e",
+      "ConversionCore/src/system_ngram.cpp": "f0051d4bfa3f0fd14d78597565b2b7a7fe7684386c0b00fb5ec2705e66adbc54",
+      "ConversionCore/src/system_ngram.hpp": "d1430a0703976adc0fb4d443f261182c1faa5b8a49468f9fa2cd44f9935267e7",
+      "ConversionCore/src/unicode_case.cpp": "9f94dc0790bf693024f1560b81b3b6b718a2632099a1a479fb37e6df2f2ebbbd",
+      "ConversionCore/src/unicode_case.hpp": "e8945f76be32f355115d09cf2bd934c571a47a94409f8522445db2c9c1a32be9"
+    }
+  },
+  "scope": "Measured initial regression floor for provisional fixed tasks; not Android semantic-gold accuracy or product release acceptance."
+}

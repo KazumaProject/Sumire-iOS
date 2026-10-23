@@ -1,6 +1,7 @@
 import XCTest
 import UIKit
 import UniformTypeIdentifiers
+import SumireCore
 
 final class CandidateBarTests: XCTestCase {
     func testSystemPasteControlRemainsAvailableWithoutFullAccess() {
@@ -90,6 +91,29 @@ final class CandidateBarTests: XCTestCase {
         wait(for: [finished], timeout: 10)
     }
 
+    func testProductionBridgePreservesPrimaryNumericAndPersonalOrigins() throws {
+        let service = ConversionService(categoryMask: 0)
+        func convert(_ reading: String, generation: UInt64) throws -> [ConversionCandidate] {
+            let completed = expectation(description: "Primary presentation metadata")
+            var response: Result<ConversionResponse, Error>?
+            service.convert(reading, generation: generation, editStart: 0) { response = $0; completed.fulfill() }
+            wait(for: [completed], timeout: 20)
+            return try XCTUnwrap(response).get().candidates
+        }
+        for (index, entry) in [("12", "[半]"), ("１２", "[全]")].enumerated() {
+            let candidates = try convert(entry.0, generation: UInt64(index + 1))
+            let primary = try XCTUnwrap(candidates.first { $0.text == entry.0 && !$0.dictionaries.isEmpty })
+            XCTAssertEqual(primary.displayAnnotation, entry.1)
+        }
+        var personal = PersonalLexicon()
+        personal.words = [PersonalWord(word: "１", reading: "ばっじ", posScore: -10000)]
+        service.setPersonal(personal)
+        let candidates = try convert("ばっじ", generation: 3)
+        let user = try XCTUnwrap(candidates.first { $0.text == "１" && $0.dictionaries.contains("user") })
+        XCTAssertNil(user.displayAnnotation)
+        XCTAssertEqual(user.presentationKind, .none)
+    }
+
     private func withBar(rows: Int = 1, _ body: @escaping (CandidateBar, UICollectionView) -> Void) {
         let finished = expectation(description: "Rendered candidate bar")
         DispatchQueue.main.async {
@@ -110,6 +134,193 @@ final class CandidateBarTests: XCTestCase {
             finished.fulfill()
         }
         wait(for: [finished], timeout: 10)
+    }
+
+    func testAnnotationsPreserveRowsDuplicateSelectionAndClearOnPlainUpdate() {
+        for rows in 1...3 {
+            for expanded in [false, true] {
+                withBar(rows: rows) { bar, list in
+                    if expanded { bar.useExpandedLayout() }
+                    bar.setCandidates([.init(text: "橋", annotation: "[部]"),
+                                       .init(text: "橋", annotation: "[読] はし")])
+                    bar.layoutIfNeeded(); list.layoutIfNeeded()
+                    for index in 0..<2 {
+                        let path = IndexPath(item: index, section: 0)
+                        let cell = list.cellForItem(at: path)
+                        cell?.layoutIfNeeded()
+                        XCTAssertEqual(cell?.accessibilityLabel, "橋")
+                        XCTAssertEqual(cell?.accessibilityValue, index == 0 ? "[部]" : "[読] はし")
+                        XCTAssertEqual(cell?.bounds.height, 44)
+                        let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }
+                            .first { $0.accessibilityIdentifier == "candidate-annotation" }
+                        XCTAssertFalse(label?.isHidden ?? true)
+                        XCTAssertGreaterThan(label?.frame.width ?? 0, 0)
+                    }
+                    var selected: Int?
+                    bar.onSelect = { selected = $0 }
+                    bar.collectionView(list, didSelectItemAt: IndexPath(item: 1, section: 0))
+                    XCTAssertEqual(selected, 1)
+                    bar.candidates = ["橋", "橋"]
+                    bar.layoutIfNeeded(); list.layoutIfNeeded()
+                    XCTAssertNil(list.cellForItem(at: IndexPath(item: 0, section: 0))?.accessibilityValue)
+                }
+            }
+        }
+    }
+
+    func testLongAnnotationTruncatesBeforeCandidateInNarrowBar() {
+        withBar { bar, list in
+            bar.frame.size.width = 120
+            bar.setCandidates([.init(text: "橋", annotation: "[読] " + String(repeating: "はし", count: 40))])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            let path = IndexPath(item: 0, section: 0)
+            let cell = list.cellForItem(at: path)!
+            cell.layoutIfNeeded()
+            let title = cell.contentView.subviews.compactMap { $0 as? UILabel }.first!
+            XCTAssertGreaterThanOrEqual(title.frame.width, HistoricKanaFont.attributed("橋").size().width)
+            XCTAssertGreaterThanOrEqual(title.frame.minX, 0)
+            XCTAssertLessThanOrEqual(title.frame.maxX, cell.contentView.bounds.width)
+            XCTAssertEqual(cell.bounds.height, 44)
+            let identity = ObjectIdentifier(cell)
+            bar.setCandidates([.init(text: "橋", annotation: "[部]")])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            XCTAssertEqual(list.cellForItem(at: path).map(ObjectIdentifier.init), identity)
+            XCTAssertEqual(list.cellForItem(at: path)?.accessibilityValue, "[部]")
+        }
+    }
+
+    func testDisplayMergePreservesFirstBehaviorAndUnionsDictionaryLabels() {
+        let first = ConversionCandidate(id: 11, text: "橋", score: 90,
+            range: NSRange(location: 0, length: 1), dictionaries: ["system"], isReadingPrefix: true,
+            classifiedCategories: ["term"])
+        let duplicate = ConversionCandidate(id: 12, text: "橋", score: 1,
+            range: NSRange(location: 0, length: 2), dictionaries: ["category", "system"],
+            presentationKind: .fullWidth, classifiedCategories: ["person", "term"])
+        let distinct = ConversionCandidate(id: 13, text: "箸", score: 2,
+            range: NSRange(location: 0, length: 2), dictionaries: [])
+        let merged = ConversionCandidate.mergedForDisplay([first, distinct, duplicate])
+        XCTAssertEqual(merged.map(\.id), [11, 13])
+        XCTAssertEqual(merged[0].score, 90)
+        XCTAssertEqual(merged[0].range, first.range)
+        XCTAssertEqual(merged[0].displayAnnotation, "[部] [人名・用語]")
+        XCTAssertEqual(merged[0].dictionaries, ["system", "category"])
+        XCTAssertEqual(merged[0].presentationKind, .none)
+    }
+
+    func testOriginBadgesDoNotInferPrimaryKindFromSurface() {
+        func candidate(_ text: String, _ kind: ConversionCandidate.PresentationKind) -> ConversionCandidate {
+            ConversionCandidate(id: 1, text: text, score: 1,
+                range: NSRange(location: 0, length: 1), dictionaries: ["person"], presentationKind: kind)
+        }
+        XCTAssertNil(candidate("ｶﾞ", .none).displayAnnotation)
+        XCTAssertEqual(candidate("ｶﾞ", .halfWidth).displayAnnotation, "[半]")
+        XCTAssertEqual(candidate("Ａ", .fullWidth).displayAnnotation, "[全]")
+        for text in ["1", "!?", " "] { XCTAssertEqual(candidate(text, .numericSymbol).displayAnnotation, "[半]") }
+        for text in ["１", "！？", "　"] { XCTAssertEqual(candidate(text, .numericSymbol).displayAnnotation, "[全]") }
+        for text in ["abc", "123", "Ａ", "ｶﾞ", "1！", ""] { XCTAssertNil(candidate(text, .numericSymbol).displayAnnotation, text) }
+    }
+
+    func testCorrectionAndCategoryBadgesRenderAndKeepCommitIdentity() {
+        let candidate = ConversionCandidate(id: 50, text: "橋", score: 4,
+            range: NSRange(location: 0, length: 1), dictionaries: ["system"],
+            rawText: "橋\tはし", correctedReading: "はし", isReadingPrefix: true,
+            classifiedCategories: ["term", "unknown", "person", "term"])
+        XCTAssertEqual(candidate.displayAnnotation, "[読] はし [人名・用語]")
+        for expanded in [false, true] {
+            withBar { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                bar.setCandidates([.init(text: candidate.text, annotation: candidate.displayAnnotation)])
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                let cell = list.cellForItem(at: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(cell?.accessibilityValue, candidate.displayAnnotation)
+                var selected: ConversionCandidate?
+                bar.onSelect = { _ in selected = candidate }
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(selected?.id, 50)
+                XCTAssertEqual(selected?.text, "橋")
+                XCTAssertEqual(selected?.range.length, 1)
+            }
+        }
+    }
+
+    func testMergedCandidatesSelectFirstIdentityInNormalAndExpandedBars() {
+        let candidates = ConversionCandidate.mergedForDisplay([
+            ConversionCandidate(id: 41, text: "橋", score: 0,
+                range: NSRange(location: 0, length: 1), dictionaries: [], isReadingPrefix: true),
+            ConversionCandidate(id: 42, text: "橋", score: 1,
+                range: NSRange(location: 0, length: 2), dictionaries: []),
+            ConversionCandidate(id: 43, text: "橋", score: 2,
+                range: NSRange(location: 0, length: 2), dictionaries: [],
+                rawText: "橋\tはし", correctedReading: "はし")])
+        for expanded in [false, true] {
+            withBar(rows: 3) { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                bar.setCandidates(candidates.map { .init(text: $0.text, annotation: $0.displayAnnotation) })
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                XCTAssertEqual(list.numberOfItems(inSection: 0), 2)
+                var selected: ConversionCandidate?
+                bar.onSelect = { selected = candidates[$0] }
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 0, section: 0))
+                XCTAssertEqual(selected?.id, 41)
+                XCTAssertEqual(selected?.range.length, 1)
+                bar.collectionView(list, didSelectItemAt: IndexPath(item: 1, section: 0))
+                XCTAssertEqual(selected?.id, 43)
+                XCTAssertEqual(selected?.text, "橋")
+                XCTAssertEqual(selected?.correctedReading, "はし")
+            }
+        }
+    }
+
+    func testDisplayMergeKeepsCorrectionRawIdentityAndCanonicalDistinctStrings() {
+        func candidate(_ id: UInt64, _ text: String, raw: String? = nil, correction: String? = nil) -> ConversionCandidate {
+            ConversionCandidate(id: id, text: text, score: 0,
+                range: NSRange(location: 0, length: 2), dictionaries: [],
+                rawText: raw, correctedReading: correction)
+        }
+        let merged = ConversionCandidate.mergedForDisplay([
+            candidate(1, "橋"), candidate(2, "橋", raw: "橋\tはし", correction: "はし"),
+            candidate(3, "橋", raw: "橋\tはし", correction: "はし"),
+            candidate(4, "が"), candidate(5, "か\u{3099}")])
+        XCTAssertEqual(merged.map(\.id), [1, 2, 4, 5])
+        XCTAssertEqual(merged[1].text, "橋")
+        XCTAssertEqual(merged[1].displayAnnotation, "[読] はし")
+        XCTAssertEqual(Array(merged[3].text.utf16), [0x304B, 0x3099])
+    }
+
+    func testCorrectionAnnotationDoesNotChangeCommitText() {
+        let candidate = ConversionCandidate(id: 1, text: "雰囲気", score: 0,
+            range: NSRange(location: 0, length: 4), dictionaries: [],
+            rawText: "雰囲気\tふんいき", correctedReading: "ふんいき", isReadingPrefix: true)
+        XCTAssertEqual(candidate.displayAnnotation, "[読] ふんいき")
+        XCTAssertEqual(candidate.text, "雰囲気")
+        XCTAssertEqual(ConversionCandidate(id: 2, text: "橋", score: 0,
+            range: NSRange(location: 0, length: 2), dictionaries: [],
+            isReadingPrefix: true).displayAnnotation, "[部]")
+    }
+
+    func testHistoricKanaCandidateUsesBundledFontWithoutChangingSelection() {
+        for expanded in [false, true] {
+            withBar { bar, list in
+                if expanded { bar.useExpandedLayout() }
+                let text = "👩‍💻か\u{3099}\u{1B005}\u{1B116}を"
+                bar.candidates = [text]
+                bar.layoutIfNeeded(); list.layoutIfNeeded()
+                let path = IndexPath(item: 0, section: 0)
+                let cell = list.cellForItem(at: path)
+                let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }.first
+                XCTAssertEqual(label?.attributedText?.string, text)
+                XCTAssertEqual(cell?.accessibilityLabel, text)
+                let range = (text as NSString).range(of: "\u{1B005}")
+                let font = label?.attributedText?.attribute(.font, at: range.location, effectiveRange: nil) as? UIFont
+                XCTAssertEqual(font?.fontName, HistoricKanaFont.assetName)
+                var selected: String?
+                bar.onSelect = { selected = bar.candidates[$0] }
+                bar.collectionView(list, didSelectItemAt: path)
+                XCTAssertEqual(selected, text)
+                let size = bar.collectionView(list, layout: list.collectionViewLayout, sizeForItemAt: path)
+                XCTAssertEqual(size.width, min(max(44, HistoricKanaFont.attributed(text).size().width + 32), max(44, list.bounds.width)))
+            }
+        }
     }
 
     func testThreeRowsPackVariableWidthsWithoutBlankColumns() {
@@ -155,15 +366,31 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
-    func testSavedThreeRowsCollapseOnlyWhileShortcutsAreVisible() {
+    func testSavedThreeRowsKeepTheirHeightWhileShortcutsAreVisible() {
         withBar(rows: 3) { bar, list in
             XCTAssertEqual(bar.displayedHeight, 132)
             bar.showsShortcuts = true
             XCTAssertEqual(bar.rowCount, 3)
-            XCTAssertEqual(bar.displayedHeight, 44)
+            XCTAssertEqual(bar.displayedHeight, 132)
+            XCTAssertEqual(bar.requestedDisplayedHeight, 132)
             bar.showsShortcuts = false
             XCTAssertEqual(bar.rowCount, 3)
             XCTAssertEqual(bar.displayedHeight, 132)
+        }
+    }
+
+    func testConstrainedHeightIsEqualWhileIdleAndComposing() {
+        withBar(rows: 3) { bar, _ in
+            bar.setDisplayedHeightLimit(90)
+            XCTAssertEqual(bar.displayedHeight, 88)
+            bar.showsShortcuts = true
+            XCTAssertEqual(bar.displayedHeight, 88)
+            XCTAssertEqual(bar.requestedDisplayedHeight, 132)
+            let controls = bar.subviews.compactMap { $0 as? UIButton }
+            bar.layoutIfNeeded()
+            for control in controls { XCTAssertEqual(control.frame.height, 44) }
+            bar.showsShortcuts = false
+            XCTAssertEqual(bar.displayedHeight, 88)
         }
     }
 

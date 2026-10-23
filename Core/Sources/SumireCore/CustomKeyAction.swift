@@ -9,31 +9,52 @@ public enum CustomKeyAction: Codable, Equatable {
     case switchLayout(String)
     case unsupported(raw: String, reason: String)
 
-    public enum Command: String, Codable {
+    public enum Command: String, Codable, CaseIterable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
-        case paste = "Paste", cursorLeft = "MoveCursorLeft", nextKeyboard = "SwitchToNextIme"
+        case paste = "Paste", cursorLeft = "MoveCursorLeft", cursorRight = "MoveCursorRight", nextKeyboard = "SwitchToNextIme"
+        case toggleCase = "a/A"
         case modifier = "小゛゜", changeMode = "ChangeInputMode", moveCustomKeyboardTab = "MoveCustomKeyboardTab"
         case forceNewLine = "ForceNewLine", halfSpace = "ForceHalfWidthSpace", fullSpace = "ForceFullWidthSpace"
         case commitAndSpace = "CommitAndInsertSpace"
+        case shift = "ShiftKeyPressed", capsLock = "CapLockKey"
+        case deleteUntilBoundary = "DeleteUntilSymbol", openSymbols = "ShowEmojiKeyboard"
+        case switchKana = "SwitchToKanaLayout", switchEnglish = "SwitchToEnglishLayout", switchNumber = "SwitchToNumberLayout"
+        case switchDirect = "SwitchDirectMode", switchRomaji = "SwitchRomajiEnglish"
+    }
+    /// Pinned IMEService InputText actions; ordinary Text payloads stay literal.
+    public static func supportsInputText(_ token: String) -> Bool {
+        SumireFlickMarker(rawValue: token) != nil || ["^_^", ":", "-"].contains(token)
     }
     public static func tap(_ raw: String, targets: CustomLayoutTargets) -> Self {
+        if raw == "ShiftKey" { return .command(.shift) }
         if raw.hasPrefix("Text:") { return .text(String(raw.dropFirst(5))) }
         if raw.hasPrefix("InputText:") { return .inputText(String(raw.dropFirst(10))) }
         if raw.hasPrefix("MoveToCustomKeyboard:") { return targets.resolve(String(raw.dropFirst(21)), raw: raw) }
-        if let command = Command(rawValue: raw) { return .command(command) }
+        if let command = decodedCommand(raw) { return .command(command) }
         return .unsupported(raw: raw, reason: "この操作はiOS側で未対応です")
     }
     public static func flick(type: String, value: String?, targets: CustomLayoutTargets) -> Self {
+        if type == "ShiftKey" { return .command(.shift) }
         if type == "INPUT_TEXT" { return .text(value ?? "") }
         if type == "MoveToCustomKeyboard" { return targets.resolve(value ?? "", raw: type + ":" + (value ?? "")) }
         let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "SPACE": "Space",
                        "NEW_LINE": "NewLine", "ENTER": "Enter", "CONFIRM": "Confirm", "CONVERT": "Convert",
-                       "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
-                       "TOGGLE_DAKUTEN": "小゛゜", "CHANGE_INPUT_MODE": "ChangeInputMode"]
-        if let command = Command(rawValue: aliases[type] ?? type) { return .command(command) }
+                       "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "MOVE_CURSOR_RIGHT": "MoveCursorRight",
+                       "SWITCH_TO_KANA_LAYOUT": "SwitchToKanaLayout", "SWITCH_TO_ENGLISH_LAYOUT": "SwitchToEnglishLayout",
+                       "SWITCH_TO_NUMBER_LAYOUT": "SwitchToNumberLayout", "DELETE_UNTIL_SYMBOL": "DeleteUntilSymbol", "SHOW_EMOJI_KEYBOARD": "ShowEmojiKeyboard", "SWITCH_TO_NEXT_IME": "SwitchToNextIme",
+                       "TOGGLE_DAKUTEN": "小゛゜", "TOGGLE_CASE": "a/A", "CHANGE_INPUT_MODE": "ChangeInputMode"]
+        if let command = decodedCommand(aliases[type] ?? type) { return .command(command) }
         return .unsupported(raw: type + ":" + (value ?? ""), reason: "このフリック操作はiOS側で未対応です")
     }
+    /// KeyActionMapper tap strings differ from enum class names. Flick exports
+    /// also use the short SwitchTo* names; retain long iOS aliases for compatibility.
+    private static func decodedCommand(_ raw: String) -> Command? {
+        let aliases = ["SwitchToKana": "SwitchToKanaLayout", "SwitchToEnglish": "SwitchToEnglishLayout",
+                       "SwitchToNumber": "SwitchToNumberLayout", "^_^": "ShowEmojiKeyboard"]
+        return Command(rawValue: aliases[raw] ?? raw)
+    }
+
 }
 
 public struct CustomLayoutTargets {
@@ -62,7 +83,15 @@ public struct CustomLayoutActionReview {
     }
     public let items: [Item]
     public var unsupported: [Item] {
-        items.filter { if case .unsupported = $0.action { return true }; return false }
+        items.compactMap { item in
+            if case .unsupported = item.action { return item }
+            if case .inputText(let token) = item.action, !CustomKeyAction.supportsInputText(token) {
+                return Item(layoutID: item.layoutID, keyID: item.keyID, location: item.location,
+                            action: .unsupported(raw: "InputText:" + token,
+                                                 reason: "このInputText操作はiOS側で未対応です"))
+            }
+            return nil
+        }
     }
     public init(layouts: [ImportedCustomLayout]) {
         let targets = CustomLayoutTargets(layouts: layouts)
@@ -73,8 +102,12 @@ public struct CustomLayoutActionReview {
                 for field in ["action", "doubleTapAction"] {
                     if let raw = definition?[field]?.string {
                         let action: CustomKeyAction
-                        if field == "doubleTapAction", definition?["doubleTapEnabled"] != .bool(false) {
-                            action = .unsupported(raw: raw, reason: "ダブルタップ操作は移植中です")
+                        if field == "doubleTapAction" {
+                            // Disabled/ordinary-key bindings are inert, as in Android imports.
+                            guard let binding = CustomDoubleTapBinding.effective(
+                                definition: definition, normalAction: .tap(definition?["action"]?.string ?? "", targets: targets),
+                                targets: targets) else { continue }
+                            action = binding.action
                         } else {
                             action = .tap(raw, targets: targets)
                         }

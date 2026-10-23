@@ -3,12 +3,8 @@ import SumireCore
 
 final class KeyboardViewController: UIInputViewController {
     private let surface = KeyboardSurface()
-    private struct Context: Equatable {
-        let document: String?
-        let before: String?
-        let after: String?
-        let selected: String?
-    }
+    private typealias Context = MarkedDocumentOwnership.Context
+    private var markedOwnership = MarkedDocumentOwnership()
     private var expectedContext: Context?
     private var changing = false
     private var keyboardHeight: NSLayoutConstraint!
@@ -45,11 +41,16 @@ final class KeyboardViewController: UIInputViewController {
             // Empty editors may return nil on both sides of the insertion point.
             // That does not mean marked text is unsupported. Keep the reading in
             // the surface as well, so hosts ignoring marked text can still commit.
-            guard DocumentProxyIdentity.read(self.textDocumentProxy) != nil else { return }
-            self.perform {
-                $0.setMarkedText(text, selectedRange: selection)
-                if text.isEmpty { $0.unmarkText() }
-            }
+            let proxy = self.textDocumentProxy
+            let before = self.context(for: proxy)
+            guard before.document != nil else { self.markedOwnership.discard(); return }
+            self.changing = true
+            proxy.setMarkedText(text, selectedRange: selection)
+            if text.isEmpty { proxy.unmarkText() }
+            let after = self.context(for: proxy)
+            self.markedOwnership.recordMark(before: before, after: after, isEmpty: text.isEmpty)
+            self.expectedContext = after
+            self.changing = false
         }
         surface.updateMarkedSelection = mark
         surface.updateMarkedText = { mark($0, NSRange(location: $0.utf16.count, length: 0)) }
@@ -58,6 +59,14 @@ final class KeyboardViewController: UIInputViewController {
             // insertText replaces the current marked range and commits it in one
             // operation, so a following cursor action does not target marked text.
             self.perform { $0.insertText(text) }
+        }
+        surface.finishMarkedText = { [weak self] in self?.perform { $0.unmarkText() } }
+        surface.commitRawTextAndSpace = { [weak self] left, tail in
+            self?.perform { proxy in
+                RawSpaceCommit.apply(left: left, tail: tail,
+                    setMarked: { proxy.setMarkedText($0, selectedRange: $1) },
+                    unmark: { proxy.unmarkText() }, insert: { proxy.insertText($0) })
+            }
         }
         surface.moveCursorLeft = { [weak self] in
             guard let self, let last = self.textDocumentProxy.documentContextBeforeInput?.last else { return }
@@ -72,6 +81,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
+        markedOwnership.discard()
         expectedContext = context()
         let access = KeyboardSettings.extensionAccess(hasFullAccess: hasFullAccess)
         settingsAccess = access
@@ -107,13 +117,15 @@ final class KeyboardViewController: UIInputViewController {
         keyboardHeight.constant = surface.requestedHeight
         ProcessMemory.record("extension.visible")
     }
-    private func context() -> Context {
-        Context(document: DocumentProxyIdentity.read(textDocumentProxy),
-                before: textDocumentProxy.documentContextBeforeInput,
-                after: textDocumentProxy.documentContextAfterInput,
-                selected: textDocumentProxy.selectedText)
+    private func context() -> Context { context(for: textDocumentProxy) }
+    private func context(for proxy: UITextDocumentProxy) -> Context {
+        Context(document: DocumentProxyIdentity.read(proxy),
+                before: proxy.documentContextBeforeInput,
+                after: proxy.documentContextAfterInput,
+                selected: proxy.selectedText)
     }
     private func perform(_ operation: (UITextDocumentProxy) -> Void) {
+        markedOwnership.discard()
         changing = true
         operation(textDocumentProxy)
         expectedContext = context()
@@ -123,6 +135,7 @@ final class KeyboardViewController: UIInputViewController {
         guard !changing else { return }
         let current = context()
         if current.document == nil || expectedContext.map({ current != $0 }) == true {
+            markedOwnership.discard()
             surface.invalidateComposition()
         }
         expectedContext = current
@@ -130,8 +143,14 @@ final class KeyboardViewController: UIInputViewController {
     override func textDidChange(_ textInput: UITextInput?) { validateContext() }
     override func selectionDidChange(_ textInput: UITextInput?) { validateContext() }
     override func viewWillDisappear(_ animated: Bool) {
-        super.viewWillDisappear(animated)
+        let proxy = textDocumentProxy
+        if markedOwnership.consumeIfMatching(context(for: proxy)) {
+            changing = true
+            proxy.unmarkText()
+            changing = false
+        }
         surface.invalidateComposition()
+        super.viewWillDisappear(animated)
         expectedContext = nil
         ProcessMemory.record("extension.hidden")
     }

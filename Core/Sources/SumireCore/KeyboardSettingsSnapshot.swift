@@ -20,6 +20,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "bunsetsuSeparation", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
             result[key] = .boolean
         }
+        result[CustomInputModeStore.rememberKey] = .boolean
+        result[CustomInputModeStore.replaceKey] = .boolean
+        result[CustomInputModeStore.storageKey] = .data
         result[SymbolKeyboardMode.initialModeKey] = .text(Set(SymbolKeyboardMode.allCases.map(\.rawValue)))
         result[EmojiSkinTone.settingsKey] = .text(Set(EmojiSkinTone.allCases.map(\.rawValue)))
         result[ClipboardHistorySettings.enabledKey] = .boolean
@@ -90,7 +93,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case (.boundedText(let limit), .text(let text)):
                 guard text.utf8.count <= limit else { throw Self.invalid(key) }
             case (.data, .data(let data)):
-                if key == CircularSlotSetting.storageKey {
+                if key == CustomInputModeStore.storageKey {
+                    _ = try CustomInputModeStore.decode(data)
+                } else if key == CircularSlotSetting.storageKey {
                     guard data.count <= 1024 * 1024 else { throw Self.invalid(key) }
                     let slots = try JSONDecoder().decode([CircularSlotSetting].self, from: data)
                     guard slots.count <= 4096, slots.allSatisfy({
@@ -140,6 +145,28 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case .data(let value): defaults.set(value, forKey: key)
             }
         }
+    }
+
+    /// Applies only the values present in this snapshot. This is for importing
+    /// another product's partial settings format; absent iOS-only preferences
+    /// remain unchanged. `removingKeys` represents explicit null entries from
+    /// that source format.
+    public func applyImportedValues(to defaults: UserDefaults, removingKeys: Set<String> = []) throws {
+        try validate()
+        let rules = Self.rules
+        guard removingKeys.allSatisfy({ rules[$0] != nil }),
+              removingKeys.isDisjoint(with: values.keys) else {
+            throw PersonalDataError("設定バックアップの削除対象が不正です")
+        }
+        for (key, value) in values {
+            switch value {
+            case .boolean(let value): defaults.set(value, forKey: key)
+            case .number(let value): defaults.set(value, forKey: key)
+            case .text(let value): defaults.set(value, forKey: key)
+            case .data(let value): defaults.set(value, forKey: key)
+            }
+        }
+        for key in removingKeys { defaults.removeObject(forKey: key) }
     }
     private static func invalid(_ key: String) -> PersonalDataError {
         PersonalDataError("設定バックアップの値またはキーが不正です: \(key.prefix(128))")

@@ -4,6 +4,9 @@
 #include <string>
 #include <vector>
 namespace sumire {
+enum class CandidatePresentationKind : uint32_t {
+  none = 0, half_width = 1, full_width = 2, numeric_symbol = 3
+};
 struct Segment {
   std::string text, dictionary;
   uint32_t start, length;
@@ -18,6 +21,13 @@ struct Candidate {
   // Origin labels do not replace the selected path's segment boundaries.
   std::vector<std::string> classified_categories{};
   bool system_ngram_matched = false;
+  // Reading-correction source payload is surface<TAB>corrected reading. The
+  // display/commit text above never contains this metadata delimiter.
+  std::string raw_text{};
+  std::string corrected_reading{};
+  // Reference type 5: a yomiPartList match shorter than the input (type 2 otherwise).
+  bool is_reading_prefix = false;
+  CandidatePresentationKind presentation_kind = CandidatePresentationKind::none;
 };
 struct CandidateSplitPattern {
   std::string surface;

@@ -1,0 +1,537 @@
+{
+  "schema_version": 1,
+  "corpus_id": "japanese-curated-v1",
+  "label_status": "provisional-authored-before-engine-run",
+  "scope": "固定入力・指定表記の一致。文脈のない同音異義語は複数表記を許容。一般利用の分布を代表する評価ではない。補完課題は指定した補完先のヒット率。学習データは含めない。",
+  "configuration": {
+    "categories": [
+      "none",
+      "all"
+    ],
+    "nbest": 20,
+    "max_states": 200000,
+    "prediction": true,
+    "prefix_candidates": true,
+    "english_reading": true
+  },
+  "targets": {
+    "minimum_top1_rate": 0.8,
+    "minimum_top10_rate": 0.95,
+    "all_critical_top10": true
+  },
+  "cases": [
+    {
+      "id": "word-01",
+      "group": "word",
+      "reading": "にほんご",
+      "accepted": [
+        "日本語"
+      ],
+      "critical": true
+    },
+    {
+      "id": "word-02",
+      "group": "word",
+      "reading": "とうきょう",
+      "accepted": [
+        "東京"
+      ],
+      "critical": true
+    },
+    {
+      "id": "word-03",
+      "group": "word",
+      "reading": "がっこう",
+      "accepted": [
+        "学校"
+      ],
+      "critical": true
+    },
+    {
+      "id": "word-04",
+      "group": "word",
+      "reading": "びょういん",
+      "accepted": [
+        "病院"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-05",
+      "group": "word",
+      "reading": "でんしゃ",
+      "accepted": [
+        "電車"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-06",
+      "group": "word",
+      "reading": "しごと",
+      "accepted": [
+        "仕事"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-07",
+      "group": "word",
+      "reading": "べんきょう",
+      "accepted": [
+        "勉強"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-08",
+      "group": "word",
+      "reading": "きょう",
+      "accepted": [
+        "今日",
+        "京",
+        "強",
+        "教"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-09",
+      "group": "word",
+      "reading": "あした",
+      "accepted": [
+        "明日"
+      ],
+      "critical": false
+    },
+    {
+      "id": "word-10",
+      "group": "word",
+      "reading": "としょかん",
+      "accepted": [
+        "図書館"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-01",
+      "group": "compound",
+      "reading": "かなかんじへんかん",
+      "accepted": [
+        "仮名漢字変換",
+        "かな漢字変換"
+      ],
+      "critical": true
+    },
+    {
+      "id": "compound-02",
+      "group": "compound",
+      "reading": "よそくへんかん",
+      "accepted": [
+        "予測変換"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-03",
+      "group": "compound",
+      "reading": "にゅうりょくほうしき",
+      "accepted": [
+        "入力方式"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-04",
+      "group": "compound",
+      "reading": "こうほいちらん",
+      "accepted": [
+        "候補一覧"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-05",
+      "group": "compound",
+      "reading": "にほんごにゅうりょく",
+      "accepted": [
+        "日本語入力"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-06",
+      "group": "compound",
+      "reading": "じょうほうしょり",
+      "accepted": [
+        "情報処理"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-07",
+      "group": "compound",
+      "reading": "とどうふけん",
+      "accepted": [
+        "都道府県"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-08",
+      "group": "compound",
+      "reading": "かぶしきがいしゃ",
+      "accepted": [
+        "株式会社"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-09",
+      "group": "compound",
+      "reading": "こくさいくうこう",
+      "accepted": [
+        "国際空港"
+      ],
+      "critical": false
+    },
+    {
+      "id": "compound-10",
+      "group": "compound",
+      "reading": "しんかんせん",
+      "accepted": [
+        "新幹線"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-01",
+      "group": "sentence",
+      "reading": "きょうはいいてんきですね",
+      "accepted": [
+        "今日はいい天気ですね",
+        "今日は良い天気ですね"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-02",
+      "group": "sentence",
+      "reading": "わたしはにほんごをにゅうりょくします",
+      "accepted": [
+        "私は日本語を入力します"
+      ],
+      "critical": true
+    },
+    {
+      "id": "sentence-03",
+      "group": "sentence",
+      "reading": "あしたはがっこうにいきます",
+      "accepted": [
+        "明日は学校に行きます"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-04",
+      "group": "sentence",
+      "reading": "とうきょうえきででんしゃにのります",
+      "accepted": [
+        "東京駅で電車に乗ります"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-05",
+      "group": "sentence",
+      "reading": "あたらしいじしょをついかします",
+      "accepted": [
+        "新しい辞書を追加します"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-06",
+      "group": "sentence",
+      "reading": "にゅうりょくしたもじをさくじょします",
+      "accepted": [
+        "入力した文字を削除します"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-07",
+      "group": "sentence",
+      "reading": "へんかんこうほをせんたくしてください",
+      "accepted": [
+        "変換候補を選択してください"
+      ],
+      "critical": false
+    },
+    {
+      "id": "sentence-08",
+      "group": "sentence",
+      "reading": "このあぷりのへんかんこうほをこうそくにしたい",
+      "accepted": [
+        "このアプリの変換候補を高速にしたい"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-01",
+      "group": "homonym",
+      "reading": "はし",
+      "accepted": [
+        "橋",
+        "箸",
+        "端"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-02",
+      "group": "homonym",
+      "reading": "かみ",
+      "accepted": [
+        "紙",
+        "神",
+        "髪"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-03",
+      "group": "homonym",
+      "reading": "きしゃ",
+      "accepted": [
+        "記者",
+        "汽車",
+        "貴社"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-04",
+      "group": "homonym",
+      "reading": "しろ",
+      "accepted": [
+        "白",
+        "城"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-05",
+      "group": "homonym",
+      "reading": "あめ",
+      "accepted": [
+        "雨",
+        "飴"
+      ],
+      "critical": false
+    },
+    {
+      "id": "homonym-06",
+      "group": "homonym",
+      "reading": "こうせい",
+      "accepted": [
+        "構成",
+        "校正",
+        "公正",
+        "厚生",
+        "更生",
+        "恒星",
+        "攻勢"
+      ],
+      "critical": false
+    },
+    {
+      "id": "omission-01",
+      "group": "omission",
+      "reading": "かつこう",
+      "accepted": [
+        "学校",
+        "格好"
+      ],
+      "critical": false,
+      "omission": true
+    },
+    {
+      "id": "omission-02",
+      "group": "omission",
+      "reading": "ひよういん",
+      "accepted": [
+        "病院",
+        "美容院"
+      ],
+      "critical": false,
+      "omission": true
+    },
+    {
+      "id": "omission-03",
+      "group": "omission",
+      "reading": "きよう",
+      "accepted": [
+        "今日",
+        "器用"
+      ],
+      "critical": false,
+      "omission": true
+    },
+    {
+      "id": "omission-04",
+      "group": "omission",
+      "reading": "とうきよう",
+      "accepted": [
+        "東京"
+      ],
+      "critical": false,
+      "omission": true
+    },
+    {
+      "id": "omission-05",
+      "group": "omission",
+      "reading": "にゆうりよく",
+      "accepted": [
+        "入力"
+      ],
+      "critical": true,
+      "omission": true
+    },
+    {
+      "id": "omission-06",
+      "group": "omission",
+      "reading": "はつひよう",
+      "accepted": [
+        "発表"
+      ],
+      "critical": false,
+      "omission": true
+    },
+    {
+      "id": "personal-01",
+      "group": "personal",
+      "reading": "すみれあいおーえす",
+      "accepted": [
+        "Sumire iOS"
+      ],
+      "critical": true,
+      "personal": [
+        {
+          "kind": "user",
+          "reading": "すみれあいおーえす",
+          "text": "Sumire iOS",
+          "context_id": 1851,
+          "score": -5000
+        }
+      ]
+    },
+    {
+      "id": "personal-02",
+      "group": "personal",
+      "reading": "じぶんじしょ",
+      "accepted": [
+        "私の専用辞書"
+      ],
+      "critical": true,
+      "personal": [
+        {
+          "kind": "user",
+          "reading": "じぶんじしょ",
+          "text": "私の専用辞書",
+          "context_id": 1851,
+          "score": -5000
+        }
+      ]
+    },
+    {
+      "id": "personal-03",
+      "group": "personal",
+      "reading": "おつかれさまていけい",
+      "accepted": [
+        "お疲れさまです。\nよろしくお願いします。"
+      ],
+      "critical": true,
+      "personal": [
+        {
+          "kind": "template",
+          "reading": "おつかれさまていけい",
+          "text": "お疲れさまです。\nよろしくお願いします。",
+          "context_id": 1851,
+          "score": -5000
+        }
+      ]
+    },
+    {
+      "id": "personal-04",
+      "group": "personal",
+      "reading": "すみれあいおーえすでにゅうりょく",
+      "accepted": [
+        "Sumire iOSで入力"
+      ],
+      "critical": false,
+      "personal": [
+        {
+          "kind": "user",
+          "reading": "すみれあいおーえす",
+          "text": "Sumire iOS",
+          "context_id": 1851,
+          "score": -5000
+        }
+      ]
+    },
+    {
+      "id": "completion-01",
+      "group": "completion",
+      "reading": "にほん",
+      "accepted": [
+        "日本語"
+      ],
+      "critical": false,
+      "categories": [
+        "all"
+      ],
+      "intent": "固定した補完先が候補に出るかを測る課題。自由入力全般の意味的正解率ではない。"
+    },
+    {
+      "id": "completion-02",
+      "group": "completion",
+      "reading": "とうき",
+      "accepted": [
+        "東京"
+      ],
+      "critical": false,
+      "categories": [
+        "all"
+      ],
+      "intent": "固定した補完先が候補に出るかを測る課題。自由入力全般の意味的正解率ではない。"
+    },
+    {
+      "id": "completion-03",
+      "group": "completion",
+      "reading": "かっこん",
+      "accepted": [
+        "葛根湯"
+      ],
+      "critical": false,
+      "categories": [
+        "all"
+      ],
+      "intent": "固定した補完先が候補に出るかを測る課題。自由入力全般の意味的正解率ではない。"
+    },
+    {
+      "id": "completion-04",
+      "group": "completion",
+      "reading": "あめり",
+      "accepted": [
+        "アメリカ",
+        "亜米利加"
+      ],
+      "critical": false,
+      "categories": [
+        "all"
+      ],
+      "intent": "固定した補完先が候補に出るかを測る課題。自由入力全般の意味的正解率ではない。"
+    }
+  ]
+}

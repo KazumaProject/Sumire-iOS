@@ -5,6 +5,8 @@ import SumireCore
 
 struct CustomKeyboardSettings: View {
     @Environment(\.dismiss) private var dismiss
+    @AppStorage(CustomInputModeStore.rememberKey, store: KeyboardSettings.appDefaults) private var rememberInputMode = false
+    @AppStorage(CustomInputModeStore.replaceKey, store: KeyboardSettings.appDefaults) private var replaceComposingOnDirectInput = false
     @State private var library = CustomKeyboardLibrary()
     @State private var layouts: [ImportedCustomLayout] = []
     @State private var baseline: Data?
@@ -46,7 +48,15 @@ struct CustomKeyboardSettings: View {
                     }.disabled(!loaded)
                     Button("配列JSONファイルを取り込む") { importing = true }.disabled(!loaded)
                     Button("配列JSONを入力") { json = ""; editingJSON = true }.disabled(!loaded)
-                    Text("通常キー、標準フリックの文字入力、配列切替を利用できます。プレビューでキー配置を編集できます。その他のフリック・追加ジェスチャーは移植中です。")
+                    Text("プレビューからキー配置を編集できます。標準・二段フリック、方向別の長押し、ドーナツ入力の文字や操作も設定できます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("入力モード") {
+                    Toggle("配列ごとに入力モードを記憶", isOn: $rememberInputMode)
+                        .accessibilityIdentifier("customRememberInputMode")
+                    Toggle("直接入力への切替後、次の入力で未確定文字を置換", isOn: $replaceComposingOnDirectInput)
+                        .accessibilityIdentifier("customReplaceComposing")
+                    Text("通常は直接入力へ切り替えた時点で未確定表示を確定します。置換を有効にすると、次の直接入力まで未確定文字を保持します。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("選択する配列") {

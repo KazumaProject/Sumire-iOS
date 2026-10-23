@@ -2,6 +2,11 @@ import Foundation
 import SwiftUI
 import SumireCore
 
+enum PersonalBackupImport {
+    case sumire(PersonalBackup.Contents)
+    case androidSettings(AndroidPreferenceBackup)
+}
+
 final class PersonalLibrary: ObservableObject {
     @Published private(set) var lexicon = PersonalLexicon()
     @Published private(set) var notice: String?
@@ -52,13 +57,32 @@ final class PersonalLibrary: ObservableObject {
             DispatchQueue.main.async { self.backupInProgress = false; completion(result) }
         }
     }
-    static func readBackup(_ url: URL, completion: @escaping (Result<PersonalBackup.Contents, Error>) -> Void) {
+    static func readBackup(_ url: URL, completion: @escaping (Result<PersonalBackupImport, Error>) -> Void) {
         backupQueue.async {
             let access = url.startAccessingSecurityScopedResource()
-            let result = Result { try PersonalBackup.readContents(url) }
+            let result = Result { () -> PersonalBackupImport in
+                let data = try Self.readBackupData(url)
+                if let android = try AndroidPreferenceBackup.decodeIfMatching(data) {
+                    return .androidSettings(android)
+                }
+                return .sumire(try PersonalBackup.decodeContents(data))
+            }
             if access { url.stopAccessingSecurityScopedResource() }
             DispatchQueue.main.async { completion(result) }
         }
+    }
+
+    private static func readBackupData(_ url: URL) throws -> Data {
+        let handle = try FileHandle(forReadingFrom: url)
+        defer { try? handle.close() }
+        var data = Data()
+        while let chunk = try handle.read(upToCount: min(65_536, PersonalBackup.maximumBytes + 1 - data.count)), !chunk.isEmpty {
+            data.append(chunk)
+            guard data.count <= PersonalBackup.maximumBytes else {
+                throw PersonalDataError("バックアップが大きすぎます")
+            }
+        }
+        return data
     }
     func restoreBackup(_ contents: PersonalBackup.Contents, completion: @escaping (Result<Void, Error>) -> Void) {
         dispatchPrecondition(condition: .onQueue(.main))
@@ -82,6 +106,28 @@ final class PersonalLibrary: ObservableObject {
                     self.notice = "復元を完了できませんでした：" + error.localizedDescription
                     completion(.failure(error))
                 }
+            }
+        }
+    }
+
+    func restoreAndroidSettings(_ backup: AndroidPreferenceBackup, completion: @escaping (Result<Int, Error>) -> Void) {
+        dispatchPrecondition(condition: .onQueue(.main))
+        guard !backupInProgress else {
+            completion(.failure(PersonalDataError("バックアップを処理中です"))); return
+        }
+        backupInProgress = true
+        let defaults = KeyboardSettings.appDefaults
+        Self.backupQueue.async {
+            let result = Result { () throws -> Int in
+                try backup.apply(to: defaults)
+                guard defaults.synchronize() else {
+                    throw PersonalDataError("設定を保存できません。変更を確認できていません")
+                }
+                return backup.importedSettingCount
+            }
+            DispatchQueue.main.async {
+                self.backupInProgress = false
+                completion(result)
             }
         }
     }

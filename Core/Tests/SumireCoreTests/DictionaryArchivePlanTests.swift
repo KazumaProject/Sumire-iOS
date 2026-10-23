@@ -17,6 +17,48 @@ final class DictionaryArchivePlanTests: XCTestCase {
         XCTAssertEqual(plan.groups.first?.entries.map(\.container), [.nestedZIP, .rawData, .nestedZIP])
         XCTAssertEqual(plan.groups.first(where: { $0.group == .english })?.entries.map(\.key.role), [.reading, .word, .token])
     }
+    func testAndroidReadingCorrectionAliasesMapToOneJapaneseDictionaryGroup() throws {
+        let plan = try DictionaryArchivePlan(entryNames: [
+            "reading_correction/tango_reading_correction.dat",
+            "backup/reading_correction/yomi_reading_correction.dat",
+            "token_reading_correction.dat"
+        ])
+        let group = try XCTUnwrap(plan.groups.first)
+        XCTAssertEqual(group.group, .readingCorrection)
+        XCTAssertEqual(group.group.id, "reading_correction")
+        XCTAssertEqual(Set(group.entries.map(\.key.role)), Set([.tango, .yomi, .token]))
+        XCTAssertTrue(group.entries.allSatisfy { $0.container == .rawData })
+        XCTAssertTrue(group.canValidate)
+
+        for name in ["reading_correction/tango.dat", "reading_correction/tango_reading_correction.dat.zip"] {
+            guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
+        }
+    }
+    func testAndroidAuxiliaryDictionaryAliasesMapToEngineDictionaryGroups() throws {
+        let names = [
+            "single_kanji/tango_singleKanji.dat", "single_kanji/yomi_singleKanji.dat.zip", "single_kanji/token_singleKanji.dat",
+            "emoji/tango_emoji.dat", "emoji/yomi_emoji.dat", "emoji/token_emoji.dat.zip",
+            "emoticon/tango_emoticon.dat.zip", "emoticon/yomi_emoticon.dat", "emoticon/token_emoticon.dat",
+            "symbol/tango_symbol.dat", "symbol/yomi_symbol.dat.zip", "symbol/token_symbol.dat"
+        ]
+        let plan = try DictionaryArchivePlan(entryNames: names)
+        XCTAssertEqual(plan.groups.map(\.group), [.auxiliary("single_kanji"), .auxiliary("emoji"),
+                                                    .auxiliary("emoticon"), .auxiliary("symbol")])
+        XCTAssertEqual(plan.groups.map(\.group.id), ["single_kanji", "emoji", "emoticon", "symbol"])
+        XCTAssertTrue(plan.groups.allSatisfy { $0.canValidate })
+        XCTAssertTrue(plan.groups.allSatisfy { Set($0.entries.map(\.key.role)) == Set([.tango, .yomi, .token]) })
+        XCTAssertEqual(plan.groups.flatMap(\.entries).filter { $0.container == .nestedZIP }.count, 4)
+
+        let flat = try DictionaryArchivePlan(entryNames: ["tango_singleKanji.dat", "yomi_singleKanji.dat", "token_singleKanji.dat"])
+        XCTAssertEqual(flat.groups.map(\.group), [.auxiliary("single_kanji")])
+        guard case .mapped(let nestedAlias) = DictionaryArchivePlan.resolve("unrelated/prefix/emoji/tango_emoji.dat") else {
+            return XCTFail("nested Android filename alias was not mapped")
+        }
+        XCTAssertEqual(nestedAlias.key.group, .auxiliary("emoji"))
+        for name in ["emoji/readme.dat", "emoticon/tango_other.dat"] {
+            guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
+        }
+    }
     func testLegacyAliasesCommonPairAndCase() throws {
         let plan = try DictionaryArchivePlan(entryNames: ["backup/TANGO.dat", "YOMI.DAT", "Token.dat.zip",
                                                          "backup/system/connectionId.dat.zip", "system/pos_table.dat"])
@@ -41,7 +83,8 @@ final class DictionaryArchivePlanTests: XCTestCase {
     }
     func testUnknownCategoriesNeverBecomeSystemDictionary() throws {
         for name in ["categories/new/yomi.dat", "prefix/CATEGORIES/unknown/token.dat.zip",
-                     "categories/person/nested/yomi.dat", "categories/yomi.dat", "english/tango.dat"] {
+                     "categories/person/nested/yomi.dat", "categories/yomi.dat", "english/tango.dat",
+                     "symbol/yomi.dat"] {
             guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
         let plan = try DictionaryArchivePlan(entryNames: ["categories/new/yomi.dat", "categories/person/yomi.dat"])
@@ -55,8 +98,7 @@ final class DictionaryArchivePlanTests: XCTestCase {
         for name in ["__MACOSX/yomi.dat", "backup/__MACOSX/system/yomi.dat", "folder/.DS_Store", "folder/._yomi.dat", "folder/"] {
             guard case .ignored = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
-        for name in ["single_kanji/yomi_singleKanji.dat", "tango_emoji.dat", "token_emoticon.dat",
-                     "symbol/yomi.dat", "reading_correction/yomi_reading_correction.dat", "token_kotowaza.dat",
+        for name in ["token_kotowaza.dat",
                      "id.def", "english/qwerty_glide_index.dat"] {
             guard case .unsupported(let reason) = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
             XCTAssertFalse(reason.isEmpty)

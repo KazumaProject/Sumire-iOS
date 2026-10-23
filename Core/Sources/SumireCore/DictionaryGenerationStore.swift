@@ -41,9 +41,19 @@ public struct DictionaryGenerationStore {
 
     private var currentPointer: URL { directory.appendingPathComponent("current.json") }
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
-    private static let knownFiles = Set((DictionaryArchivePlan.categoryIDs + [
-        "system", "english", "english_reading", "connection"
+    private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + [
+        "system", "english", "english_reading", "connection", "reading_correction",
+        "single_kanji", "emoji", "emoticon", "symbol"
     ]).map { $0 + ".sud" })
+    // Support assets survive publication independently of archive replacements.
+    private static let supportGroups = [
+        ["standalone.sud"], ["reading_correction.sud"],
+        ["system_ngram.dat", "system_ngram_unigram.dat"],
+        ["mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat"],
+        ["single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"]
+    ]
+    private static let supportFiles = Set(supportGroups.flatMap { $0 })
+    private static let knownFiles = replacementFiles.union(supportFiles)
 
     /// Reads only pointer/manifest metadata and verifies all referenced files
     /// exist as regular files. Native file checksums are verified by the C++
@@ -70,15 +80,22 @@ public struct DictionaryGenerationStore {
 
     /// Copies a trusted base dictionary set, overlays the validated import
     /// outputs, and changes current.json only after the complete generation and
-    /// its manifest have been written and synced.
+    /// its manifest have been written and synced. Missing support groups can be
+    /// restored from the trusted bundled fallback without replacing base user
+    /// dictionaries. Partial groups are rejected rather than mixed silently.
     @discardableResult
-    public func publish(importedFiles: [String: URL], from baseDirectory: URL,
+    public func publish(importedFiles: [String: URL], from baseDirectory: URL, supportFallback: URL? = nil,
                         validate: ((URL) throws -> Void)? = nil) throws -> Loaded {
         guard directory.isFileURL, baseDirectory.isFileURL,
-              importedFiles.keys.allSatisfy(Self.knownFiles.contains) else {
+              importedFiles.keys.allSatisfy(Self.replacementFiles.contains) else {
             throw PersonalDataError("辞書世代の保存先または取り込みファイル名が不正です")
         }
         let manager = FileManager.default
+        try Self.requireDirectory(baseDirectory)
+        if let supportFallback {
+            guard supportFallback.isFileURL else { throw PersonalDataError("補助辞書の保存先が不正です") }
+            try Self.requireDirectory(supportFallback)
+        }
         if manager.fileExists(atPath: directory.path) {
             let attributes = try manager.attributesOfItem(atPath: directory.path)
             guard attributes[.type] as? FileAttributeType == .typeDirectory else {
@@ -99,14 +116,33 @@ public struct DictionaryGenerationStore {
 
         var totalBytes: Int64 = 0
         let importedNames = Set(importedFiles.keys)
-        let filesToCopy = Self.knownFiles.sorted().compactMap { file -> (String, URL)? in
-            guard !importedNames.contains(file) else { return nil }
-            let source = baseDirectory.appendingPathComponent(file)
-            return manager.fileExists(atPath: source.path) ? (file, source) : nil
+        var sources: [String: URL] = [:]
+        for file in Self.replacementFiles.subtracting(Self.supportFiles) where !importedNames.contains(file) {
+            let source = try Self.existingFile(file, in: baseDirectory)
+            if let source { sources[file] = source }
         }
-        for (file, source) in filesToCopy {
-            try Self.copyRegularFile(source, to: final.appendingPathComponent(file),
-                                     totalBytes: &totalBytes)
+        for group in Self.supportGroups {
+            let existing = try group.map { try Self.existingFile($0, in: baseDirectory) }
+            let present = existing.compactMap { $0 }.count
+            guard present == 0 || present == group.count else {
+                throw PersonalDataError("基準辞書の補助資産が一部しかありません")
+            }
+            let selected: [URL?]
+            if present == group.count { selected = existing }
+            else if let supportFallback {
+                selected = try group.map { try Self.existingFile($0, in: supportFallback) }
+                guard selected.allSatisfy({ $0 != nil }) else {
+                    throw PersonalDataError("同梱の補助辞書が不足しています")
+                }
+            } else { selected = existing }
+            for (file, source) in zip(group, selected) where !importedNames.contains(file) {
+                if let source { sources[file] = source }
+            }
+        }
+        for (file, source) in sources.sorted(by: { $0.key < $1.key }) {
+            let destination = final.appendingPathComponent(file)
+            try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.copyRegularFile(source, to: destination, totalBytes: &totalBytes)
         }
         for (file, source) in importedFiles.sorted(by: { $0.key < $1.key }) {
             let destination = final.appendingPathComponent(file)
@@ -125,6 +161,9 @@ public struct DictionaryGenerationStore {
             guard manager.fileExists(atPath: url.path) else { continue }
             hashes[file] = try Self.sha256(of: url)
             try Self.synchronize(url)
+        }
+        if manager.fileExists(atPath: final.appendingPathComponent("mozc").path) {
+            try Self.synchronize(final.appendingPathComponent("mozc"))
         }
         let manifest = Manifest(formatVersion: 1, generation: generation,
                                 sourceRevision: "unknown-or-mixed",
@@ -195,17 +234,38 @@ public struct DictionaryGenerationStore {
         guard manifest.formatVersion == 1, manifest.generation == String(pointer.generation.dropFirst("generation-".count)),
               manifest.outputSHA256.keys.allSatisfy(Self.knownFiles.contains),
               manifest.outputSHA256.values.allSatisfy(Self.isSHA256),
-              manifest.importedFiles.allSatisfy(Self.knownFiles.contains),
+              manifest.importedFiles.allSatisfy(Self.replacementFiles.contains),
               manifest.outputSHA256["system.sud"] != nil, manifest.outputSHA256["connection.sud"] != nil else {
             throw PersonalDataError("辞書世代マニフェストの形式が不正です")
         }
         for file in manifest.outputSHA256.keys {
-            let attributes = try manager.attributesOfItem(atPath: target.appendingPathComponent(file).path)
-            guard attributes[.type] as? FileAttributeType == .typeRegular else {
+            guard try Self.existingFile(file, in: target) != nil else {
                 throw PersonalDataError("辞書世代ファイルがありません: \(file)")
             }
         }
         return pointer
+    }
+
+    private static func requireDirectory(_ url: URL) throws {
+        guard try FileManager.default.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType == .typeDirectory else {
+            throw PersonalDataError("辞書フォルダが通常のフォルダではありません")
+        }
+    }
+
+    private static func existingFile(_ file: String, in root: URL) throws -> URL? {
+        let manager = FileManager.default
+        let url = root.appendingPathComponent(file)
+        let parent = url.deletingLastPathComponent()
+        if parent != root {
+            do { try requireDirectory(parent) }
+            catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return nil }
+        }
+        do {
+            guard try manager.attributesOfItem(atPath: url.path)[.type] as? FileAttributeType == .typeRegular else {
+                throw PersonalDataError("辞書資産が通常ファイルではありません: \(file)")
+            }
+        } catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return nil }
+        return url
     }
 
     private static func copyRegularFile(_ source: URL, to destination: URL,

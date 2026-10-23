@@ -29,6 +29,11 @@ targets:
       properties:
         CFBundleShortVersionString: $(MARKETING_VERSION)
         CFBundleVersion: $(CURRENT_PROJECT_VERSION)
+        UISupportedInterfaceOrientations~ipad:
+          - UIInterfaceOrientationPortrait
+          - UIInterfaceOrientationPortraitUpsideDown
+          - UIInterfaceOrientationLandscapeLeft
+          - UIInterfaceOrientationLandscapeRight
         CFBundleIcons:
           CFBundlePrimaryIcon:
             CFBundleIconFiles: [SumireLogo]
@@ -58,7 +63,7 @@ targets:
       - Shared
       - path: ConversionCore/src
         excludes: [main.cpp]
-      - path: ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english
+      - path: ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english
         type: folder
         buildPhase: resources
     info:
@@ -119,6 +124,27 @@ targets:
         PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.ios.uitests
     dependencies:
       - target: Sumire
+  SumireExternalInputHost:
+    type: application
+    platform: iOS
+    sources: [ExternalInputHost]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.externalinputhost
+        INFOPLIST_KEY_CFBundleDisplayName: Sumire Input Host
+        INFOPLIST_KEY_UILaunchScreen_Generation: YES
+        INFOPLIST_KEY_UISupportedInterfaceOrientations: UIInterfaceOrientationPortrait UIInterfaceOrientationLandscapeLeft UIInterfaceOrientationLandscapeRight
+  SumireExternalInputTests:
+    type: bundle.ui-testing
+    platform: iOS
+    sources: [ExternalInputTests]
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.externalinputtests
+    dependencies:
+      - target: SumireExternalInputHost
 schemes:
   Sumire:
     build:
@@ -140,3 +166,14 @@ schemes:
         SUMIRE_REFERENCE_NATIVE_DICTIONARIES: "${SUMIRE_REFERENCE_NATIVE_DICTIONARIES}"
       targets:
         - SumireNativeTests
+  SumireExternalKeyboardAcceptance:
+    build:
+      targets:
+        Sumire: all
+        SumireExternalInputHost: all
+        SumireExternalInputTests: [test]
+    test:
+      environmentVariables:
+        SUMIRE_REQUIRE_EXTENSION: "$(SUMIRE_REQUIRE_EXTENSION)"
+      targets:
+        - SumireExternalInputTests

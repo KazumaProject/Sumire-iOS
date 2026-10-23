@@ -45,7 +45,7 @@ std::u16string hiragana_to_katakana(std::u16string value) {
   }
   return value;
 }
-std::u16string katakana_to_halfwidth(std::u16string_view value) {
+std::u16string reading_to_halfwidth(std::u16string_view value) {
   static const std::unordered_map<char16_t, std::u16string> replacements = {
       {u'。',u"｡"},{u'「',u"｢"},{u'」',u"｣"},{u'、',u"､"},{u'・',u"･"},
       {0x3099,u"ﾞ"},{0x309a,u"ﾟ"},{0x309b,u"ﾞ"},{0x309c,u"ﾟ"},
@@ -75,6 +75,15 @@ std::u16string katakana_to_halfwidth(std::u16string_view value) {
   std::u16string result;
   result.reserve(value.size());
   for (auto c : value) {
+    // Match df1f383 String.toHankakuKatakana's direct input mapping, rather
+    // than normalizing all hiragana first. Unlisted characters stay intact.
+    if (c >= 0x3041 && c <= 0x3093 && c != 0x308e &&
+        c != 0x3090 && c != 0x3091) c += 0x60;
+    const bool mapped =
+        (c >= 0x30a1 && c <= 0x30f4 && c != 0x30ee &&
+         c != 0x30f0 && c != 0x30f1) ||
+        c == u'ー' || c == u'、' || c == u'。' || c == u'「' || c == u'」';
+    if (!mapped) { result.push_back(c); continue; }
     auto it = replacements.find(c);
     if (it == replacements.end()) result.push_back(c);
     else result.append(it->second);
@@ -279,7 +288,7 @@ std::vector<std::string> category_names() {
 struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
-  std::unique_ptr<Dictionary> english_reading, english_words;
+  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction;
   std::unique_ptr<Dictionary> single_kanji, emoji, emoticon, symbol;
   bool auxiliary_dictionaries_available = false;
   std::unique_ptr<detail::StandaloneDictionary> standalone;
@@ -309,6 +318,11 @@ struct Engine::Impl {
     if (english_reading)
       for (auto p : english_reading->pos)
         require(p < connection.left.size(), "English reading POS outside table");
+    if (std::filesystem::exists(dir + "/reading_correction.sud")) {
+      reading_correction = std::make_unique<Dictionary>(dir, "reading_correction");
+      for (auto p : reading_correction->pos)
+        require(p < connection.left.size(), "reading correction POS outside table");
+    }
     auto valid = category_names();
     std::unordered_set<std::string> used;
     for (const auto &n : cats)
@@ -353,6 +367,7 @@ size_t Engine::mapped_bytes() const {
   if (impl->mozc_scoring_data) n += impl->mozc_scoring_data->mapped_bytes();
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
+  if (impl->reading_correction) n += impl->reading_correction->file.size;
   if (impl->single_kanji) n += impl->single_kanji->file.size;
   if (impl->emoji) n += impl->emoji->file.size;
   if (impl->emoticon) n += impl->emoticon->file.size;
@@ -685,7 +700,7 @@ static void rank_primary(std::vector<Candidate> &candidates,
         std::vector<std::pair<std::u16string, size_t>> tied;
         tied.reserve(end - begin);
         for (size_t i = begin; i < end; ++i)
-          tied.emplace_back(utf16(candidates[i].text), i);
+          tied.emplace_back(utf16(candidates[i].raw_text.empty() ? candidates[i].text : candidates[i].raw_text), i);
         std::sort(tied.begin(), tied.end());
         bool changed = false;
         for (size_t i = 0; i < tied.size(); ++i) changed |= tied[i].second != begin + i;
@@ -703,7 +718,7 @@ static void rank_primary(std::vector<Candidate> &candidates,
 
   std::vector<std::u16string> surfaces;
   surfaces.reserve(candidates.size());
-  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.text));
+  for (const auto &candidate : candidates) surfaces.push_back(utf16(candidate.raw_text.empty() ? candidate.text : candidate.raw_text));
   std::vector<size_t> order(candidates.size());
   std::iota(order.begin(), order.end(), 0);
   const auto less = [&](size_t a, size_t b) {
@@ -1082,6 +1097,25 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             std::find(c.classified_categories.begin(), c.classified_categories.end(), n.dict->name) == c.classified_categories.end())
           c.classified_categories.push_back(n.dict->name);
       }
+      // Pinned FindPath.resolveCandidateType: personal sources take priority
+      // over numeric-width badges on system/unknown complete paths.
+      const bool personalSource = std::any_of(path.begin(), path.end(),
+          [&](size_t id) { return nodes[id].personal != nullptr; });
+      if (!personalSource) {
+        const auto units = utf16(c.text);
+        if (!units.empty() && units.size() <= 2) {
+          const bool half = std::all_of(units.begin(), units.end(), [](char16_t c) {
+            return (c >= 0x20 && c <= 0x40) || (c >= 0x5b && c <= 0x60) ||
+                   (c >= 0x7b && c <= 0x7e);
+          });
+          const bool full = std::all_of(units.begin(), units.end(), [](char16_t c) {
+            return c == 0x3000 || (c >= 0xff01 && c <= 0xff20) ||
+                   (c >= 0xff3b && c <= 0xff40) || (c >= 0xff5b && c <= 0xff5e);
+          });
+          if (full) c.presentation_kind = CandidatePresentationKind::full_width;
+          else if (half) c.presentation_kind = CandidatePresentationKind::half_width;
+        }
+      }
       require(state.contains_digit == has_digit(c.text),
               "candidate digit state differs from materialized surface");
       c.standalone_unigram_matched = standaloneMayMatch && path.size() == 1 && literal(nodes[path.front()]);
@@ -1220,6 +1254,29 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
+  if (japanese_prediction && !bunsetsu_search && impl->reading_correction &&
+      reading.size() >= 3 && reading.size() <= 16) {
+    const auto &d = *impl->reading_correction;
+    const bool complete = d.completion(reading, 3, limit,
+        [&](size_t node, uint32_t token, size_t extra) {
+      auto raw = d.surface(token, reading, 0, reading.size(), node);
+      const auto tab = raw.find('\t');
+      // Invalid correction metadata is never offered as literal document text.
+      if (tab == std::string::npos || tab == 0 || tab + 1 == raw.size() ||
+          raw.find('\t', tab + 1) != std::string::npos ||
+          raw.find('\0') != std::string::npos) {
+        result.complete = false;
+        return;
+      }
+      auto text = raw.substr(0, tab);
+      Candidate candidate{text, int64_t(d.costs[token]) + int64_t(extra) * 8000,
+          {{text, d.name, 0, uint32_t(reading.size())}}};
+      candidate.corrected_reading = raw.substr(tab + 1);
+      candidate.raw_text = std::move(raw);
+      result.candidates.push_back(std::move(candidate));
+    });
+    result.complete = result.complete && complete;
+  }
   if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.
@@ -1240,6 +1297,57 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       if (seen.insert(text).second)
         result.candidates.push_back({text, prediction.score,
             {{text, d.name, 0, uint32_t(reading.size())}}});
+    }
+  }
+  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
+    // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
+    // category, stable token order on ties, 1500 per additional UTF-16 unit.
+    // Retain references until selection, including for large posting lists.
+    // Android groups predictions by reading/surface/score/POS, separately from
+    // exact candidates: equal surfaces can still represent distinct choices.
+    struct SelectedPrediction {
+      std::u16string reading;
+      uint16_t left, right;
+      size_t candidate;
+    };
+    std::vector<SelectedPrediction> selected;
+    for (size_t index = 1; index < impl->dictionaries.size(); ++index) {
+      const auto &d = *impl->dictionaries[index];
+      struct Prediction { size_t node; uint32_t token; int64_t score; };
+      std::vector<Prediction> best;
+      const bool complete = d.completion(reading, 3, limit,
+          [&](size_t node, uint32_t token, size_t extra) {
+        const int64_t score = int64_t(d.costs[token]) + int64_t(extra) * 1500;
+        const auto at = std::upper_bound(best.begin(), best.end(), score,
+            [](int64_t value, const Prediction &entry) { return value < entry.score; });
+        if (best.size() == 4 && at == best.end()) return;
+        best.insert(at, {node, token, score});
+        if (best.size() > 4) best.pop_back();
+      });
+      result.complete = result.complete && complete;
+      for (const auto &prediction : best) {
+        auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
+        auto completedReading = d.nodeReading(prediction.node);
+        const auto pos = d.pos[prediction.token];
+        const auto left = impl->connection.left[pos], right = impl->connection.right[pos];
+        const auto previous = std::find_if(selected.begin(), selected.end(),
+            [&](const SelectedPrediction &entry) {
+          const auto &candidate = result.candidates[entry.candidate];
+          return entry.reading == completedReading && entry.left == left && entry.right == right &&
+                 candidate.text == text && candidate.score == prediction.score;
+        });
+        size_t position;
+        if (previous == selected.end()) {
+          position = result.candidates.size();
+          selected.push_back({std::move(completedReading), left, right, position});
+          seen.insert(text);
+          result.candidates.push_back({text, prediction.score,
+              {{text, d.name, 0, uint32_t(reading.size())}}});
+        } else position = previous->candidate;
+        auto &candidate = result.candidates[position];
+        if (std::find(candidate.classified_categories.begin(), candidate.classified_categories.end(), d.name) == candidate.classified_categories.end())
+          candidate.classified_categories.push_back(d.name);
+      }
     }
   }
   if (bunsetsu_search) {
@@ -1293,6 +1401,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         candidates.push_back({
             text, dictionary.costs[token],
             {{text, dictionary.name, 0, uint32_t(end)}}});
+        if (dictionary.name == "symbol")
+          candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
       });
       // Android includes an exact symbol/emoji reading regardless of the
       // prediction minimum, then permits up to three extra UTF-16 units when
@@ -1308,7 +1418,11 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                                  int64_t(extra) * 1000;
               candidates.push_back(
                   {text, score,
-                   {{text, dictionary.name, 0, uint32_t(yomi.size())}}});
+                   // The longer dictionary reading selects the completion, but
+                   // this candidate replaces only the currently typed input.
+                   {{text, dictionary.name, 0, uint32_t(reading.size())}}});
+              if (dictionary.name == "symbol")
+                candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
             });
         result.complete = result.complete && complete;
       }
@@ -1340,23 +1454,68 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.insert(result.candidates.end(), candidates.begin(),
                              candidates.end());
   };
-  // The one-character Android path places kana before emoji/symbols. Longer
-  // bunsetsu input places those auxiliary lists before kana and raw yomi parts.
-  if (bunsetsu_search && reading.size() == 1) {
+  // Pinned getCandidatesOriginal adds deterministic mixed-alphanumeric case
+  // and full-width ASCII choices before the auxiliary/kana/prefix sections.
+  // Numeric inputs take an earlier, separate Android route (including temporal
+  // candidates); do not claim that route by adding type-30 variants here.
+  if (japanese_prediction && !reading.empty() &&
+      std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= 0x20 && c <= 0x7e; }) &&
+      !std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; })) {
+    const bool mixed = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
+      return is_ascii_alphabet(c) || (c >= u'0' && c <= u'9');
+    }) && std::any_of(reading.begin(), reading.end(), is_ascii_alphabet) &&
+        std::any_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; });
+    if (mixed) {
+      auto capitalized = reading, uppercase = reading;
+      if (capitalized.front() >= u'a' && capitalized.front() <= u'z') capitalized.front() -= 0x20;
+      for (auto &c : uppercase) if (c >= u'a' && c <= u'z') c -= 0x20;
+      std::unordered_set<std::string> variants;
+      const std::u16string values[] = {reading, capitalized, uppercase};
+      for (size_t index = 0; index < 3; ++index) {
+        auto text = utf8(values[index]);
+        if (variants.insert(text).second)
+          result.candidates.push_back({text, 10000 + int64_t(index), {}});
+      }
+    }
+    auto lower_width = reading, upper_width = reading;
+    for (auto &c : lower_width) {
+      if (c >= u'A' && c <= u'Z') c += 0x20;
+      c = c == u' ' ? 0x3000 : c + 0xfee0;
+    }
+    for (auto &c : upper_width) {
+      if (c >= u'a' && c <= u'z') c -= 0x20;
+      c = c == u' ' ? 0x3000 : c + 0xfee0;
+    }
+    // Android preserves both raw entries when lower/upper surfaces coincide;
+    // the displayed-list merger, not this provider, handles duplicates.
+    for (const auto &value : {lower_width, upper_width}) {
+      result.candidates.push_back({utf8(value), 30000, {}});
+      result.candidates.back().presentation_kind = CandidatePresentationKind::full_width;
+    }
+  }
+  // Pinned Android df1f383 prediction paths include these three kana choices
+  // even when no dictionary completion matches. One UTF-16 unit places them
+  // before emoji/symbols; retain the existing no-prediction CLI behavior.
+  const bool include_kana = bunsetsu_search || japanese_prediction;
+  if (include_kana && reading.size() == 1) {
     auto katakana = hiragana_to_katakana(reading);
     result.candidates.push_back({utf8(reading), 6000, {}});
     result.candidates.push_back({utf8(katakana), 6000, {}});
-    result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+    result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
+    result.candidates.back().presentation_kind = CandidatePresentationKind::half_width;
     append_candidates(emoji_and_emoticon_candidates);
     append_candidates(symbol_candidates);
   } else {
     append_candidates(emoji_and_emoticon_candidates);
+    // df1f383 getCandidatesOriginal (default hidden candidate tabs) places
+    // symbols before kana and yomiPartList for multi-unit input.
     append_candidates(symbol_candidates);
-    if (bunsetsu_search) {
+    if (include_kana) {
       auto katakana = hiragana_to_katakana(reading);
       result.candidates.push_back({utf8(reading), 6000, {}});
       result.candidates.push_back({utf8(katakana), 6000, {}});
-      result.candidates.push_back({utf8(katakana_to_halfwidth(katakana)), 6000, {}});
+      result.candidates.push_back({utf8(reading_to_halfwidth(reading)), 6000, {}});
+      result.candidates.back().presentation_kind = CandidatePresentationKind::half_width;
     }
   }
   // Reference dev 9506a0b yomiPartList: longest matching reading first,
@@ -1372,8 +1531,11 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       // surfaces from distinct tokens and overlaps with primary path results.
       // Preserve that candidate count in bunsetsu mode. Keep the existing
       // surface de-duplication behavior for the opt-in non-bunsetsu route.
-      if (bunsetsu_search || seen.insert(text).second)
-        result.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}});
+      if (bunsetsu_search || seen.insert(text).second) {
+        Candidate candidate{text, d.costs[token], {{text, d.name, 0, uint32_t(end)}}};
+        candidate.is_reading_prefix = end < reading.size();
+        result.candidates.push_back(std::move(candidate));
+      }
     }
   }
   append_candidates(single_kanji_candidates);

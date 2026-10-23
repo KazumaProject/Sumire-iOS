@@ -38,12 +38,84 @@ public struct CustomLayoutEditor {
         source = setting(source, ["keysWithFlicks": .array(keys)])
     }
     public mutating func setKeyType(id: String, type: String) throws {
-        guard ["NORMAL", "STANDARD_FLICK"].contains(type) else { throw PersonalDataError("この入力方式の編集は未対応です") }
+        guard ["NORMAL", "STANDARD_FLICK", "PETAL_FLICK", "CENTER_GUIDE_FLICK", "CROSS_FLICK",
+               "CIRCULAR_FLICK", "TWO_STEP_FLICK", "STICKY_TWO_STEP_FLICK", "FLICK_LONG_PRESS"].contains(type) else { throw PersonalDataError("この入力方式の編集は未対応です") }
         var keys = source["keysWithFlicks"]?.array ?? []
         guard let index = keys.firstIndex(where: { $0["key"]?["keyIdentifier"]?.string == id }), let definition = keys[index]["key"] else {
             throw PersonalDataError("編集対象のキーがありません")
         }
         keys[index] = setting(keys[index], ["key": setting(definition, ["keyType": .string(type)])])
+        source = setting(source, ["keysWithFlicks": .array(keys)])
+    }
+    /// Replaces only the selected exported mapping array, preserving row metadata.
+    public mutating func setGestureMappings(id: String, field: String, mappings: [LayoutJSON]) throws {
+        try setGestureMappings(id: id, fields: [field: mappings])
+    }
+    /// Multiple arrays are validated and saved together, so an empty normal map
+    /// can be replaced atomically by a valid long-press map. Errors leave source intact.
+    public mutating func setGestureMappings(id: String, fields: [String: [LayoutJSON]]) throws {
+        let allowed: Set<String> = ["flicks", "longPressFlicks", "circularFlicks", "twoStepFlicks", "twoStepLongPressFlicks"]
+        guard fields.keys.allSatisfy(allowed.contains), fields.values.allSatisfy({ $0.count <= 4096 }) else {
+            throw PersonalDataError("編集するジェスチャーの項目または件数が不正です")
+        }
+        var keys = source["keysWithFlicks"]?.array ?? []
+        guard let index = keys.firstIndex(where: { $0["key"]?["keyIdentifier"]?.string == id }) else {
+            throw PersonalDataError("編集対象のキーがありません")
+        }
+        keys[index] = setting(keys[index], fields.mapValues(LayoutJSON.array))
+        var candidate = self
+        candidate.source = setting(source, ["keysWithFlicks": .array(keys)])
+        let layout = try candidate.validated()
+        guard let placement = layout.placements.first(where: { $0.id == id }) else {
+            throw PersonalDataError("編集対象のキーがありません")
+        }
+        if placement.source["key"]?["keyType"]?.string == "CIRCULAR_FLICK",
+           fields["circularFlicks"]?.isEmpty == true,
+           placement.source["flicks"]?.array?.isEmpty == false {
+            throw PersonalDataError("円形フリックを空にすると旧形式の設定が再び有効になります。空にせず割り当てを編集してください")
+        }
+        let targets = CustomLayoutTargets(layouts: [layout])
+        // Validate inactive supplied arrays too; otherwise malformed mappings
+        // could remain hidden until the user selects another key type or state.
+        for (field, rows) in fields {
+            try validateGestureRows(rows, field: field, placement: placement, targets: targets)
+        }
+        _ = try CustomMultiStageFlick.runtimeDefinition(for: placement, targets: targets)
+        source = candidate.source
+    }
+    private func validateGestureRows(_ rows: [LayoutJSON], field: String,
+                                     placement: ImportedCustomLayout.Placement,
+                                     targets: CustomLayoutTargets) throws {
+        func probe(_ rows: [LayoutJSON], type: String) -> ImportedCustomLayout.Placement {
+            let source: LayoutJSON = .object([
+                "key": .object(["keyType": .string(type), "action": .string("Text:validation")]),
+                field: .array(rows)
+            ])
+            return ImportedCustomLayout.Placement(id: placement.id, row: placement.row, column: placement.column,
+                height: placement.height, width: placement.width, isSpacer: false, source: source)
+        }
+        switch field {
+        case "twoStepFlicks", "twoStepLongPressFlicks":
+            _ = try CustomMultiStageFlick.twoStep(probe(rows, type: "TWO_STEP_FLICK"), longPress: field == "twoStepLongPressFlicks")
+        case "circularFlicks":
+            _ = try CustomMultiStageFlick.circular(probe(rows, type: "CIRCULAR_FLICK"))
+        case "flicks":
+            for group in Dictionary(grouping: rows, by: { $0["stateIndex"]?.integer ?? 0 }).values {
+                _ = try CustomMultiStageFlick.runtimeDefinition(for: probe(group, type: "STANDARD_FLICK"), targets: targets)
+            }
+        default:
+            _ = try CustomMultiStageFlick.runtimeDefinition(for: probe(rows, type: "STANDARD_FLICK"), targets: targets)
+        }
+    }
+    public mutating func setDoubleTap(id: String, enabled: Bool, action: String) throws {
+        guard !enabled || !action.isEmpty else { throw PersonalDataError("ダブルタップの操作を指定してください") }
+        var keys = source["keysWithFlicks"]?.array ?? []
+        guard let index = keys.firstIndex(where: { $0["key"]?["keyIdentifier"]?.string == id }),
+              let definition = keys[index]["key"] else { throw PersonalDataError("編集対象のキーがありません") }
+        let promote = definition["action"]?.string == "ShiftKeyPressed" && action == "CapLockKey"
+        keys[index] = setting(keys[index], ["key": setting(definition, [
+            "doubleTapEnabled": .bool(enabled), "doubleTapAction": .string(action),
+            "doubleTapPolicy": .string(promote ? "PROMOTE" : "EXCLUSIVE")])])
         source = setting(source, ["keysWithFlicks": .array(keys)])
     }
     public mutating func setStandardFlick(id: String, values: [String]) throws {

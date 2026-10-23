@@ -83,8 +83,10 @@ public enum DictionarySourceArchiveConverter {
             switch group.group {
             case .system: name = "system"
             case .category(let id): name = id
+            case .auxiliary(let id): name = id
             case .english: name = "english"
             case .englishReading: name = "english_reading"
+            case .readingCorrection: name = "reading_correction"
             case .common: continue
             }
             let entries = Dictionary(uniqueKeysWithValues: group.entries.map { ($0.key.role, $0) })

@@ -1,4 +1,5 @@
 import UIKit
+import CoreText
 import ImageIO
 import UniformTypeIdentifiers
 
@@ -186,12 +187,23 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         clipboard.tintColor = value.foreground
         refreshVisibleCells()
     }
-    var candidates: [String] = [] {
-        didSet {
-            guard candidates != oldValue else { return }
-            updateCandidateSnapshot()
-            updateExpansionButton()
-        }
+    struct Presentation: Equatable {
+        let text: String
+        var annotation: String? = nil
+    }
+    private var presentations: [Presentation] = []
+    private var candidateTexts: [String] = []
+    var candidates: [String] {
+        get { candidateTexts }
+        set { setCandidates(newValue.map { Presentation(text: $0) }) }
+    }
+    func setCandidates(_ values: [Presentation]) {
+        guard values != presentations else { return }
+        presentations = values
+        candidateTexts = values.map(\.text)
+        updateCandidateSnapshot()
+        collection.collectionViewLayout.invalidateLayout()
+        updateExpansionButton()
     }
     private var storedRowCount = 1
     private var displayedHeightLimit: CGFloat?
@@ -209,8 +221,10 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             onSizingChange?()
         }
     }
-    var requestedDisplayedHeight: CGFloat { CGFloat(showsShortcuts ? 1 : min(3, max(1, rowCount))) * 44 }
-    var displayedHeight: CGFloat { height(forShortcutsVisible: showsShortcuts) }
+    // Keep the host keyboard frame stable when shortcuts give way to candidates.
+    // Shortcut controls occupy one row; the configured rows remain reserved.
+    var requestedDisplayedHeight: CGFloat { CGFloat(min(3, max(1, rowCount))) * 44 }
+    var displayedHeight: CGFloat { configuredDisplayedHeight }
     func setDisplayedHeightLimit(_ limit: CGFloat) {
         let normalized = max(44, limit.isFinite ? limit : 44)
         guard displayedHeightLimit.map({ abs($0 - normalized) > 0.5 }) ?? true else { return }
@@ -220,9 +234,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         collection.collectionViewLayout.invalidateLayout()
         clampContentOffset()
     }
-    private func height(forShortcutsVisible shortcutsVisible: Bool) -> CGFloat {
-        let requested = CGFloat(shortcutsVisible ? 1 : min(3, max(1, storedRowCount))) * 44
-        guard !shortcutsVisible, let displayedHeightLimit else { return requested }
+    private var configuredDisplayedHeight: CGFloat {
+        let requested = CGFloat(min(3, max(1, storedRowCount))) * 44
+        guard let displayedHeightLimit else { return requested }
         let visibleRows = max(1, min(storedRowCount, Int(floor(displayedHeightLimit / 44))))
         return CGFloat(visibleRows) * 44
     }
@@ -242,6 +256,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         self.configure(cell, item: item)
         return cell
     }
+    private var annotations: [Item: String] = [:]
     private var height: NSLayoutConstraint!
     override init(frame: CGRect) {
         let layout = CandidateRowsLayout()
@@ -342,10 +357,13 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
     private func updateCandidateSnapshot() {
         var occurrences: [String: Int] = [:]
-        let items = candidates.map { text -> Item in
-            let occurrence = occurrences[text, default: 0]
-            occurrences[text] = occurrence + 1
-            return Item(text: text, occurrence: occurrence)
+        annotations.removeAll(keepingCapacity: true)
+        let items = presentations.map { presentation -> Item in
+            let occurrence = occurrences[presentation.text, default: 0]
+            occurrences[presentation.text] = occurrence + 1
+            let item = Item(text: presentation.text, occurrence: occurrence)
+            if let annotation = presentation.annotation, !annotation.isEmpty { annotations[item] = annotation }
+            return item
         }
         let offset = collection.contentOffset
         var snapshot = NSDiffableDataSourceSnapshot<Int, Item>()
@@ -381,15 +399,25 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         let selected = selectedIndex.map { dataSource.indexPath(for: item)?.item == $0 } ?? false
         cell.backgroundColor = selected ? palette.accent : .clear
         cell.layer.cornerRadius = 8
-        cell.label.text = item.text
+        cell.label.attributedText = HistoricKanaFont.attributed(item.text)
         cell.label.textColor = selected ? palette.accentForeground : palette.foreground
+        let annotation = annotations[item]
+        cell.annotation.attributedText = annotation.map { HistoricKanaFont.attributed($0, size: 11) }
+        cell.annotation.textColor = (selected ? palette.accentForeground : palette.foreground).withAlphaComponent(0.8)
+        cell.annotation.isHidden = annotation == nil
+        cell.annotationWidth.isActive = annotation == nil
+        cell.annotationGap.constant = annotation == nil ? 0 : 4
         cell.accessibilityTraits = selected ? [.button, .selected] : .button
         if isUpdating { cell.accessibilityTraits.insert(.notEnabled) }
         cell.accessibilityLabel = item.text
+        cell.accessibilityValue = annotation
     }
     func collectionView(_ collectionView: UICollectionView, layout collectionViewLayout: UICollectionViewLayout, sizeForItemAt indexPath: IndexPath) -> CGSize {
-        let text = dataSource.itemIdentifier(for: indexPath)?.text ?? ""
-        let width = (text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: 18)]).width
+        let item = dataSource.itemIdentifier(for: indexPath)
+        let text = item?.text ?? ""
+        let detail = item.flatMap { annotations[$0] }
+        let width = HistoricKanaFont.attributed(text).size().width +
+            (detail.map { HistoricKanaFont.attributed($0, size: 11).size().width + 4 } ?? 0)
         return CGSize(width: min(max(44, width + 32), max(44, collection.bounds.width)), height: 44)
     }
     func collectionView(_ collectionView: UICollectionView, didSelectItemAt indexPath: IndexPath) {
@@ -401,6 +429,9 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
 
 private final class CandidateCell: UICollectionViewCell {
     let label = UILabel()
+    let annotation = UILabel()
+    var annotationWidth: NSLayoutConstraint!
+    var annotationGap: NSLayoutConstraint!
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -409,12 +440,26 @@ private final class CandidateCell: UICollectionViewCell {
         label.textAlignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.numberOfLines = 1
+        annotation.translatesAutoresizingMaskIntoConstraints = false
+        annotation.font = .systemFont(ofSize: 11)
+        annotation.lineBreakMode = .byTruncatingTail
+        annotation.accessibilityIdentifier = "candidate-annotation"
+        label.setContentCompressionResistancePriority(UILayoutPriority(751), for: .horizontal)
+        annotation.setContentCompressionResistancePriority(UILayoutPriority(749), for: .horizontal)
         contentView.addSubview(label)
+        contentView.addSubview(annotation)
+        annotationWidth = annotation.widthAnchor.constraint(equalToConstant: 0)
+        annotationGap = annotation.leadingAnchor.constraint(equalTo: label.trailingAnchor)
         NSLayoutConstraint.activate([
             label.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 16),
-            label.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
             label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
-            label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor)
+            label.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor),
+            annotationGap,
+            annotation.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
+            annotation.lastBaselineAnchor.constraint(equalTo: label.lastBaselineAnchor),
+            annotation.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
+            annotation.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor)
         ])
     }
 
@@ -464,5 +509,40 @@ private final class CandidateRowsLayout: UICollectionViewFlowLayout {
     }
     override func shouldInvalidateLayout(forBoundsChange newBounds: CGRect) -> Bool {
         scrollDirection == .horizontal ? collectionView?.bounds.size != newBounds.size : super.shouldInvalidateLayout(forBoundsChange: newBounds)
+    }
+}
+
+/// Local fallback for historic kana absent from the system font. Candidate values
+/// remain unchanged; only the glyphs used by the keyboard are selected here.
+enum HistoricKanaFont {
+    static let assetName = "NotoSerifHentaigana-Regular"
+    static let assetSHA256 = "2231394c949fa1cea871d943cf7ff7c0552308fca9067d70b88a533351d6bb5c"
+    private static let registered: Bool = {
+        guard let url = Bundle.main.url(forResource: assetName, withExtension: "ttf") else { return false }
+        return CTFontManagerRegisterFontsForURL(url as CFURL, .process, nil)
+    }()
+
+    static func fallback(size: CGFloat) -> UIFont? {
+        _ = registered
+        return UIFont(name: assetName, size: size)
+    }
+
+    private static let supportedScalars: CharacterSet? = {
+        guard let font = fallback(size: 18) else { return nil }
+        return CTFontCopyCharacterSet(font as CTFont) as CharacterSet
+    }()
+
+    static func attributed(_ text: String, size: CGFloat = 18) -> NSAttributedString {
+        let result = NSMutableAttributedString(string: text, attributes: [.font: UIFont.systemFont(ofSize: size)])
+        guard let font = fallback(size: size), let supported = supportedScalars else { return result }
+        var offset = 0
+        for scalar in text.unicodeScalars {
+            let length = scalar.utf16.count
+            if (0x1B000...0x1B16F).contains(scalar.value), supported.contains(scalar) {
+                result.addAttribute(.font, value: font, range: NSRange(location: offset, length: length))
+            }
+            offset += length
+        }
+        return result
     }
 }

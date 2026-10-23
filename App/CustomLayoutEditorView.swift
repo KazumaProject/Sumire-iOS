@@ -77,8 +77,21 @@ struct CustomLayoutEditorView: View {
                 next.putKey(id: draft.id, label: draft.label, action: draft.action, special: draft.special,
                             row: draft.row, column: draft.column, height: draft.height, width: draft.width)
                 if draft.type != draft.originalType { try next.setKeyType(id: draft.id, type: draft.type) }
-                if draft.type == "STANDARD_FLICK", draft.flickValues != draft.originalFlickValues || draft.type != draft.originalType {
-                    try next.setStandardFlick(id: draft.id, values: draft.flickValues)
+                if draft.doubleTapEnabled != draft.originalDoubleTapEnabled || draft.doubleTapAction != draft.originalDoubleTapAction {
+                    if draft.doubleTapEnabled, draft.doubleTapAction.hasPrefix("MoveToCustomKeyboard:"),
+                       case .unsupported = CustomKeyAction.tap(draft.doubleTapAction, targets: CustomLayoutTargets(layouts: allLayouts)) {
+                        throw PersonalDataError("ダブルタップの切替先を選択してください")
+                    }
+                    try next.setDoubleTap(id: draft.id, enabled: draft.doubleTapEnabled, action: draft.doubleTapAction)
+                }
+                for row in draft.gestures.newlyAssignedLayoutTargets {
+                    if case .unsupported = CustomKeyAction.flick(type: "MoveToCustomKeyboard",
+                        value: row["actionValue"]?.string, targets: CustomLayoutTargets(layouts: allLayouts)) {
+                        throw PersonalDataError("フリックの切替先の配列を選択してください")
+                    }
+                }
+                if !draft.gestures.changes.isEmpty || draft.type != draft.originalType && draft.type != "NORMAL" {
+                    try next.setGestureMappings(id: draft.id, fields: draft.gestures.changes)
                 }
                 _ = try next.validated()
                 editor = next
@@ -94,21 +107,23 @@ private struct KeyDraft: Identifiable {
     var label = "あ", action = "Text:あ", special = false
     var row = 0, column = 0, height = 2, width = 2
     var type = "NORMAL", originalType = "NORMAL"
-    var flickValues = ["あ", "", "", "", ""]
-    var originalFlickValues = ["あ", "", "", "", ""]
-    var flickError: String?
+    var gestures = CustomGestureDraft()
+    var doubleTapEnabled = false, originalDoubleTapEnabled = false
+    var doubleTapAction = "Text:", originalDoubleTapAction = "Text:"
     var existing = false
     init() {}
     init(_ key: ImportedCustomLayout.Placement) {
         id = key.id; label = key.source["key"]?["label"]?.string ?? ""
         action = key.source["key"]?["action"]?.string ?? "Text:" + label
         special = key.source["key"]?["isSpecialKey"] == .bool(true)
+        let legacyShift = key.source["key"]?["doubleTapEnabled"] == nil && action == "ShiftKeyPressed"
+        doubleTapAction = key.source["key"]?["doubleTapAction"]?.string ?? (legacyShift ? "CapLockKey" : "Text:")
+        doubleTapEnabled = key.source["key"]?["doubleTapEnabled"] != .bool(false) &&
+            (key.source["key"]?["doubleTapAction"]?.string != nil || legacyShift)
+        originalDoubleTapEnabled = doubleTapEnabled; originalDoubleTapAction = doubleTapAction
         row = key.row; column = key.column; height = key.height; width = key.width; existing = true
         type = key.source["key"]?["keyType"]?.string ?? "NORMAL"; originalType = type
-        if type == "STANDARD_FLICK" {
-            do { flickValues = try CustomStandardFlick(placement: key).values; originalFlickValues = flickValues }
-            catch { flickError = error.localizedDescription }
-        }
+        gestures = CustomGestureDraft(source: key.source)
     }
 }
 private struct CustomKeyEditor: View {
@@ -125,35 +140,19 @@ private struct CustomKeyEditor: View {
                 if let error { Text(error).foregroundStyle(.red) }
                 TextField("表示文字", text: $draft.label)
                 Picker("入力方式", selection: $draft.type) {
-                    Text("通常キー").tag("NORMAL")
-                    Text("標準フリック").tag("STANDARD_FLICK")
-                    if !["NORMAL", "STANDARD_FLICK"].contains(draft.type) {
+                    ForEach(CustomGestureDraft.types, id: \.0) { value, title in Text(title).tag(value) }
+                    if !CustomGestureDraft.types.contains(where: { $0.0 == draft.type }) {
                         Text("取り込み済みの方式を保持").tag(draft.type)
                     }
                 }.accessibilityIdentifier("customKeyInputType")
-                if draft.type == "STANDARD_FLICK" {
-                    if let error = draft.flickError { Text(error).foregroundStyle(.red) }
-                    ForEach(0..<5, id: \.self) { index in
-                        TextField(["タップの文字", "左の文字", "上の文字", "右の文字", "下の文字"][index], text: $draft.flickValues[index])
-                            .textInputAutocapitalization(.never).autocorrectionDisabled()
-                    }
-                    Text("空欄の方向は入力しません。").font(.caption).foregroundStyle(.secondary)
+                    .onChange(of: draft.type) { _, value in draft.gestures.prepare(type: value, label: draft.label) }
+                if !CustomGestureDraft.fields(for: draft.type).isEmpty {
+                    NavigationLink {
+                        CustomGestureEditorView(draft: $draft.gestures, type: draft.type, label: draft.label, layouts: allLayouts)
+                    } label: { Label("フリックの割り当て", systemImage: "hand.draw") }
+                        .accessibilityIdentifier("customGestureEditor")
                 } else {
-                Picker("操作", selection: Binding(get: {
-                    draft.action.hasPrefix("Text:") ? "Text" : draft.action.hasPrefix("MoveToCustomKeyboard:") ? "SwitchLayout" : draft.action
-                }, set: { draft.action = $0 == "Text" ? "Text:" + draft.label : $0 == "SwitchLayout" ? "MoveToCustomKeyboard:" : $0 })) {
-                    Text("文字入力").tag("Text")
-                    Text("削除").tag("Delete")
-                    Text("空白").tag("Space")
-                    Text("改行").tag("Enter")
-                    Text("確定").tag("Confirm")
-                    Text("カーソルを左へ").tag("MoveCursorLeft")
-                    Text("次のキーボード").tag("SwitchToNextIme")
-                    Text("カスタム配列に切り替え").tag("SwitchLayout")
-                    if !draft.action.hasPrefix("Text:"), !draft.action.hasPrefix("MoveToCustomKeyboard:"), !["Delete", "Space", "Enter", "Confirm", "MoveCursorLeft", "SwitchToNextIme"].contains(draft.action) {
-                        Text("取り込み済みの操作を保持").tag(draft.action)
-                    }
-                }.pickerStyle(.navigationLink).accessibilityIdentifier("customKeyAction")
+                CustomTapActionPicker(title: "操作", raw: $draft.action, initialText: draft.label, accessibilityID: "customKeyAction")
                 if draft.action.hasPrefix("MoveToCustomKeyboard:") {
                     Picker("切替先の配列", selection: Binding(get: { String(draft.action.dropFirst(21)) }, set: { draft.action = "MoveToCustomKeyboard:" + $0 })) {
                         Text("選択してください").tag("")
@@ -170,6 +169,28 @@ private struct CustomKeyEditor: View {
                 }
                 }
                 Toggle("特殊キーの色・サイズを使う", isOn: $draft.special)
+                if draft.special {
+                    Section("ダブルタップ") {
+                        Toggle("ダブルタップ操作を使う", isOn: $draft.doubleTapEnabled)
+                            .accessibilityIdentifier("customDoubleTapEnabled")
+                        if draft.doubleTapEnabled {
+                            CustomTapActionPicker(title: "ダブルタップの操作", raw: $draft.doubleTapAction, initialText: "", accessibilityID: "customDoubleTapAction")
+                            if draft.doubleTapAction.hasPrefix("Text:") {
+                                TextField("ダブルタップで入力する文字", text: Binding(get: { String(draft.doubleTapAction.dropFirst(5)) }, set: { draft.doubleTapAction = "Text:" + $0 }))
+                                    .textInputAutocapitalization(.never).autocorrectionDisabled()
+                            } else if draft.doubleTapAction.hasPrefix("MoveToCustomKeyboard:") {
+                                Picker("ダブルタップの切替先", selection: Binding(get: { String(draft.doubleTapAction.dropFirst(21)) }, set: { draft.doubleTapAction = "MoveToCustomKeyboard:" + $0 })) {
+                                    Text("選択してください").tag("")
+                                    ForEach(allLayouts) { layout in Text(layout.name).tag(layout.id) }
+                                    let current = String(draft.doubleTapAction.dropFirst(21))
+                                    if !current.isEmpty, !allLayouts.contains(where: { $0.id == current }) { Text("取り込み済みの切替先").tag(current) }
+                                }.pickerStyle(.navigationLink)
+                            }
+                            Text("通常のタップは2回目を待って実行します。文字キーの連続入力には適用しません。")
+                                .font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
                 Stepper("上から：\(draft.row) 半キー", value: $draft.row, in: 0...(rows * 2 - 1))
                 Stepper("左から：\(draft.column) 半キー", value: $draft.column, in: 0...(columns * 2 - 1))
                 Stepper("高さ：\(draft.height) 半キー", value: $draft.height, in: 1...(rows * 2))
@@ -205,5 +226,38 @@ private struct CustomEditablePreviewKey: View {
             .frame(width: width, height: height)
             .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
             .position(x: x, y: y)
+    }
+}
+
+private struct CustomTapActionPicker: View {
+    let title: String
+    @Binding var raw: String
+    let initialText: String
+    let accessibilityID: String
+    var body: some View {
+        Picker(title, selection: Binding(get: { CustomCommandCatalog.tapSelection(raw) }, set: { choice in
+            guard choice != CustomCommandCatalog.tapSelection(raw) else { return }
+            raw = choice == "Text" ? "Text:" + initialText : choice == "InputText" ? "InputText:ひらがな小文字" :
+                choice == "SwitchLayout" ? "MoveToCustomKeyboard:" : choice
+        })) {
+            Text("文字入力").tag("Text")
+            Text("入力文字の修飾・記号操作").tag("InputText")
+            ForEach(CustomCommandCatalog.selectableEntries) { Text($0.title).tag($0.tapRaw) }
+            Text("カスタム配列に切り替え").tag("SwitchLayout")
+            let selection = CustomCommandCatalog.tapSelection(raw)
+            if !["Text", "InputText", "SwitchLayout"].contains(selection),
+               !CustomCommandCatalog.selectableEntries.contains(where: { $0.tapRaw == selection }) {
+                Text("取り込み済みの操作を保持：" + raw).tag(selection)
+            }
+        }.pickerStyle(.navigationLink).accessibilityIdentifier(accessibilityID)
+        if raw.hasPrefix("InputText:") {
+            Picker("入力文字への操作", selection: Binding(get: { String(raw.dropFirst(10)) }, set: { raw = "InputText:" + $0 })) {
+                ForEach(CustomCommandCatalog.inputTextTokens, id: \.self) { Text($0).tag($0) }
+                let value = String(raw.dropFirst(10))
+                if !CustomCommandCatalog.inputTextTokens.contains(value) { Text("取り込み済み：" + value).tag(value) }
+            }.pickerStyle(.navigationLink)
+            Text("通常の文字入力とは異なり、直前の文字の修飾などを行います。")
+                .font(.caption).foregroundStyle(.secondary)
+        }
     }
 }

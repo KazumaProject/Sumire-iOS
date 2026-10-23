@@ -32,7 +32,11 @@ final class BunsetsuServiceTests: XCTestCase {
             XCTAssertEqual(plain.range, detailed.range)
             XCTAssertEqual(plain.score, detailed.score)
             XCTAssertEqual(plain.dictionaries, detailed.dictionaries)
-            XCTAssertFalse(detailed.bunsetsu.isEmpty)
+            if detailed.dictionaries.isEmpty {
+                XCTAssertTrue(detailed.bunsetsu.isEmpty) // Kana has no dictionary path.
+            } else {
+                XCTAssertFalse(detailed.bunsetsu.isEmpty)
+            }
         }
     }
 
@@ -47,9 +51,42 @@ final class BunsetsuServiceTests: XCTestCase {
         XCTAssertEqual(candidate.bunsetsu.map(\.readingRange), [
             NSRange(location: 0, length: 4), NSRange(location: 4, length: 6), NSRange(location: 10, length: 4)])
         for value in response.candidates {
+            if value.dictionaries.isEmpty {
+                XCTAssertTrue(value.bunsetsu.isEmpty)
+                XCTAssertEqual(value.range, NSRange(location: 0, length: 14))
+                continue
+            }
             XCTAssertEqual(value.bunsetsu.map(\.text).joined(), value.text)
             XCTAssertEqual(value.bunsetsu.reduce(0) { $0 + $1.readingRange.length }, value.range.length)
         }
+    }
+
+    func testKanaAuxiliariesSurviveProductionRangeValidation() throws {
+        for (reading, expected) in [("が", "ｶﾞ"), ("あ😀", "ｱ😀")] {
+            let response = try convert(ConversionService(), reading, generation: 1)
+            let candidate = try XCTUnwrap(response.candidates.first {
+                $0.text == expected && $0.score == 6000 && $0.dictionaries.isEmpty
+            })
+            XCTAssertEqual(candidate.range, NSRange(location: 0, length: reading.utf16.count))
+            XCTAssertTrue(candidate.bunsetsu.isEmpty)
+        }
+    }
+
+    func testReadingCorrectionSeparatesOwnedMetadataFromDocumentText() throws {
+        var service: ConversionService? = ConversionService()
+        let response = try convert(service!, "きしゃ", generation: 1)
+        let candidate = try XCTUnwrap(response.candidates.first {
+            $0.rawText == "着尺\tきじゃく"
+        })
+        _ = try convert(service!, "あした", generation: 2)
+        service = nil
+        XCTAssertEqual(candidate.text, "着尺")
+        XCTAssertEqual(candidate.correctedReading, "きじゃく")
+        XCTAssertEqual(candidate.rawText, "着尺\tきじゃく")
+        XCTAssertEqual(candidate.range, NSRange(location: 0, length: 3))
+        XCTAssertTrue(candidate.dictionaries.contains("reading_correction"))
+        XCTAssertFalse(candidate.text.contains("\t"))
+        XCTAssertTrue(response.candidates.allSatisfy { $0.rawText == nil || !$0.text.contains("\t") })
     }
 
     func testBunsetsuSearchRouteSelectsTheFirstProjectedReadingPrefix() throws {

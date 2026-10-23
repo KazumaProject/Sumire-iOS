@@ -3,23 +3,29 @@ import XCTest
 /// Containing-app measurements of the production Swift service. These tests do
 /// not establish extension footprint, cold OS pages, or touch-to-frame latency.
 final class ConversionServicePerformanceTests: XCTestCase {
-    func testReleaseServiceAllDictionariesBunsetsuOff() throws { try run(includeBunsetsu: false) }
-    func testReleaseServiceAllDictionariesBunsetsuOn() throws { try run(includeBunsetsu: true) }
+    func testReleaseServiceAllDictionariesOrdinaryPrediction() throws { try run(includeBunsetsu: false) }
+    func testReleaseServiceAllDictionariesProjectionOnly() throws { try run(includeBunsetsu: true) }
+    func testReleaseServiceAllDictionariesExplicitBunsetsuSearch() throws {
+        try run(includeBunsetsu: true, bunsetsuSearch: true)
+    }
 
-    private func run(includeBunsetsu: Bool) throws {
+    private func run(includeBunsetsu: Bool, bunsetsuSearch: Bool = false) throws {
         #if DEBUG
         throw XCTSkip("Run this benchmark with -configuration Release")
         #else
         let directory = try XCTUnwrap(ConversionService.bundledDictionary)
-        let provenance = try ConversionBenchmarkProvenance.collect(directory: directory)
+        let provenance = try ConversionBenchmarkProvenance.collectFullDictionary(directory: directory)
+        let outputs = try XCTUnwrap(provenance["dictionary_file_sha256"] as? [String: String])
+        let support = outputs.keys.filter { !$0.hasSuffix(".sud") || ["connection.sud", "standalone.sud"].contains($0) }.sorted()
+        let lexical = outputs.keys.filter { $0.hasSuffix(".sud") && !support.contains($0) }.sorted()
         let service = ConversionService(directory: directory, categoryMask: 0x3fff_ffff)
         let cases: [(String, Bool, Bool)] = [
             ("あ", false, false), ("あい", false, false), ("にほんご", false, false),
             ("とうきょうえき", false, false), ("きょうはいいてんきですね", false, false),
             (String(repeating: "あ", count: 32), false, false),
-            ("かつこう", true, false), ("とうきよう", true, false),
+            ("かつこう", true, false), ("とうきよう", true, false), ("きしゃ", false, false),
             ("a", false, true), ("hel", false, true), ("iph", false, true), ("computer", false, true)]
-        let warmups = 24, trials = 240
+        let warmups = 26, trials = 260
         var generation: UInt64 = 0
         func sample(_ reading: String, omission: Bool, english: Bool) throws -> [String: Any] {
             generation += 1
@@ -28,12 +34,19 @@ final class ConversionServicePerformanceTests: XCTestCase {
             var failure: Error?
             let start = ProcessInfo.processInfo.systemUptime
             service.convert(reading, generation: generation, editStart: 0, omission: omission,
-                            english: english, includeBunsetsu: includeBunsetsu) { response in
+                            english: english, includeBunsetsu: includeBunsetsu, bunsetsuSearch: bunsetsuSearch) { response in
                 let wall = (ProcessInfo.processInfo.systemUptime - start) * 1000
                 do {
                     let result = try response.get()
                     XCTAssertTrue(result.complete)
                     XCTAssertNil(result.warning)
+                    // Validation is outside the measured service interval.
+                    if reading == "きしゃ" && !english && !bunsetsuSearch {
+                        XCTAssertTrue(result.candidates.contains {
+                            $0.rawText == "着尺\tきじゃく" && $0.correctedReading == "きじゃく" &&
+                            $0.text == "着尺" && $0.dictionaries.contains("reading_correction")
+                        }, "Bundled correction prediction must actually run")
+                    }
                     let memory = try XCTUnwrap(ProcessMemory.sample())
                     // Retain scalar measurements only. Service itself still owns
                     // the latest candidates as it does in normal keyboard use.
@@ -49,7 +62,7 @@ final class ConversionServicePerformanceTests: XCTestCase {
             if let failure { throw failure }
             return try XCTUnwrap(values)
         }
-        // Separate actual lazy-loading states from steady all-33-dictionary calls.
+        // Separate lazy English-word loading from the steady complete dictionary set.
         let initialJapanese = try sample("にほんご", omission: false, english: false)
         let firstEnglish = try sample("hel", omission: false, english: true)
         var samples: [[String: Any]] = []
@@ -79,11 +92,17 @@ final class ConversionServicePerformanceTests: XCTestCase {
         let report: [String: Any] = [
             "scope": "Release production ConversionService in containing-app test host, not extension or touch-to-frame",
             "provenance": provenance, "include_bunsetsu": includeBunsetsu,
-            "flags": [12, 13, 2], "primary_nbest_limit": 20, "state_limit": 200000,
+            "bunsetsu_search": bunsetsuSearch,
+            "flags": bunsetsuSearch ? [16, 17, 2] : [12, 13, 2], "primary_nbest_limit": 20, "state_limit": 200000,
             "category_mask": "0x3fffffff", "english_reading": true, "learning": false, "personal_entries": 0,
-            "steady_dictionary_configuration": "system + 30 categories + English words + English readings (33)",
-            "initial_japanese_32_dictionary_sample": initialJapanese,
-            "first_english_reopen_33_dictionary_sample": firstEnglish,
+            "steady_dictionary_configuration": "system + 30 categories + reading correction + 4 auxiliaries + English words + English readings",
+            "initial_lexical_dictionary_count": lexical.filter { $0 != "english.sud" }.count,
+            "steady_lexical_dictionary_count": lexical.count, "lexical_files": lexical,
+            "support_files": support,
+            "initial_output_file_count": outputs.keys.filter { $0 != "english.sud" }.count,
+            "steady_output_file_count": outputs.count,
+            "initial_japanese_sample": initialJapanese,
+            "first_english_reopen_sample": firstEnglish,
             "startup_scope": "Single session-first samples; dictionary files were prehashed, not cold OS cache or startup p95",
             "warmup_calls": warmups, "measured_calls": trials,
             "cases": cases.map { ["reading": $0.0, "utf16_units": $0.0.utf16.count, "omission": $0.1, "english": $0.2] },
@@ -92,7 +111,7 @@ final class ConversionServicePerformanceTests: XCTestCase {
             "groups": groups, "samples": samples]
         let data = try JSONSerialization.data(withJSONObject: report, options: [.prettyPrinted, .sortedKeys])
         let attachment = XCTAttachment(data: data, uniformTypeIdentifier: "public.json")
-        attachment.name = includeBunsetsu ? "release-service-bunsetsu-on.json" : "release-service-bunsetsu-off.json"
+        attachment.name = bunsetsuSearch ? "release-service-explicit-bunsetsu-search.json" : (includeBunsetsu ? "release-service-projection-only.json" : "release-service-ordinary-prediction.json")
         attachment.lifetime = .keepAlways
         add(attachment)
         print("SUMIRE_SERVICE_BENCHMARK bunsetsu=\(includeBunsetsu) groups=\(groups)")

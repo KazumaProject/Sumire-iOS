@@ -40,11 +40,11 @@ python3 Scripts/build_dictionary.py --english --english-reading \
 
 v5の単独読み優先辞書も検証して`standalone.sud`へ変換します。優先フラグはスコアと独立しており、分類辞書の完全一致はN-best件数とは別に統合します。同点の主候補はUTF-16の表記順です。CLIの`standalone_priority_available`で搭載を確認できます。旧辞書は読めますが、この値がfalseのとき単独読み優先は利用できません。既定の生成処理は文節探索用GNKG v3/v4とMozcの採点資産も、元値を変えずに辞書世代へコピーします。
 
-iOS Simulator/実機ビルドのresource folderは、リポジトリの隣にある`../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english`です。アプリ用世代は次のように別の空ディレクトリへ生成します（既存世代は上書きしません）。
+iOS Simulator/実機ビルドのresource folderは、リポジトリの隣にある`../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english`です。アプリ用世代は次のように別の空ディレクトリへ生成します（既存世代は上書きしません）。
 
 ```sh
 python3 Scripts/build_dictionary.py --english --english-reading \
-  --output ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english
+  --output ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english
 ```
 
 入力・出力のハッシュ、出典とライセンス通知は生成先の `manifest.json` と `licenses/` に保存します。各辞書の条件はプログラムのライセンスと別に確認が必要です。特に英語データの適用ライセンスには未確認事項があり、配布条件の確認完了を意味しません。
@@ -70,10 +70,14 @@ python3 Scripts/build_symbol_catalog.py \
 ./Scripts/sumire-cli --list-categories
 ./Scripts/sumire-cli --categories medical,station --nbest 10 とうきょう
 ./Scripts/sumire-cli --bunsetsu きょうはとうきょうにいきます
+./Scripts/sumire-cli --user-entry すみれ Sumire 1851 -5000 すみれ
+./Scripts/sumire-cli --template-entry おつかれ "お疲れさまです。" 1851 -5000 おつかれ
 printf '%s\n' にほんご とうきょう | ./Scripts/sumire-cli --categories all --stdin
 ```
 
 標準出力は JSON、`--stdin` は1入力につき JSON 1行です。AI エージェントからも同じコマンドを利用できます。候補、スコア、辞書種別、UTF-16 の範囲、文節境界、探索完了状態を返します。`--lookup` は読みの完全一致検索です。`--bunsetsu` は固定GNKG v3/v4とMozc採点資産を使う専用候補探索です。システム辞書は常に有効、分類は初期状態で無効です。`complete: false` は探索予算または必要な文節資産がない状態を示します。本家の予測・読み訂正・候補統合までの同等性は未達成です。
+
+`--user-entry`／`--template-entry` は、読み・表記・接続ID（uint16）・コスト（int32）の順で複数指定できます。定型文は入力全体の完全一致時だけ使います。1851は固定辞書の名詞用接続IDです。CLIの試験用データで、アプリの保存先は変更しません。
 
 C ABI の所有権・世代番号・結果の有効期間は `ConversionCore/src/c_api.h` を参照してください。
 
@@ -116,11 +120,11 @@ git -C "$SUMIRE_REFERENCE_ASSETS" rev-parse HEAD
 swift test --package-path Core --filter DictionarySourceValidationTests
 ```
 
-実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` です。
+実際のAndroid辞書ZIPからネイティブ辞書を生成し、世代として公開して全辞書をiOSネイティブローダーで開く統合テストは、Android形式のZIPと全34ファイルを含む参照manifestを指定します。環境変数は `xcodegen generate` より前に設定してください。未指定ならこのテストをskipします。`SUMIRE_REFERENCE_NATIVE_DICTIONARIES` にはその34ファイルを含む検証済み辞書生成先を指定します。現行のアプリ同梱生成先は `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english` です。
 
 ```sh
 export SUMIRE_REFERENCE_SOURCE_ZIP=/path/to/android-dictionary.zip
-export SUMIRE_REFERENCE_NATIVE_DICTIONARIES="$HOME/sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english"
+export SUMIRE_REFERENCE_NATIVE_DICTIONARIES="$HOME/sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english"
 export SUMIRE_BENCHMARK_REVISION="$(git rev-parse HEAD)"
 xcodegen generate
 xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
@@ -131,7 +135,7 @@ xcodebuild -project Sumire.xcodeproj -scheme SumireCoreBenchmark \
 
 参照manifestの `source_revision` は固定Android revision `df1f38315bf56d860d32919a3eaed6a75499e91e` と照合し、変換された34ファイルのSHA-256を比較します。このSimulatorテストは実機App Groups共有やキーボード拡張のFull Access OFF動作を検証するものではありません。
 
-`project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
+`project.yml` はチェックアウトの隣の `../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english` を辞書リソースとして参照します。前節のコマンドで生成してからXcodeGenを実行してください。`$HOME` 以外へチェックアウトした場合は、同じ相対位置へ生成するか、リソースパスを変更してください。ビルド時に参照コピーと辞書を自動ダウンロードしません。実機の署名設定は次の手順で行います。
 
 ### 正式な実機署名と App Groups
 
@@ -202,6 +206,30 @@ python3 ConversionCore/tests/compare_reference.py \
 `ConversionCore/tests/reference/quality-policy.json` は、Android revision・adapter hash・baseline SHA-256・変換辞書 manifest hash と合格閾値を固定します。38件すべての探索完了、Top-1候補一致が36/38以上、Top-10候補リスト完全一致が36/38以上、参照元のTop-1候補がC++のTop-10に含まれる件数が38/38であることを合格条件とします。これは固定したAndroid経路との一致度であり、独立した実利用正解率ではありません。この評価集では予測、省略検索、ユーザー辞書、学習を無効にしており、それらの品質評価は別途必要です。入力別比較と合否レポートは指定した出力先だけに保存します。CTestにはrevision・ケース構成・hash・閾値の拒否テストも含みます。
 
 実資産の検証・性能測定は同ディレクトリの対応スクリプトを利用します。参照元との候補一致率を、独立した正解集の正解率とは扱いません。
+
+
+### 予測変換と固定課題の評価
+
+`compare_prediction_reference.py` は固定Androidの `getCandidates`／`getCandidatesOriginal`、25読み×分類なし／全分類の100条件を比較します。44出力の辞書世代、121入力資産、adapter、試験用factory差分、基準候補をハッシュで固定します。参照コピーは変更せず、外部アーカイブで試験します。新規生成にはAndroid SDK、JDK 21ランチャー、固定GradleのJVM／依存関係キャッシュが必要です。これは開発用で、製品へJavaを組み込みません。
+
+```sh
+python3 ConversionCore/tests/compare_prediction_reference.py \
+  --source .reference/JapaneseKeyboard \
+  --java-home "$JAVA_HOME" --android-sdk "$ANDROID_HOME" \
+  --cli ../sumire-build/cli-release/sumire-cli \
+  --data ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english \
+  --output ../sumire-validation/prediction-quality
+
+# 以後は --baseline ../sumire-validation/prediction-quality/baseline.jsonl を指定すればAndroidの再ビルドは不要です。
+python3 ConversionCore/tests/evaluate_conversion_quality.py \
+  --cli ../sumire-build/cli-release/sumire-cli \
+  --data ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english \
+  --output ../sumire-validation/authored-quality
+```
+
+参照比較はN-best 10で先頭候補・先頭10候補の表記とスコアを検証します。部分一致・重複・未対応種別を除外せず、全候補の件数・順序・不足種別も別に報告します。先頭10件の合格を全候補や実キーボード表示の一致とは扱いません。
+
+固定課題は `semantic-corpus.json` の48入力×分類条件による92条件です。N-best 20で単語・複合語・長文・同音異義語・省略入力・ユーザー辞書・補完先を評価します。ラベルは初回候補実行前に固定し、`semantic-policy.json` に初回の回帰基準を保存しています。許容表記は網羅的ではなく、補完は指定先のヒット率です。人手検証済みの一般的な日本語正解率や製品の完成判定ではありません。学習・実機入力は別途検証します。生成物・レポートはリポジトリ外へ保存します。
 
 ## 完成に向けた残作業
 

@@ -213,11 +213,34 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
   if (!result || !out || index >= sumire_result_count(result))
     return -1;
   const auto &c = result->snapshot->value.candidates[index];
-  uint32_t consumed = 0;
+  // Kana auxiliaries have no dictionary path, but replace the complete typed
+  // reading. Keep their range independent of output width (e.g. ガ -> ｶﾞ).
+  uint32_t consumed = c.segments.empty() ? result->snapshot->length : 0;
   for (const auto &segment : c.segments)
     consumed = std::max(consumed, segment.start + segment.length);
   *out = {index, string(c.text), c.score,
           0, consumed, c.segments.size()};
+  return 0;
+}
+int sumire_result_candidate_flags(const sumire_result *result, size_t index,
+                                   uint32_t *out) {
+  if (!result || !out || index >= sumire_result_count(result)) return -1;
+  *out = result->snapshot->value.candidates[index].is_reading_prefix
+             ? SUMIRE_CANDIDATE_READING_PREFIX : 0;
+  return 0;
+}
+int sumire_result_candidate_presentation_kind(const sumire_result *result,
+                                             size_t index, uint32_t *out) {
+  if (!result || !out || index >= sumire_result_count(result)) return -1;
+  *out = static_cast<uint32_t>(result->snapshot->value.candidates[index].presentation_kind);
+  return 0;
+}
+int sumire_result_reading_correction(const sumire_result *result, size_t index,
+                                     sumire_string *raw, sumire_string *reading) {
+  if (!result || !raw || !reading || index >= sumire_result_count(result)) return -1;
+  const auto &candidate = result->snapshot->value.candidates[index];
+  *raw = string(candidate.raw_text);
+  *reading = string(candidate.corrected_reading);
   return 0;
 }
 int sumire_result_segment(const sumire_result *result, size_t candidate,

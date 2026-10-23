@@ -317,6 +317,70 @@ class Tests(unittest.TestCase):
             value=json.loads(self.run_cli('--predict-japanese',reading).stdout)
             self.assertEqual('Completion' in [c['text'] for c in value['candidates']], len(reading)==16)
 
+    def test_classified_prediction_per_category_limit_penalty_and_switches(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Exact', 1, 100)])
+        dictionary(self.data/'medical.sud', [
+            ('あいうえ', f'Medical{i}', 1, 100) for i in range(5)
+        ] + [('あいうえおかき', 'TooFar', 1, -30000)])
+        dictionary(self.data/'place.sud', [('あいうえお', 'Place', 1, 50)])
+        args=['--categories','medical,place','--nbest','1','--predict-japanese']
+        result=json.loads(self.run_cli(*args,'あいう').stdout)
+        predicted=[c for c in result['candidates'] if c['text'].startswith('Medical')]
+        self.assertEqual([c['text'] for c in predicted], [f'Medical{i}' for i in range(4)])
+        self.assertTrue(all(c['score']==1600 and c['categories']==['medical'] for c in predicted))
+        self.assertTrue(all(c['segments'][0]['length_utf16']==3 for c in predicted))
+        place=next(c for c in result['candidates'] if c['text']=='Place')
+        self.assertEqual(place['score'],3050)
+        self.assertEqual(place['categories'],['place'])
+        self.assertNotIn('TooFar',[c['text'] for c in result['candidates']])
+        for flags,reading in [([], 'あいう'), (['--predict-japanese'], 'あい'),
+                              (['--categories','medical'], 'あいう')]:
+            value=json.loads(self.run_cli(*flags,reading).stdout)
+            self.assertFalse(any(c['text'].startswith('Medical') for c in value['candidates']))
+        limited=json.loads(self.run_cli(*args,'--max-states','1','あいう').stdout)
+        self.assertFalse(limited['complete'])
+
+    def test_classified_prediction_keeps_all_thirty_enabled_categories(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Primary', 1, 100)])
+        for category in b.CATEGORIES:
+            dictionary(self.data/(category+'.sud'), [('あいうえ', category, 1, 100)])
+        result=json.loads(self.run_cli('--categories','all','--nbest','1','--predict-japanese','あいう').stdout)
+        labels={label for candidate in result['candidates'] for label in candidate['categories']}
+        self.assertEqual(labels,set(b.CATEGORIES))
+        self.assertTrue(all(any(c['text']==name and c['categories']==[name] for c in result['candidates'])
+                            for name in b.CATEGORIES))
+        self.assertTrue(result['complete'])
+
+    def test_classified_prediction_preserves_distinct_readings_scores_and_primary(self):
+        dictionary(self.data/'system.sud', [('あいう', 'Shared', 1, 100)])
+        dictionary(self.data/'medical.sud', [('あいうえ', 'Shared', 1, 100),
+                                             ('あいうお', 'Shared', 1, 100)])
+        dictionary(self.data/'place.sud', [('あいうえ', 'Shared', 1, 100),
+                                           ('あいうえ', 'Shared', 2, 100),
+                                           ('あいうえ', 'Shared', 1, 200)])
+        result=json.loads(self.run_cli('--categories','medical,place','--predict-japanese','あいう').stdout)
+        shared=[c for c in result['candidates'] if c['text']=='Shared']
+        self.assertEqual(len(shared),5) # Primary + four distinct prediction identities.
+        self.assertEqual(sorted(c['score'] for c in shared),[140,1600,1600,1600,1700])
+        self.assertEqual(sum(c['categories']==['medical','place'] for c in shared),1)
+        self.assertEqual(sum(c['categories']==['medical'] for c in shared),1)
+        self.assertEqual(sum(c['categories']==['place'] for c in shared),2)
+
+    def test_classified_prediction_utf16_limits_long_penalty_and_posting_budget(self):
+        for reading in ['あい😀', 'あいうえおか', 'あいうえおかきくけこさしすせそた', 'あいうえおかきくけこさしすせそたち']:
+            dictionary(self.data/'medical.sud', [(reading+'😀', -2, 1, 100)])
+            result=json.loads(self.run_cli('--categories','medical','--predict-japanese',reading).stdout)
+            matches=[c for c in result['candidates'] if c['text']==reading+'😀']
+            units=len(reading.encode('utf-16-le'))//2
+            self.assertEqual(bool(matches), units<=16)
+            if matches:
+                self.assertEqual(matches[0]['score'],3100)
+                self.assertEqual(matches[0]['segments'][0]['length_utf16'],units)
+        dictionary(self.data/'medical.sud', [('かきくけ', f'Budget{i}', 1, -i) for i in range(100)])
+        result=json.loads(self.run_cli('--categories','medical','--predict-japanese','--max-states','10','かきく').stdout)
+        self.assertFalse(result['complete'])
+        self.assertNotIn('Budget99',[c['text'] for c in result['candidates']])
+
     def test_japanese_completion_postings_consume_budget(self):
         # One terminal, many tokens: traversing just two nodes cannot allow an
         # unbounded posting scan. The cheapest token occurs after the budget.
@@ -374,6 +438,13 @@ class Tests(unittest.TestCase):
         self.assertEqual([c['text'] for c in result],['AI','Whole','A','B'])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[1:]],[2,1,1])
         self.assertEqual([c['score'] for c in result[1:]],[500,100,200])
+        self.assertEqual([c['is_reading_prefix'] for c in result],[False,False,True,True])
+        ordinary=json.loads(self.run_cli('--nbest','1','あい').stdout)['candidates']
+        self.assertTrue(all(not c['is_reading_prefix'] for c in ordinary))
+        overlap=json.loads(self.run_cli('--prefix-candidates','--nbest','100','あい').stdout)['candidates']
+        whole=[c for c in overlap if c['text']=='Whole']
+        self.assertEqual(len(whole),1)
+        self.assertFalse(whole[0]['is_reading_prefix'])
 
     def test_bunsetsu_includes_raw_reading_prefix_and_english_candidates(self):
         dictionary(self.data/'system.sud',[
@@ -394,6 +465,8 @@ class Tests(unittest.TestCase):
                          [('Whole',500),('A',100),('A',150)])
         self.assertEqual([c['segments'][0]['length_utf16'] for c in result[7:]],
                          [2,1,1])
+        self.assertTrue(all(not c['is_reading_prefix'] for c in result[:7]))
+        self.assertEqual([c['is_reading_prefix'] for c in result[7:]],[False,True,True])
 
     def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
         self.install_auxiliary_dictionary_fixture()
@@ -419,6 +492,120 @@ class Tests(unittest.TestCase):
         (self.data/'symbol.sud').unlink()
         self.run_cli('--bunsetsu','あいう',ok=False)
 
+    def test_reading_correction_metadata_and_prediction_gates(self):
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+        corrections=[('あいうえ',f'訂正{i}\tていせい{i}',1,i) for i in range(6)]
+        corrections += [('あいう','EXACT\tよみ',1,-20000),
+                        ('あいうえおかき','TOO-FAR\tよみ',1,-20000),
+                        ('あいうえ','NO-TAB',1,0), ('あいうえ','\tよみ',1,0),
+                        ('あいうえ','EMPTY\t',1,0), ('あいうえ','MULTI\tよみ\t余分',1,0),
+                        ('あいうえ','NUL\x00\tよみ',1,0)]
+        dictionary(self.data/'reading_correction.sud',corrections)
+        plain=json.loads(self.run_cli(reading).stdout)
+        predicted=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertFalse(any(c['raw_text'] for c in plain['candidates']))
+        self.assertFalse(predicted['complete'], 'skipped malformed metadata must report incompleteness')
+        correction=[c for c in predicted['candidates'] if c['raw_text']]
+        self.assertEqual([c['text'] for c in correction],[f'訂正{i}' for i in range(6)])
+        self.assertEqual([c['score'] for c in correction],list(range(8000,8006)))
+        self.assertEqual([c['corrected_reading'] for c in correction],[f'ていせい{i}' for i in range(6)])
+        self.assertTrue(all(c['raw_text']==c['text']+'\t'+c['corrected_reading'] for c in correction))
+        self.assertTrue(all(c['segments']==[{'text':c['text'],'dictionary':'reading_correction','start_utf16':0,'length_utf16':3}] for c in correction))
+        self.assertTrue(all('\t' not in c['text'] for c in predicted['candidates']))
+        (self.data/'reading_correction.sud').unlink()
+        absent=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertFalse(any(c['raw_text'] for c in absent['candidates']))
+
+    def test_reading_correction_utf16_limits_order_and_budget(self):
+        for reading, allowed in [('あい',False),('あ😀',True),('あ'*16,True),('あ'*17,False)]:
+            dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+            dictionary(self.data/'reading_correction.sud',[(reading+'え','😀訂正\tせい',1,0)])
+            size=(self.data/'reading_correction.sud').stat().st_size
+            result=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+            correction=[c for c in result['candidates'] if c['raw_text']]
+            self.assertEqual(bool(correction),allowed)
+            if correction:
+                self.assertEqual(correction[0]['segments'][0]['length_utf16'],len(reading.encode('utf-16-le'))//2)
+                self.assertEqual(correction[0]['score'],8000)
+            (self.data/'reading_correction.sud').unlink()
+            self.assertEqual(result['mapped_bytes']-json.loads(self.run_cli('--predict-japanese',reading).stdout)['mapped_bytes'],size)
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'Z-PRIMARY',1,10000)])
+        dictionary(self.data/'reading_correction.sud',[(reading+'え','A-CORRECTION\tえ',1,0)])
+        result=json.loads(self.run_cli('--predict-japanese',reading).stdout)
+        self.assertEqual(result['candidates'][0]['text'],'A-CORRECTION')
+        limited=json.loads(self.run_cli('--predict-japanese','--max-states','1',reading).stdout)
+        self.assertFalse(limited['complete'])
+        self.assertFalse(any(c['raw_text'] for c in limited['candidates']))
+        # Optional files are still fully validated when present.
+        damaged=bytearray((self.data/'reading_correction.sud').read_bytes()); damaged[-1]^=1
+        (self.data/'reading_correction.sud').write_bytes(damaged)
+        self.run_cli('--predict-japanese',reading,ok=False)
+        dictionary(self.data/'reading_correction.sud',[(reading+'え','POS\tよみ',999,0)])
+        self.run_cli('--predict-japanese',reading,ok=False)
+
+    def test_reading_correction_raw_metadata_orders_equal_display_surfaces(self):
+        reading='あいう'
+        dictionary(self.data/'system.sud',[(reading,'PRIMARY',1,100)])
+        dictionary(self.data/'reading_correction.sud',[
+            (reading+'え','同じ\tい',1,0),(reading+'え','同じ\tあ',1,0)])
+        correction=[c for c in json.loads(self.run_cli('--predict-japanese',reading).stdout)['candidates'] if c['raw_text']]
+        self.assertEqual([c['corrected_reading'] for c in correction],['あ','い'])
+        self.assertEqual([c['text'] for c in correction],['同じ','同じ'])
+
+    def test_japanese_ascii_generated_variants_preserve_scores_order_and_duplicates(self):
+        connection(self.data/'connection.sud',1842)
+        for reading, expected in [('a',[('ａ',30000),('Ａ',30000)]),
+                                  ('Ab',[('ａｂ',30000),('ＡＢ',30000)]),
+                                  ('ABC',[('ａｂｃ',30000),('ＡＢＣ',30000)]),
+                                  ('a1',[('a1',10000),('A1',10001),('ａ１',30000),('Ａ１',30000)]),
+                                  ('A1',[('A1',10000),('ａ１',30000),('Ａ１',30000)]),
+                                  ('AB12',[('AB12',10000),('ａｂ１２',30000),('ＡＢ１２',30000)]),
+                                  ('+',[('＋',30000),('＋',30000)]),
+                                  ('a+b',[('ａ＋ｂ',30000),('Ａ＋Ｂ',30000)]),
+                                  ('a b',[('ａ　ｂ',30000),('Ａ　Ｂ',30000)]),
+                                  (' ',[('　',30000),('　',30000)])]:
+            with self.subTest(reading=reading):
+                candidates=json.loads(self.run_cli('--predict-japanese','--nbest','1',reading).stdout)['candidates']
+                generated=[c for c in candidates if c['score'] in [10000,10001,10002,30000] and not c['segments']]
+                self.assertEqual([(c['text'],c['score']) for c in generated],expected)
+                first=next(i for i,c in enumerate(candidates) if c is generated[0])
+                kana=next(i for i,c in enumerate(candidates) if c['score']==6000)
+                self.assertLess(first,kana)
+        for reading in ['あ','aあ','é','ＡＢ','123','１２３']:
+            candidates=json.loads(self.run_cli('--predict-japanese',reading).stdout)['candidates']
+            self.assertFalse(any(c['score']==30000 and not c['segments'] for c in candidates),reading)
+        ordinary=json.loads(self.run_cli('a1').stdout)['candidates']
+        self.assertFalse(any(not c['segments'] and c['score'] in [10000,10001,10002,30000] for c in ordinary))
+        dictionary(self.data/'english.sud',[('abc',-2,0,100)])
+        english=json.loads(self.run_cli('--english','ab').stdout)['candidates']
+        self.assertFalse(any(c['text'] in ['ａｂ','ＡＢ'] for c in english))
+
+    def test_c_api_generated_ascii_fullwidth_ranges(self):
+        if not C_API: self.skipTest('C ABI fixture executable not supplied')
+        connection(self.data/'connection.sud',1842)
+        result=subprocess.run([C_API,str(self.data),'--ascii-generated'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+
+    def test_japanese_prediction_includes_kana_without_dictionary_completion(self):
+        for reading, katakana, halfwidth in [('あ', 'ア', 'ｱ'),
+                                              ('がぱゔ', 'ガパヴ', 'ｶﾞﾊﾟゔ'),
+                                              ('ゐゑゎ・か\u3099', 'ヰヱヮ・カ\u3099', 'ゐゑゎ・ｶ\u3099'),
+                                              ('あ😀', 'ア😀', 'ｱ😀')]:
+            dictionary(self.data/'system.sud', [(reading, 'Primary', 1, 100)])
+            plain=json.loads(self.run_cli('--nbest','1',reading).stdout)['candidates']
+            predicted=json.loads(self.run_cli('--predict-japanese','--nbest','1',reading).stdout)['candidates']
+            self.assertEqual([c['text'] for c in plain], ['Primary'])
+            self.assertEqual([c['text'] for c in predicted], ['Primary', reading, katakana, halfwidth])
+            self.assertEqual([c['score'] for c in predicted[1:]], [6000,6000,6000])
+            self.assertTrue(all(not c['segments'] for c in predicted[1:]))
+        # A dictionary candidate with the same surface must retain its score
+        # and order; kana choices are auxiliary, not a cheaper primary path.
+        dictionary(self.data/'system.sud', [('あ', 'あ', 1, 100)])
+        predicted=json.loads(self.run_cli('--predict-japanese','あ').stdout)['candidates']
+        self.assertEqual([c['score'] for c in predicted if c['text']=='あ'], [140,6000])
+
     def test_japanese_prediction_enables_auxiliary_reading_completion(self):
         self.install_auxiliary_dictionary_fixture()
         baseline=json.loads(self.run_cli('あいう').stdout)
@@ -434,6 +621,43 @@ class Tests(unittest.TestCase):
             self.assertIn(key,predicted_candidates)
             self.assertEqual(predicted_candidates[key]['score'],score)
         self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
+
+    def test_auxiliary_completion_ranges_consume_only_typed_utf16(self):
+        dictionary(self.data/'english_reading.sud',[('えいご','English',0,10000)])
+        dictionary(self.data/'single_kanji.sud',[('べつ','別',0,10000)])
+        for name,text,cost in [('emoji','⚪️',6000),('emoticon','(^_^)',4000),('symbol','㎥',2000)]:
+            dictionary(self.data/(name+'.sud'),[('あいうえ',text,0,cost),('😀あい',text,0,cost)])
+        for reading in ('あいう','😀あ'):
+            result=json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--english-reading','--nbest','20',reading).stdout)
+            for name,text,score in [('emoji','⚪️',7000),('emoticon','(^_^)',5000),('symbol','㎥',3000)]:
+                candidate=next(c for c in result['candidates'] if c['text']==text)
+                self.assertEqual(candidate['score'],score)
+                self.assertEqual(candidate['segments'],[dict(text=text,dictionary=name,start_utf16=0,length_utf16=3)])
+                self.assertFalse(candidate['is_reading_prefix'])
+            disabled=json.loads(self.run_cli('--nbest','20',reading).stdout)
+            self.assertFalse({'⚪️','(^_^)','㎥'} & {c['text'] for c in disabled['candidates']})
+        if C_API is not None:
+            result=subprocess.run([C_API,str(self.data),'--aux-completion'],capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr.decode())
+
+    def test_prediction_kana_symbol_and_prefix_order(self):
+        self.install_auxiliary_dictionary_fixture()
+        dictionary(self.data/'system.sud', [('あ','Prefix',1,100), ('あいう','Primary',1,100)])
+        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--prefix-candidates','--nbest','20','あいう').stdout)['candidates']]
+        # df1f383 getCandidatesOriginal:1341 (tabs default OFF), not the
+        # alternate getCandidates:2858 symbol-after-prefix ordering.
+        self.assertLess(texts.index('EMOJI'),texts.index('SYMBOL'))
+        self.assertLess(texts.index('SYMBOL'),texts.index('あいう'))
+        self.assertLess(texts.index('ｱｲｳ'),texts.index('Prefix'))
+        self.assertLess(texts.index('Prefix'),texts.index('SINGLE-KANJI'))
+        no_prediction=[c['text'] for c in json.loads(self.run_cli('--prefix-candidates','--nbest','20','あいう').stdout)['candidates']]
+        self.assertLess(no_prediction.index('EMOJI'),no_prediction.index('SYMBOL'))
+        self.assertLess(no_prediction.index('SYMBOL'),no_prediction.index('Prefix'))
+        dictionary(self.data/'emoji.sud',[('あ','EMOJI',0,6000)])
+        dictionary(self.data/'symbol.sud',[('あ','SYMBOL',0,3000)])
+        texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--nbest','1','あ').stdout)['candidates']]
+        self.assertLess(texts.index('ｱ'),texts.index('EMOJI'))
+        self.assertLess(texts.index('EMOJI'),texts.index('SYMBOL'))
 
     def test_bunsetsu_marks_legacy_generation_without_auxiliary_dictionaries_incomplete(self):
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','B'])
@@ -523,6 +747,59 @@ class Tests(unittest.TestCase):
         data=bytearray((self.data/'english_reading.sud').read_bytes());data[-1]^=1
         (self.data/'english_reading.sud').write_bytes(data)
         self.run_cli('--lookup-english-reading','はろー',ok=False)
+    def test_fixture_entries_convert_prefix_and_exact_template(self):
+        options=['--user-entry','あ','User','1','-1000',
+                 '--user-entry','い','Second','2','-900',
+                 '--template-entry','あい','Template','2','-2000','--nbest','100']
+        exact=json.loads(self.run_cli(*options,'あい').stdout)['candidates']
+        by_text={candidate['text']:candidate for candidate in exact}
+        self.assertEqual(by_text['Template']['score'],-2000)
+        self.assertEqual(by_text['Template']['segments'][0]['dictionary'],'template')
+        self.assertIn('UserSecond',by_text)
+        self.assertIn('Whole',by_text)
+        self.assertEqual(by_text['UserSecond']['segments'][0]['dictionary'],'user')
+        longer=json.loads(self.run_cli(*options,'あいい').stdout)['candidates']
+        self.assertFalse(any(segment['dictionary']=='template' for candidate in longer for segment in candidate['segments']))
+        shorter=json.loads(self.run_cli(*options,'あ').stdout)['candidates']
+        self.assertIn('User',[candidate['text'] for candidate in shorter])
+        self.assertNotIn('Template',[candidate['text'] for candidate in shorter])
+
+    def test_fixture_entries_english_prediction_and_case_sensitive_prefix(self):
+        dictionary(self.data/'english.sud',[('hello',-2,0,100)])
+        options=['--user-entry','help','Personal','1','-100',
+                 '--template-entry','hel','Exact','2','-200','--predict-english']
+        exact=json.loads(self.run_cli(*options,'hel').stdout)['candidates']
+        self.assertEqual([candidate['text'] for candidate in exact],['Exact','Personal','hello'])
+        self.assertEqual([candidate['segments'][0]['dictionary'] for candidate in exact[:2]],['template','user'])
+        longer=json.loads(self.run_cli(*options,'help').stdout)['candidates']
+        self.assertIn('Personal',[candidate['text'] for candidate in longer])
+        self.assertNotIn('Exact',[candidate['text'] for candidate in longer])
+        upper=json.loads(self.run_cli(*options,'HEL').stdout)['candidates']
+        self.assertNotIn('Personal',[candidate['text'] for candidate in upper])
+
+    def test_fixture_entries_validate_integer_ranges_and_missing_arguments(self):
+        for option in ['--user-entry','--template-entry']:
+            for context,score in [('x','0'),('1x','0'),('-1','0'),('65536','0'),
+                                  ('3','0'),('1','x'),('1','1.0'),('1','2147483648'),
+                                  ('1','-2147483649'),('99999999999999999999999','0')]:
+                with self.subTest(option=option,context=context,score=score):
+                    self.run_cli(option,'あ','Fixture',context,score,'あ',ok=False)
+            for arguments in [[],['あ'],['あ','Fixture'],['あ','Fixture','1']]:
+                with self.subTest(option=option,arguments=arguments):
+                    self.run_cli(option,*arguments,ok=False)
+        for score in ['-2147483648','2147483647']:
+            result=json.loads(self.run_cli('--template-entry','あ','Boundary','0',score,'あ').stdout)
+            self.assertIn('Boundary',[candidate['text'] for candidate in result['candidates']])
+        self.run_cli('--user-entry','','Fixture','1','0','あ',ok=False)
+        self.run_cli('--user-entry','あ','','1','0','あ',ok=False)
+
+    def test_fixture_entries_reject_lookup_and_listing_combinations(self):
+        for option in ['--user-entry','--template-entry']:
+            for mode in ['--lookup','--lookup-english','--lookup-english-reading','--list-categories']:
+                with self.subTest(option=option,mode=mode):
+                    result=self.run_cli(option,'あ','Fixture','1','0',mode,'あ',ok=False)
+                    self.assertIn(b'fixture entries apply',result.stderr)
+
     def tearDown(self):self.temp.cleanup()
     def run_cli(self,*args,input=None,ok=True):
         r=subprocess.run([CLI,'--data',str(self.data),*args],input=input,capture_output=True)
@@ -564,6 +841,8 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'english.sud',[('hello',-2,0,123)])
         dictionary(self.data/'system.sud',ENTRIES+[('かきくけ','PredictionABI',1,-10000)])
         dictionary(self.data/'person.sud',[('あい','Medical',1,100)])
+        dictionary(self.data/'medical.sud',[('あい','Medical',1,-20), ('かきくけ','CategoryABI',1,100)])
+        dictionary(self.data/'reading_correction.sud',[('かきくけ','訂正\tていせい',1,200)])
         standalone(self.data/'standalone.sud',['しろ'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','I'])
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A'])
