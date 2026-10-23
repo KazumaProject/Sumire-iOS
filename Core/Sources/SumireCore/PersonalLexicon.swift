@@ -20,6 +20,74 @@ public struct PersonalWord: Codable, Equatable {
         }
     }
 }
+
+/// User-authored Android-compatible text macro definition.
+public struct PersonalTextMacro: Codable, Equatable, Identifiable {
+    public var id: String
+    public var name: String
+    public var reading: String?
+    public var body: String
+    public var enabled: Bool
+
+    public init(
+        id: String = UUID().uuidString.lowercased(),
+        name: String,
+        reading: String? = nil,
+        body: String,
+        enabled: Bool = true
+    ) {
+        self.id = id
+        self.name = name
+        self.reading = reading
+        self.body = body
+        self.enabled = enabled
+    }
+
+    public func normalized() -> Self {
+        Self(
+            id: id,
+            name: name.trimmingCharacters(in: .whitespacesAndNewlines),
+            reading: reading?.trimmingCharacters(in: .whitespacesAndNewlines).nilIfEmpty,
+            body: body,
+            enabled: enabled
+        )
+    }
+
+    public func validate() throws {
+        guard UUID(uuidString: id) != nil else { throw PersonalDataError("定型マクロIDが不正です") }
+        guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              name.utf16.count <= AndroidTextMacroLimits.name else {
+            throw PersonalDataError("名前は1〜\(AndroidTextMacroLimits.name)文字で入力してください")
+        }
+        guard (reading?.utf16.count ?? 0) <= AndroidTextMacroLimits.reading else {
+            throw PersonalDataError("読みは\(AndroidTextMacroLimits.reading)文字以下で入力してください")
+        }
+        guard body.utf16.count <= AndroidTextMacroLimits.body else {
+            throw PersonalDataError("内容は\(AndroidTextMacroLimits.body)文字以下で入力してください")
+        }
+        _ = try AndroidTextMacroCompiler.compile(body)
+    }
+}
+
+/// Android's repository queries macro names with SQLite's built-in NOCASE
+/// collation, which folds ASCII A–Z only (unlike Unicode lowercasing).
+public enum AndroidTextMacroNameComparison {
+    public static func sqliteNoCaseKey(_ name: String) -> [UInt8] {
+        // SQLite's built-in text collations stop at the first embedded NUL.
+        // Keep this as bytes: Swift String equality treats canonically
+        // equivalent Unicode spellings as equal, while SQLite NOCASE does not.
+        return name.utf8.prefix { $0 != 0 }.map { byte in
+            byte >= 0x41 && byte <= 0x5A ? byte + 0x20 : byte
+        }
+    }
+
+    public static func androidRootLowercaseKey(_ name: String) -> [UInt16] {
+        // Kotlin String equality compares UTF-16 code units, not Swift's
+        // canonically-equivalent String values.
+        Array(name.lowercased().utf16)
+    }
+}
+
 public struct PersonalDataError: LocalizedError {
     public let message: String
     public init(_ message: String) { self.message = message }
@@ -29,10 +97,37 @@ public struct PersonalLexicon: Codable, Equatable {
     public var formatVersion = 1
     public var words: [PersonalWord] = []
     public var templates: [PersonalWord] = []
+    public var textMacros: [PersonalTextMacro] = []
+
+    private enum CodingKeys: String, CodingKey {
+        case formatVersion, words, templates, textMacros
+    }
+
     public init() {}
+
+    /// `textMacros` was added without changing the format version so previously
+    /// saved dictionaries and backups continue to load as an empty macro list.
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        formatVersion = try container.decodeIfPresent(Int.self, forKey: .formatVersion) ?? 1
+        words = try container.decodeIfPresent([PersonalWord].self, forKey: .words) ?? []
+        templates = try container.decodeIfPresent([PersonalWord].self, forKey: .templates) ?? []
+        textMacros = try container.decodeIfPresent([PersonalTextMacro].self, forKey: .textMacros) ?? []
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(formatVersion, forKey: .formatVersion)
+        try container.encode(words, forKey: .words)
+        try container.encode(templates, forKey: .templates)
+        try container.encode(textMacros, forKey: .textMacros)
+    }
+
     public func validate() throws {
         guard formatVersion == 1 else { throw PersonalDataError("未対応のユーザーデータ形式です") }
-        guard words.count + templates.count <= 100000 else { throw PersonalDataError("登録件数の上限は100000件です") }
+        guard words.count + templates.count + textMacros.count <= 100000 else {
+            throw PersonalDataError("登録件数の上限は100000件です")
+        }
         var bytes = 0
         for group in [words, templates] {
             var seen = Set<String>()
@@ -44,8 +139,24 @@ public struct PersonalLexicon: Codable, Equatable {
                 bytes += entry.reading.utf8.count + entry.word.utf8.count
             }
         }
+        var macroIDs = Set<String>()
+        var macroNames = Set<[UInt8]>()
+        for macro in textMacros {
+            try macro.validate()
+            guard macroIDs.insert(macro.id).inserted else {
+                throw PersonalDataError("定型マクロIDが重複しています")
+            }
+            guard macroNames.insert(AndroidTextMacroNameComparison.sqliteNoCaseKey(macro.name)).inserted else {
+                throw PersonalDataError("同じ名前の定型マクロが重複しています")
+            }
+            bytes += macro.name.utf8.count + (macro.reading?.utf8.count ?? 0) + macro.body.utf8.count
+        }
         guard bytes <= 16 * 1024 * 1024 else { throw PersonalDataError("ユーザーデータの文字容量は16 MiBまでです") }
     }
+}
+
+private extension String {
+    var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 public struct PersonalImportPreview {
     public let entries: [PersonalWord]

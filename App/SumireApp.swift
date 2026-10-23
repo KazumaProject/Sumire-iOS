@@ -84,6 +84,7 @@ struct HomeView: View {
     @ViewBuilder private func destinationView(_ item: SettingsDestination) -> some View {
         switch item {
         case .keyboards: KeyboardSelectionSettings()
+        case .toolbar: KeyboardToolbarSettingsView()
         case .customKeyboard: CustomKeyboardSettings()
         case .romaji: RomajiSettings()
         case .specialKeys: SpecialKeySettingsView()
@@ -93,6 +94,7 @@ struct HomeView: View {
         case .theme: detail(title: item.title) { ThemeSettingsView() }
         case .dictionaryBrowser: detail(title: item.title) { DictionaryBrowserView() }
         case .personalDictionary: PersonalDictionarySettings(library: personalLibrary)
+        case .textMacros: PersonalTextMacroSettings(library: personalLibrary)
         case .dictionaries: DictionarySettings(categoryMask: $categoryMask, englishReadingEnabled: $englishReadingEnabled)
         case .symbols: SymbolKeyboardSettings()
         case .backup: PersonalBackupSettings(library: personalLibrary, onRestore: { appearanceRevision += 1 })

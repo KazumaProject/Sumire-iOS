@@ -1,8 +1,8 @@
 import Foundation
 import CoreFoundation
 
-/// Reader for Android Sumire's `PrefBackup` JSON. Only settings with a
-/// confirmed iOS equivalent are imported; Android-only values and toolbar IDs
+/// Reader for Android Sumire's `PrefBackup` JSON. Only settings and toolbar
+/// actions with a confirmed iOS equivalent are imported; Android-only values
 /// are reported but never written into unrelated iOS preferences.
 public struct AndroidPreferenceBackup: Equatable {
     public let version: Int
@@ -12,11 +12,19 @@ public struct AndroidPreferenceBackup: Equatable {
     public let removingKeys: Set<String>
     public let importedKeys: [String]
     public let unsupportedEntryCount: Int
-    public let shortcutIDs: [String]
+    /// `nil` means Android omitted the field or wrote null; an explicit empty
+    /// list remains distinguishable because Android treats it as a request to
+    /// replace its own toolbar with its settings fallback.
+    public let shortcutIDs: [String]?
+    public var toolbarShortcutImport: AndroidToolbarShortcutImport? {
+        shortcutIDs.map(AndroidToolbarShortcutImport.init(shortcutIDs:))
+    }
 
     /// Number of iOS setting changes that will be applied, including an
     /// Android effective default synthesized for an omitted preference.
-    public var importedSettingCount: Int { settings.values.count + removingKeys.count + 1 }
+    public var importedSettingCount: Int {
+        settings.values.count + removingKeys.count + 1 + (toolbarShortcutImport?.actions.isEmpty == false ? 1 : 0)
+    }
 
     /// Android's effective retention default applies when an enabled expiry
     /// preference is exported without its unchanged hour value.
@@ -145,17 +153,16 @@ public struct AndroidPreferenceBackup: Equatable {
             throw PersonalDataError("未対応のAndroid設定バックアップ形式です")
         }
 
-        let shortcutIDs: [String]
+        let shortcutIDs: [String]?
         if let rawShortcuts = root["shortcutIds"], !(rawShortcuts is NSNull) {
-            guard version >= 2,
-                  let values = rawShortcuts as? [String],
+            guard let values = rawShortcuts as? [String],
                   values.count <= maximumEntries,
                   values.allSatisfy({ !$0.isEmpty && $0.utf8.count <= maximumShortcutIDBytes }) else {
                 throw PersonalDataError("Android設定バックアップのツールバー項目が不正です")
             }
             shortcutIDs = values
         } else {
-            shortcutIDs = []
+            shortcutIDs = nil
         }
 
         var snapshot = KeyboardSettingsSnapshot()
@@ -271,6 +278,9 @@ public struct AndroidPreferenceBackup: Equatable {
             try JSONEncoder().encode(flickStyle.normalized)
         )
         try importedSettings.applyImportedValues(to: defaults, removingKeys: removingKeys)
+        if let toolbarShortcutImport, !toolbarShortcutImport.actions.isEmpty {
+            KeyboardToolbarPreferences.save(toolbarShortcutImport.actions, defaults: defaults)
+        }
     }
 
     private static func currentFlickStyle(from defaults: UserDefaults) throws -> FlickStyleSettings {

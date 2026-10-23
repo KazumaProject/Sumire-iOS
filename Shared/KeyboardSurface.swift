@@ -74,6 +74,7 @@ final class KeyboardSurface: UIInputView {
     private var sizedAvailableHeight: CGFloat?
     private var isAppearancePreview = false
     private var resizeOverlay: KeyboardResizeOverlay?
+    private var templatePanel: KeyboardTemplatePanel?
     private var customTapController: CustomDoubleTapController?
     private var stackLeading: NSLayoutConstraint!
     private var stackTrailing: NSLayoutConstraint!
@@ -258,11 +259,11 @@ final class KeyboardSurface: UIInputView {
         symbolPanel?.removeFromSuperview(); symbolPanel = nil
         clipboardHistory.detach(); stack.accessibilityElementsHidden = false
     }
-    private func showSymbolKeyboard() {
-        guard symbolPanel == nil else { return }
+    private func showSymbolKeyboard(initialMode: SymbolKeyboardMode? = nil) {
+        guard symbolPanel == nil, templatePanel == nil else { return }
         do {
             let panel = SymbolKeyboardView(defaults: settingsDefaults, writableDefaults: writableSettings,
-                                           catalog: try SymbolKeyboardCatalog.load())
+                                           catalog: try SymbolKeyboardCatalog.load(), initialMode: initialMode)
             panel.onSettingsWritten = { [weak self] keys in self?.onSettingsWritten?(keys) }
             panel.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness))
             panel.onClose = { [weak self] in self?.closeSymbolKeyboard() }
@@ -279,6 +280,39 @@ final class KeyboardSurface: UIInputView {
             symbolPanel = panel
         } catch { showDataNotice("記号パネル: " + error.localizedDescription) }
     }
+    private func showTemplatePanel() {
+        guard !hasComposition, symbolPanel == nil, templatePanel == nil else { return }
+        let templates = KeyboardTemplatePanel.ordered(personalLexicon.templates)
+        guard !templates.isEmpty else {
+            showDataNotice("定型文は登録されていません")
+            return
+        }
+        let panel = KeyboardTemplatePanel(templates: templates)
+        panel.onClose = { [weak self] in self?.closeTemplatePanel() }
+        panel.onInsert = { [weak self] text in
+            guard let self else { return }
+            self.candidateBar.onInsertShortcutText?(text)
+            self.closeTemplatePanel()
+        }
+        panel.applyPalette(KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark,
+                                          saturation: saturation, brightness: brightness))
+        panel.translatesAutoresizingMaskIntoConstraints = false
+        closeExpandedCandidates()
+        addSubview(panel)
+        NSLayoutConstraint.activate([
+            panel.topAnchor.constraint(equalTo: topAnchor), panel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            panel.leadingAnchor.constraint(equalTo: leadingAnchor), panel.trailingAnchor.constraint(equalTo: trailingAnchor)
+        ])
+        panel.accessibilityViewIsModal = true
+        stack.accessibilityElementsHidden = true
+        templatePanel = panel
+        UIAccessibility.post(notification: .layoutChanged, argument: panel)
+    }
+    private func closeTemplatePanel() {
+        templatePanel?.removeFromSuperview()
+        templatePanel = nil
+        stack.accessibilityElementsHidden = false
+    }
     private var learningURL: URL?
     var learnFirstCandidate = false
     func reloadLearningResults() {
@@ -292,6 +326,7 @@ final class KeyboardSurface: UIInputView {
     }
     private var composition = CompositionState()
     private var converted: [ConversionCandidate] = []
+    private var presentedCandidates: [ConversionCandidate] = []
     private var bunsetsuActionHandled = false
     private var resultGeneration: UInt64?
     private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
@@ -477,6 +512,9 @@ final class KeyboardSurface: UIInputView {
     private let stack = UIStackView()
     private let status = UILabel()
     private var expandedCandidates: UIView?
+    var textMacroContextAllowed = false
+    var textMacroSelectionAvailable = false
+    var executeTextMacro: ((String, String?) -> Void)?
 
 
     init(frame: CGRect = .zero) {
@@ -515,7 +553,10 @@ final class KeyboardSurface: UIInputView {
         clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
         candidateBar.onClipboardCaptured = { [weak self] text, image in self?.clipboardHistory.capture(text: text, image: image) }
         candidateBar.onSizingChange = { [weak self] in self?.applySizing() }
-        candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard() }
+        candidateBar.onSymbols = { [weak self] in self?.showSymbolKeyboard(initialMode: .emoji) }
+        candidateBar.onTextMacros = { [weak self] in self?.showTextMacroList() }
+        candidateBar.onClipboard = { [weak self] in self?.showSymbolKeyboard(initialMode: .clipboard) }
+        candidateBar.onTemplates = { [weak self] in self?.showTemplatePanel() }
         candidateBar.onClipboardNotice = { [weak self] in self?.showDataNotice($0) }
         candidateBar.onResize = { [weak self] in self?.beginResize() }
         candidateBar.onExpand = { [weak self] in self?.showExpandedCandidates() }
@@ -1790,6 +1831,7 @@ final class KeyboardSurface: UIInputView {
         composition.invalidate()
         containsRomaji = false
         converted = []
+        presentedCandidates = []
         resultGeneration = nil
         bunsetsuActionHandled = false
         selectedCandidate = nil
@@ -1805,8 +1847,33 @@ final class KeyboardSurface: UIInputView {
         expandedCandidates = nil
         stack.accessibilityElementsHidden = symbolPanel != nil
     }
+
+    func showTextMacroList(requiredMacroID: String? = nil) {
+        beforeInput?()
+        guard (!hasComposition || requiredMacroID != nil), expandedCandidates == nil else { return }
+        let macros = personalLexicon.textMacros.filter { requiredMacroID == nil || $0.id == requiredMacroID }
+        guard !macros.isEmpty else { return }
+        let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark,
+                                      saturation: saturation, brightness: brightness)
+        let panel = KeyboardTextMacroPanel(macros: macros, palette: palette,
+                                           canUseContext: textMacroContextAllowed,
+                                           hasSelection: textMacroSelectionAvailable)
+        panel.onClose = { [weak self] in self?.closeExpandedCandidates() }
+        panel.onSelect = { [weak self] id, clipboard in
+            guard let self else { return }
+            self.closeExpandedCandidates()
+            self.executeTextMacro?(id, clipboard)
+        }
+        addSubview(panel)
+        NSLayoutConstraint.activate([
+            panel.topAnchor.constraint(equalTo: topAnchor), panel.bottomAnchor.constraint(equalTo: bottomAnchor),
+            panel.leadingAnchor.constraint(equalTo: leadingAnchor), panel.trailingAnchor.constraint(equalTo: trailingAnchor)
+        ])
+        stack.accessibilityElementsHidden = true
+        expandedCandidates = panel
+    }
     private func showExpandedCandidates() {
-        guard !converted.isEmpty, expandedCandidates == nil else { return }
+        guard !presentedCandidates.isEmpty, expandedCandidates == nil else { return }
         let palette = KeyboardPalette(hue: hue, dark: traitCollection.userInterfaceStyle == .dark, saturation: saturation, brightness: brightness)
         let panel = UIView()
         panel.accessibilityIdentifier = "candidate-expanded-panel"
@@ -1821,7 +1888,9 @@ final class KeyboardSurface: UIInputView {
         list.clipboardAccessAllowed = false
         list.useExpandedLayout()
         list.applyPalette(palette)
-        list.setCandidates(converted.map { CandidateBar.Presentation(text: $0.text, annotation: $0.displayAnnotation) })
+        list.setCandidates(presentedCandidates.map {
+            CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ")
+        })
         list.selectedIndex = selectedCandidate
         list.onSelect = { [weak self] index in
             self?.closeExpandedCandidates()
@@ -1865,6 +1934,7 @@ final class KeyboardSurface: UIInputView {
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
         selectedCandidate = nil
         converted = []
+        presentedCandidates = []
         resultGeneration = nil
         bunsetsuActionHandled = false
         let reading = composition.reading
@@ -1889,6 +1959,7 @@ final class KeyboardSurface: UIInputView {
         guard !reading.isEmpty else { return }
         closeExpandedCandidates()
         converted = []
+        presentedCandidates = []
         resultGeneration = nil
         selectedCandidate = nil
         candidateBar.candidates = []
@@ -1940,9 +2011,22 @@ final class KeyboardSurface: UIInputView {
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
+                let macros = AndroidTextMacroCandidatePolicy.candidates(
+                    in: self.personalLexicon.textMacros,
+                    reading: query,
+                    contextAllowed: self.textMacroContextAllowed
+                ).map { macro in
+                    ConversionCandidate(
+                        id: 0, text: macro.name, score: Int64.min, range: NSRange(location: 0, length: query.utf16.count),
+                        dictionaries: ["text_macro"], correctedReading: macro.reading,
+                        textMacroID: macro.id
+                    )
+                }
+                let candidates = result.candidates + macros
                 self.converted = result.candidates
+                self.presentedCandidates = candidates
                 self.resultGeneration = generation
-                self.candidateBar.setCandidates(result.candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.displayAnnotation) })
+                self.candidateBar.setCandidates(candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ") })
                 self.candidateBar.isUpdating = false
                 if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
@@ -1951,6 +2035,10 @@ final class KeyboardSurface: UIInputView {
                 self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "") + statusNote
             case .failure(let error):
                 // Keep every reading character; Return can still commit the reading.
+                self.converted = []
+                self.presentedCandidates = []
+                self.resultGeneration = nil
+                self.selectedCandidate = nil
                 self.candidateBar.candidates = []
                 self.candidateBar.isUpdating = false
                 self.status.text = reading + " · " + error.localizedDescription + statusNote
@@ -1968,7 +2056,13 @@ final class KeyboardSurface: UIInputView {
     private func chooseCandidate(_ index: Int) {
         beforeInput?()
         guard let generation = resultGeneration, composition.accepts(generation),
-              converted.indices.contains(index) else { return }
+              presentedCandidates.indices.contains(index) else { return }
+        if let macroID = presentedCandidates[index].textMacroID {
+            selectedCandidate = nil
+            executeTextMacro?(macroID, nil)
+            return
+        }
+        guard converted.indices.contains(index) else { return }
         selectedCandidate = index
         commitComposition()
     }
@@ -1983,6 +2077,7 @@ final class KeyboardSurface: UIInputView {
         containsRomaji = false
         englishComposition = false
         converted = []
+        presentedCandidates = []
         resultGeneration = nil
         selectedCandidate = nil
         candidateBar.isUpdating = false
@@ -2014,6 +2109,7 @@ final class KeyboardSurface: UIInputView {
         containsRomaji = false
         if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
         converted = []
+        presentedCandidates = []
         resultGeneration = nil
         selectedCandidate = nil
         candidateBar.isUpdating = !composition.reading.isEmpty

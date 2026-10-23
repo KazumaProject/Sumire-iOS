@@ -5,7 +5,7 @@ import CoreFoundation
 /// Missing values preserve the distinction between defaults and explicit overrides.
 public struct KeyboardSettingsSnapshot: Codable, Equatable {
     public enum Value: Codable, Equatable {
-        case boolean(Bool), number(Double), text(String), data(Data)
+        case boolean(Bool), number(Double), text(String), textArray([String]), data(Data)
     }
     public var version = 1
     public var values: [String: Value] = [:]
@@ -13,7 +13,8 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
     public static let maximumBytes = 20 * 1024 * 1024
 
     private enum Rule {
-        case boolean, number(ClosedRange<Double>, integer: Bool), text(Set<String>), boundedText(Int), data
+        case boolean, number(ClosedRange<Double>, integer: Bool), text(Set<String>), boundedText(Int)
+        case textArray(Set<String>, maximumCount: Int, maximumElementBytes: Int), data
     }
     private static var rules: [String: Rule] {
         var result: [String: Rule] = [:]
@@ -29,6 +30,11 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         result["clipboard.expirationEnabled"] = .boolean
         result["clipboard.retentionHours"] = .number(1...72, integer: true)
         result["keyboard.lastUsed"] = .boundedText(256)
+        result[KeyboardToolbarPreferences.storageKey] = .textArray(
+            Set(KeyboardToolbarAction.allCases.map(\.rawValue) + ["symbols"]),
+            maximumCount: KeyboardToolbarAction.allCases.count,
+            maximumElementBytes: 64
+        )
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)
         result["categoryMask"] = .number(0...Double(0x3fff_ffff), integer: true)
@@ -70,6 +76,16 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case .text, .boundedText:
                 guard let value = raw as? String else { throw invalid(key) }
                 snapshot.values[key] = .text(value)
+            case .textArray(let allowed, let maximumCount, let maximumElementBytes):
+                guard let values = raw as? [String], values.count <= maximumCount,
+                      values.allSatisfy({ allowed.contains($0) && $0.utf8.count <= maximumElementBytes }) else {
+                    throw invalid(key)
+                }
+                if key == KeyboardToolbarPreferences.storageKey {
+                    snapshot.values[key] = .textArray(KeyboardToolbarPreferences.normalize(values).map(\.rawValue))
+                } else {
+                    snapshot.values[key] = .textArray(values)
+                }
             case .data:
                 guard let value = raw as? Data else { throw invalid(key) }
                 snapshot.values[key] = .data(value)
@@ -92,6 +108,14 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
                 guard allowed.contains(text) else { throw Self.invalid(key) }
             case (.boundedText(let limit), .text(let text)):
                 guard text.utf8.count <= limit else { throw Self.invalid(key) }
+            case (.textArray(let allowed, let maximumCount, let maximumElementBytes), .textArray(let values)):
+                guard values.count <= maximumCount,
+                      values.allSatisfy({ allowed.contains($0) && $0.utf8.count <= maximumElementBytes }),
+                      Set(values).count == values.count else { throw Self.invalid(key) }
+                if key == KeyboardToolbarPreferences.storageKey,
+                   KeyboardToolbarPreferences.normalize(values).map(\.rawValue) != values {
+                    throw Self.invalid(key)
+                }
             case (.data, .data(let data)):
                 if key == CustomInputModeStore.storageKey {
                     _ = try CustomInputModeStore.decode(data)
@@ -142,6 +166,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case .boolean(let value): defaults.set(value, forKey: key)
             case .number(let value): defaults.set(value, forKey: key)
             case .text(let value): defaults.set(value, forKey: key)
+            case .textArray(let value): defaults.set(value, forKey: key)
             case .data(let value): defaults.set(value, forKey: key)
             }
         }
@@ -163,6 +188,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             case .boolean(let value): defaults.set(value, forKey: key)
             case .number(let value): defaults.set(value, forKey: key)
             case .text(let value): defaults.set(value, forKey: key)
+            case .textArray(let value): defaults.set(value, forKey: key)
             case .data(let value): defaults.set(value, forKey: key)
             }
         }

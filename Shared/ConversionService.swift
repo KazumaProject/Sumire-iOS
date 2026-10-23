@@ -13,6 +13,7 @@ struct ConversionCandidate {
     let rawText: String?
     let correctedReading: String?
     let isReadingPrefix: Bool
+    let textMacroID: String?
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
     var displayAnnotation: String? {
@@ -85,6 +86,7 @@ struct ConversionCandidate {
                 score: first.score, range: first.range, dictionaries: dictionaries,
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
+                textMacroID: first.textMacroID,
                 presentationKind: first.presentationKind, classifiedCategories: categories)
         }
         return merged
@@ -96,6 +98,7 @@ struct ConversionCandidate {
     init(id: UInt64, text: String, score: Int64, range: NSRange,
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
+         textMacroID: String? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = []) {
         self.id = id
         self.text = text
@@ -106,6 +109,7 @@ struct ConversionCandidate {
         self.rawText = rawText
         self.correctedReading = correctedReading
         self.isReadingPrefix = isReadingPrefix
+        self.textMacroID = textMacroID
         self.presentationKind = presentationKind
         self.classifiedCategories = classifiedCategories
     }

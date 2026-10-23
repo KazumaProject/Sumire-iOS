@@ -159,4 +159,52 @@ final class PersonalLibrary: ObservableObject {
         if template { next.templates = group } else { next.words = group }
         try apply(next)
     }
+
+    func putTextMacro(_ macro: PersonalTextMacro, originalID: String?) throws {
+        var next = lexicon
+        let normalized = macro.normalized()
+        if let originalID {
+            guard let index = next.textMacros.firstIndex(where: { $0.id == originalID }) else {
+                throw PersonalDataError("編集対象の定型マクロが見つかりません")
+            }
+            guard !next.textMacros.contains(where: {
+                $0.id != originalID &&
+                    AndroidTextMacroNameComparison.sqliteNoCaseKey($0.name) ==
+                    AndroidTextMacroNameComparison.sqliteNoCaseKey(normalized.name)
+            }) else {
+                throw PersonalDataError("同じ名前の定型マクロが登録されています")
+            }
+            next.textMacros[index] = normalized
+        } else {
+            guard !next.textMacros.contains(where: {
+                AndroidTextMacroNameComparison.sqliteNoCaseKey($0.name) ==
+                    AndroidTextMacroNameComparison.sqliteNoCaseKey(normalized.name)
+            }) else {
+                throw PersonalDataError("同じ名前の定型マクロが登録されています")
+            }
+            next.textMacros.append(normalized)
+        }
+        try apply(next)
+    }
+
+    func removeTextMacros(ids: Set<String>) throws {
+        var next = lexicon
+        next.textMacros.removeAll { ids.contains($0.id) }
+        try apply(next)
+    }
+
+    func setTextMacroEnabled(id: String, enabled: Bool) throws {
+        var next = lexicon
+        guard let index = next.textMacros.firstIndex(where: { $0.id == id }) else {
+            throw PersonalDataError("定型マクロが見つかりません")
+        }
+        next.textMacros[index].enabled = enabled
+        try apply(next)
+    }
+
+    func importTextMacros(_ preview: AndroidTextMacroImportPreview) throws {
+        var next = lexicon
+        next.textMacros = try AndroidTextMacroBackup.merge(preview, into: next.textMacros)
+        try apply(next)
+    }
 }

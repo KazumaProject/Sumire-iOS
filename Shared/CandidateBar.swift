@@ -2,25 +2,51 @@ import UIKit
 import CoreText
 import ImageIO
 import UniformTypeIdentifiers
+import SumireCore
+
+@MainActor
+protocol KeyboardToolbarActionRouting: AnyObject {
+    var keyboardToolbarLiveConversionEnabled: Bool { get }
+    @discardableResult func toggleKeyboardToolbarLiveConversion() -> Bool
+}
 
 /// Horizontally scrolling, reusable candidate cells. No mock conversion candidates.
 final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     var onExpand: (() -> Void)?
     var onSizingChange: (() -> Void)?
     private let expand = UIButton(type: .system)
+    private let keyboardPicker = UIButton(type: .system)
+    private let liveConversionToggle = UIButton(type: .system)
+    private let datePicker = UIButton(type: .system)
+    private let toolbarStack = UIStackView()
+    private let pasteGroup = UIStackView()
+    private var toolbarActions: [KeyboardToolbarAction] = []
     private var collectionTrailing: NSLayoutConstraint!
     private var expanded = false
     var onResize: (() -> Void)?
     var onClipboardCaptured: ((String?, Data?) -> Void)?
     var captureClipboardHistory = false
     var onSymbols: (() -> Void)?
+    var onClipboard: (() -> Void)?
+    var onTemplates: (() -> Void)?
+    var onTextMacros: (() -> Void)?
     private let symbols = UIButton(type: .system)
+    private let clipboardShortcut = UIButton(type: .system)
+    private let templates = UIButton(type: .system)
+    private let textMacros = UIButton(type: .system)
     var onPasteText: ((String) -> Void)?
+    var onInsertShortcutText: ((String) -> Void)?
     var onClipboardNotice: ((String) -> Void)?
     var automaticallyPreviewClipboard = false {
         didSet { if automaticallyPreviewClipboard != oldValue { clipboardReadGeneration = -1; refreshClipboard() } }
     }
-    var clipboardAccessAllowed = true { didSet { refreshClipboard() } }
+    var clipboardAccessAllowed = true {
+        didSet {
+            guard clipboardAccessAllowed != oldValue else { return }
+            clipboardRequest = UUID()
+            refreshClipboard()
+        }
+    }
     private let clipboard = UIButton(type: .system)
     private let pasteControl: UIPasteControl = {
         let configuration = UIPasteControl.Configuration()
@@ -41,14 +67,32 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         clipboardObservers.removeAll()
         guard window != nil else { return }
         for name in [UIPasteboard.changedNotification, UIApplication.didBecomeActiveNotification] {
-            clipboardObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in self?.refreshClipboard() })
+            clipboardObservers.append(NotificationCenter.default.addObserver(forName: name, object: nil, queue: .main) { [weak self] _ in
+                self?.reloadToolbarSettings()
+                self?.refreshClipboard()
+            })
         }
+        reloadToolbarSettings()
         refreshClipboard()
     }
     deinit { clipboardObservers.forEach(NotificationCenter.default.removeObserver) }
 
     func refreshClipboard() {
-        guard window != nil, clipboardAccessAllowed else { clipboard.isHidden = true; pasteControl.isHidden = true; return }
+        guard window != nil, showsShortcuts, toolbarActions.contains(.paste) else {
+            clipboard.isHidden = true; pasteControl.isHidden = true; pasteGroup.isHidden = true; return
+        }
+
+        // UIPasteControl is the system's explicit, user-initiated paste path.
+        // Keep it available with Full Access OFF; only hide the ambient
+        // clipboard preview, which reads UIPasteboard directly.
+        pasteControl.isHidden = false
+        pasteGroup.isHidden = false
+        guard clipboardAccessAllowed else {
+            clipboard.isHidden = true
+            clipboardReadGeneration = -1
+            return
+        }
+
         let board = UIPasteboard.general
         let generation = board.changeCount
         if generation != clipboardGeneration {
@@ -57,22 +101,26 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             // Type detection does not pull the clipboard payload or ask for paste permission.
             clipboard.setTitle(board.hasImages ? "コピーした画像" : "コピーした文字", for: .normal)
         }
-        clipboard.isHidden = !showsShortcuts || generation == dismissedGeneration || !(board.hasImages || board.hasStrings)
-        pasteControl.isHidden = clipboard.isHidden
+        clipboard.isHidden = generation == dismissedGeneration || !(board.hasImages || board.hasStrings)
         if automaticallyPreviewClipboard, !clipboard.isHidden, clipboardReadGeneration != generation {
             clipboardReadGeneration = generation
             loadClipboard(itemProviders: board.itemProviders, insertText: false)
         }
     }
     override func paste(itemProviders: [NSItemProvider]) {
+        guard window != nil, showsShortcuts, toolbarActions.contains(.paste) else { return }
         loadClipboard(itemProviders: itemProviders, insertText: true)
     }
     private func loadClipboard(itemProviders: [NSItemProvider], insertText: Bool) {
-        guard clipboardAccessAllowed, showsShortcuts, let provider = itemProviders.first else { return }
-        let generation = UIPasteboard.general.changeCount
+        guard showsShortcuts, let provider = itemProviders.first else { return }
+        // A paste control supplies providers only after an explicit user action.
+        // In that path, never query UIPasteboard or capture the supplied data in
+        // local clipboard history when Full Access is disabled.
+        guard insertText || clipboardAccessAllowed else { return }
+        let generation = clipboardAccessAllowed ? UIPasteboard.general.changeCount : nil
         clipboardRequest = UUID()
         let request = clipboardRequest
-        let captureHistory = captureClipboardHistory
+        let captureHistory = clipboardAccessAllowed && captureClipboardHistory
         if provider.hasItemConformingToTypeIdentifier(UTType.image.identifier) {
             provider.loadFileRepresentation(forTypeIdentifier: UTType.image.identifier) { [weak self] url, error in
                 var thumbnail: CGImage?
@@ -91,10 +139,8 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                     ] as CFDictionary)
                 }
                 DispatchQueue.main.async {
-                    guard let self, self.window != nil, self.clipboardAccessAllowed, self.clipboardRequest == request,
-                          (insertText || self.automaticallyPreviewClipboard),
-                          UIPasteboard.general.changeCount == generation else { return }
-                    if self.captureClipboardHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
+                    guard let self, self.acceptClipboardResult(request: request, insertText: insertText, generation: generation) else { return }
+                    if captureHistory, let encoded { self.onClipboardCaptured?(nil, encoded) }
                     if let thumbnail {
                         self.clipboard.setImage(UIImage(cgImage: thumbnail).withRenderingMode(.alwaysOriginal), for: .normal)
                         self.clipboard.setTitle("入力欄で貼り付け", for: .normal)
@@ -105,23 +151,29 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         } else if provider.canLoadObject(ofClass: NSString.self) {
             provider.loadObject(ofClass: NSString.self) { [weak self] object, error in
                 DispatchQueue.main.async {
-                    guard let self, self.window != nil, self.clipboardAccessAllowed, self.clipboardRequest == request,
-                          (insertText || self.automaticallyPreviewClipboard), self.showsShortcuts,
-                          UIPasteboard.general.changeCount == generation else { return }
+                    guard let self, self.acceptClipboardResult(request: request, insertText: insertText, generation: generation) else { return }
                     guard let text = object as? String, !text.isEmpty else {
                         self.onClipboardNotice?("クリップボードを読み込めませんでした"); return
                     }
-                    if self.captureClipboardHistory { self.onClipboardCaptured?(text, nil) }
+                    if captureHistory { self.onClipboardCaptured?(text, nil) }
                     if insertText {
                         self.onPasteText?(text)
-                        self.dismissedGeneration = generation
-                        self.refreshClipboard()
+                        if let generation {
+                            self.dismissedGeneration = generation
+                            self.refreshClipboard()
+                        }
                     } else {
                         self.clipboard.setTitle(String(text.prefix(120)), for: .normal)
                     }
                 }
             }
         }
+    }
+    private func acceptClipboardResult(request: UUID, insertText: Bool, generation: Int?) -> Bool {
+        guard window != nil, showsShortcuts, clipboardRequest == request else { return false }
+        if insertText { return true }
+        guard clipboardAccessAllowed, automaticallyPreviewClipboard, let generation else { return false }
+        return UIPasteboard.general.changeCount == generation
     }
     var showsShortcuts = true {
         didSet {
@@ -131,8 +183,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             updateVerticalScrolling()
             onSizingChange?()
             collection.isHidden = showsShortcuts
-            resize.isHidden = !showsShortcuts
-            symbols.isHidden = !showsShortcuts
+            toolbarStack.isHidden = !showsShortcuts
             updateExpansionButton()
             refreshClipboard()
         }
@@ -155,11 +206,56 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     }
     func applyPalette(_ value: KeyboardPalette) {
         palette = value
+        toolbarStack.tintColor = value.foreground
         symbols.tintColor = value.foreground
         expand.tintColor = value.foreground
         resize.tintColor = value.foreground
         clipboard.tintColor = value.foreground
+        liveConversionToggle.tintColor = value.foreground
+        clipboardShortcut.tintColor = value.foreground
+        templates.tintColor = value.foreground
+        textMacros.tintColor = value.foreground
         refreshVisibleCells()
+    }
+
+    /// Rebuilds the visible toolbar from the same app-group preference the app
+    /// edits. This reads settings only and does not inspect host text.
+    func reloadToolbarSettings(defaults: UserDefaults? = nil) {
+        let source = defaults ?? KeyboardSettings.sharedDefaults ?? .standard
+        let actions = KeyboardToolbarPreferences.load(defaults: source)
+        if actions != toolbarActions {
+            toolbarActions = actions
+            for view in toolbarStack.arrangedSubviews {
+                toolbarStack.removeArrangedSubview(view)
+                view.removeFromSuperview()
+            }
+            for action in actions {
+                switch action {
+                case .emoji: toolbarStack.addArrangedSubview(symbols)
+                case .paste: toolbarStack.addArrangedSubview(pasteGroup)
+                case .template: toolbarStack.addArrangedSubview(templates)
+                case .textMacros: toolbarStack.addArrangedSubview(textMacros)
+                case .clipboard: toolbarStack.addArrangedSubview(clipboardShortcut)
+                case .resize: toolbarStack.addArrangedSubview(resize)
+                case .selectDate: toolbarStack.addArrangedSubview(datePicker)
+                case .keyboardPicker: toolbarStack.addArrangedSubview(keyboardPicker)
+                case .liveConversionToggle: toolbarStack.addArrangedSubview(liveConversionToggle)
+                }
+            }
+            for view in toolbarStack.arrangedSubviews.dropLast() { toolbarStack.setCustomSpacing(0, after: view) }
+            for index in actions.indices.dropLast() where actions[index + 1] == .paste {
+                toolbarStack.setCustomSpacing(8, after: toolbarStack.arrangedSubviews[index])
+            }
+        }
+        refreshLiveConversionToggle()
+        refreshClipboard()
+    }
+
+    /// Connects the globe control to UIInputViewController's documented input
+    /// mode-list handler. UIKit needs the original UIControl event to distinguish
+    /// a tap (advance) from a long press or swipe (show the enabled-keyboard list).
+    func bindKeyboardPicker(target: Any?, action: Selector) {
+        keyboardPicker.addTarget(target, action: action, for: .allTouchEvents)
     }
     struct Presentation: Equatable {
         let text: String
@@ -264,56 +360,143 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                                      expand.heightAnchor.constraint(equalToConstant: 44)])
         updateExpansionButton()
         resize.setImage(KeyboardIcon.resize.image, for: .normal)
+        resize.accessibilityIdentifier = "toolbar-resize"
         resize.accessibilityLabel = "キーボードのサイズ変更"
         resize.addAction(UIAction { [weak self] _ in self?.onResize?() }, for: .touchUpInside)
         resize.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(resize)
-        NSLayoutConstraint.activate([resize.leadingAnchor.constraint(equalTo: leadingAnchor),
-                                     resize.topAnchor.constraint(equalTo: topAnchor),
-                                     resize.widthAnchor.constraint(equalToConstant: 44),
+        NSLayoutConstraint.activate([resize.widthAnchor.constraint(equalToConstant: 44),
                                      resize.heightAnchor.constraint(equalToConstant: 44)])
         symbols.setImage(UIImage(systemName: "face.smiling"), for: .normal)
         symbols.accessibilityLabel = "絵文字・顔文字・記号・クリップボード"
         symbols.accessibilityIdentifier = "symbol-open"
         symbols.addAction(UIAction { [weak self] _ in self?.onSymbols?() }, for: .touchUpInside)
         symbols.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(symbols)
-        NSLayoutConstraint.activate([symbols.leadingAnchor.constraint(equalTo: resize.trailingAnchor),
-                                     symbols.topAnchor.constraint(equalTo: topAnchor),
-                                     symbols.widthAnchor.constraint(equalToConstant: 44),
+        NSLayoutConstraint.activate([symbols.widthAnchor.constraint(equalToConstant: 44),
                                      symbols.heightAnchor.constraint(equalToConstant: 44)])
+        clipboardShortcut.setImage(UIImage(systemName: "doc.on.clipboard"), for: .normal)
+        clipboardShortcut.accessibilityIdentifier = "toolbar-clipboard"
+        clipboardShortcut.accessibilityLabel = "クリップボード履歴"
+        clipboardShortcut.addAction(UIAction { [weak self] _ in self?.onClipboard?() }, for: .touchUpInside)
+        clipboardShortcut.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([clipboardShortcut.widthAnchor.constraint(equalToConstant: 44),
+                                     clipboardShortcut.heightAnchor.constraint(equalToConstant: 44)])
+        templates.setImage(UIImage(systemName: "text.quote"), for: .normal)
+        templates.accessibilityIdentifier = "toolbar-template"
+        templates.accessibilityLabel = "定型文"
+        templates.addAction(UIAction { [weak self] _ in self?.onTemplates?() }, for: .touchUpInside)
+        templates.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([templates.widthAnchor.constraint(equalToConstant: 44),
+                                     templates.heightAnchor.constraint(equalToConstant: 44)])
+        textMacros.setImage(UIImage(systemName: "text.badge.plus"), for: .normal)
+        textMacros.accessibilityIdentifier = "toolbar-text-macros"
+        textMacros.accessibilityLabel = "定型マクロ"
+        textMacros.addAction(UIAction { [weak self] _ in self?.onTextMacros?() }, for: .touchUpInside)
+        textMacros.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([textMacros.widthAnchor.constraint(equalToConstant: 44),
+                                     textMacros.heightAnchor.constraint(equalToConstant: 44)])
+        keyboardPicker.setImage(UIImage(systemName: "globe"), for: .normal)
+        keyboardPicker.accessibilityIdentifier = "toolbar-keyboard-picker"
+        keyboardPicker.accessibilityLabel = "キーボード切替"
+        keyboardPicker.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([keyboardPicker.widthAnchor.constraint(equalToConstant: 44),
+                                     keyboardPicker.heightAnchor.constraint(equalToConstant: 44)])
+        datePicker.setImage(UIImage(systemName: "calendar"), for: .normal)
+        datePicker.accessibilityIdentifier = "toolbar-date-picker"
+        datePicker.accessibilityLabel = "日付を選択"
+        let insertDate: (String) -> Void = { [weak self] text in self?.onInsertShortcutText?(text) }
+        datePicker.menu = UIMenu(children: [UIDeferredMenuElement.uncached { completion in
+            let actions = KeyboardToolbarDateOptions.strings().map { text in
+                UIAction(title: text) { _ in insertDate(text) }
+            }
+            completion(actions)
+        }])
+        datePicker.showsMenuAsPrimaryAction = true
+        datePicker.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([datePicker.widthAnchor.constraint(equalToConstant: 44),
+                                     datePicker.heightAnchor.constraint(equalToConstant: 44)])
+        liveConversionToggle.setImage(UIImage(systemName: "textformat"), for: .normal)
+        liveConversionToggle.accessibilityIdentifier = "toolbar-live-conversion"
+        liveConversionToggle.accessibilityLabel = "ライブ変換"
+        liveConversionToggle.accessibilityHint = "このキーボードのライブ変換を切り替えます"
+        liveConversionToggle.layer.cornerRadius = 8
+        liveConversionToggle.addAction(UIAction { [weak self] _ in self?.toggleLiveConversionAction() }, for: .touchUpInside)
+        liveConversionToggle.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([liveConversionToggle.widthAnchor.constraint(equalToConstant: 44),
+                                     liveConversionToggle.heightAnchor.constraint(equalToConstant: 44)])
         pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.text.identifier, UTType.image.identifier])
         pasteControl.target = self
         pasteControl.accessibilityIdentifier = "clipboard-preview"
         pasteControl.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(pasteControl)
-        NSLayoutConstraint.activate([
-            pasteControl.leadingAnchor.constraint(equalTo: symbols.trailingAnchor, constant: 8),
-            pasteControl.topAnchor.constraint(equalTo: topAnchor),
-            pasteControl.widthAnchor.constraint(equalToConstant: 100),
-            pasteControl.heightAnchor.constraint(equalToConstant: 44)
-        ])
+        NSLayoutConstraint.activate([pasteControl.widthAnchor.constraint(equalToConstant: 100),
+                                     pasteControl.heightAnchor.constraint(equalToConstant: 44)])
         clipboard.accessibilityIdentifier = "clipboard-description"
         clipboard.isUserInteractionEnabled = false
         clipboard.titleLabel?.lineBreakMode = .byTruncatingTail
         clipboard.imageView?.contentMode = .scaleAspectFit
         clipboard.translatesAutoresizingMaskIntoConstraints = false
-        addSubview(clipboard)
+        NSLayoutConstraint.activate([clipboard.heightAnchor.constraint(equalToConstant: 44)])
+        pasteGroup.axis = .horizontal
+        pasteGroup.alignment = .center
+        pasteGroup.distribution = .fill
+        pasteGroup.spacing = 8
+        pasteGroup.accessibilityIdentifier = "toolbar-paste-group"
+        pasteGroup.addArrangedSubview(pasteControl)
+        pasteGroup.addArrangedSubview(clipboard)
+        toolbarStack.axis = .horizontal
+        toolbarStack.alignment = .center
+        toolbarStack.distribution = .fill
+        toolbarStack.spacing = 0
+        toolbarStack.accessibilityIdentifier = "keyboard-toolbar-actions"
+        toolbarStack.translatesAutoresizingMaskIntoConstraints = false
+        addSubview(toolbarStack)
         NSLayoutConstraint.activate([
-            clipboard.leadingAnchor.constraint(equalTo: pasteControl.trailingAnchor, constant: 8),
-            clipboard.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
-            clipboard.topAnchor.constraint(equalTo: topAnchor),
-            clipboard.heightAnchor.constraint(equalToConstant: 44)
+            toolbarStack.leadingAnchor.constraint(equalTo: leadingAnchor),
+            toolbarStack.trailingAnchor.constraint(equalTo: trailingAnchor, constant: -8),
+            // Keep the toolbar in the first candidate row while the configured
+            // height reserves the remaining rows for candidates. Centering it
+            // in a two- or three-row bar makes the controls jump vertically
+            // when the composition becomes empty.
+            toolbarStack.topAnchor.constraint(equalTo: topAnchor),
+            toolbarStack.heightAnchor.constraint(equalToConstant: 44)
         ])
+        reloadToolbarSettings(defaults: KeyboardSettings.sharedDefaults ?? .standard)
         clipboard.isHidden = true
         pasteControl.isHidden = true
+        pasteGroup.isHidden = true
         collection.isHidden = true
+        toolbarStack.isHidden = false
         accessibilityLabel = "変換候補"
     }
     private func updateExpansionButton() {
         let visible = !expanded && !showsShortcuts && !candidates.isEmpty
         expand.isHidden = !visible
         collectionTrailing?.constant = visible ? -44 : 0
+    }
+
+    private func toggleLiveConversionAction() {
+        guard let router = toolbarActionRouter() else { return }
+        let enabled = router.toggleKeyboardToolbarLiveConversion()
+        setLiveConversionToggle(enabled: enabled)
+    }
+
+    private func refreshLiveConversionToggle() {
+        guard let router = toolbarActionRouter() else { return }
+        setLiveConversionToggle(enabled: router.keyboardToolbarLiveConversionEnabled)
+    }
+
+    private func setLiveConversionToggle(enabled: Bool) {
+        liveConversionToggle.isSelected = enabled
+        liveConversionToggle.accessibilityValue = enabled ? "オン" : "オフ"
+        liveConversionToggle.backgroundColor = enabled ? UIColor.secondarySystemFill : .clear
+    }
+
+    private func toolbarActionRouter() -> KeyboardToolbarActionRouting? {
+        var ancestor: UIView? = self
+        while let view = ancestor {
+            if let router = view as? KeyboardToolbarActionRouting { return router }
+            ancestor = view.superview
+        }
+        return nil
     }
     func useExpandedLayout() {
         expanded = true

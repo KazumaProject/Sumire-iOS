@@ -36,6 +36,22 @@ final class KeyboardSettingsAccessTests: XCTestCase {
         }
     }
 
+    func testClosedAccessReadsToolbarOrderSavedByContainingApp() {
+        stores { shared, local in
+            KeyboardToolbarPreferences.save([.keyboardPicker, .emoji, .liveConversionToggle], defaults: shared)
+            let before = shared.dictionaryRepresentation() as NSDictionary
+
+            let access = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
+
+            XCTAssertEqual(
+                KeyboardToolbarPreferences.load(defaults: access.readDefaults),
+                [.keyboardPicker, .emoji, .liveConversionToggle]
+            )
+            XCTAssertFalse(access.writesSharedSettings)
+            XCTAssertEqual(shared.dictionaryRepresentation() as NSDictionary, before)
+        }
+    }
+
     func testRuntimeWritesPersistPrivatelyAndHostChangesInvalidateOverlay() throws {
         try stores { shared, local in
             let key = KeyboardSizingStore.key(.portrait)
@@ -58,6 +74,27 @@ final class KeyboardSettingsAccessTests: XCTestCase {
             shared.removeObject(forKey: key)
             recreated.reload()
             XCTAssertEqual(KeyboardSizingStore(defaults: recreated.readDefaults).load(.portrait), .standard(.portrait))
+        }
+    }
+
+    func testClosedAccessPreservesLiveConversionToggleUntilHostPreferenceChanges() {
+        stores { shared, local in
+            shared.set(false, forKey: "liveConversion")
+            let access = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
+            XCTAssertFalse(access.readDefaults.bool(forKey: "liveConversion"))
+
+            access.writeDefaults.set(true, forKey: "liveConversion")
+            access.didWrite(["liveConversion"])
+            XCTAssertTrue(access.readDefaults.bool(forKey: "liveConversion"))
+            XCTAssertFalse(shared.bool(forKey: "liveConversion"))
+
+            let reopened = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
+            XCTAssertTrue(reopened.readDefaults.bool(forKey: "liveConversion"))
+
+            shared.set(true, forKey: "liveConversion")
+            reopened.reload()
+            XCTAssertTrue(reopened.readDefaults.bool(forKey: "liveConversion"))
+            XCTAssertNil(local.object(forKey: "liveConversion"))
         }
     }
 

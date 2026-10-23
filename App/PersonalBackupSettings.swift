@@ -130,7 +130,7 @@ struct PersonalBackupSettings: View {
             switch result {
             case .success(let count):
                 onRestore()
-                message = "Android設定からiOS対応の \(count) 項目を取り込みました。未対応のAndroid設定は変更していません。"
+                message = "Android設定からiOS対応の \(count) 項目を取り込みました。\(androidToolbarResultMessage(backup)) 未対応のAndroid設定は変更していません。"
             case .failure(let error): message = error.localizedDescription
             }
         }
@@ -143,11 +143,37 @@ struct PersonalBackupSettings: View {
     }
 
     private var androidImportConfirmationMessage: String {
-        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込み、記録されていない設定はAndroidの既定値に戻します。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。iOS専用設定、辞書、学習データは変更しません。"
+        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込み、記録されていない設定はAndroidの既定値に戻します。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目は変更しません。\(androidToolbarConfirmationMessage) iOS専用設定、辞書、学習データは変更しません。"
         if let hours = stagedAndroidClipboardExpiryWarningHours {
             text += "取込後は期限削除が有効で、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
         }
         return text
+    }
+
+    private var androidToolbarConfirmationMessage: String {
+        guard let backup = stagedAndroid else { return "" }
+        guard let shortcutIDs = backup.shortcutIDs else {
+            return "AndroidバックアップにツールバーIDがないため、現在のiOSツールバー配置を維持します。"
+        }
+        guard let toolbarImport = backup.toolbarShortcutImport, !toolbarImport.actions.isEmpty else {
+            let fallback = shortcutIDs.isEmpty ? "Android側の「設定」既定" : "このID一覧"
+            return "\(fallback)に対応するiOSキーボード操作がないため、現在のiOSツールバー配置を維持します。"
+        }
+        let skipped = toolbarImport.unsupportedIDs.count
+        let skippedText = skipped == 0 ? "" : "。iOSに対応する動作がないID \(skipped) 件はスキップします"
+        return "ツールバーは対応する \(toolbarImport.actions.count) 項目をAndroidの順序で取り込みます\(skippedText)。"
+    }
+
+    private func androidToolbarResultMessage(_ backup: AndroidPreferenceBackup) -> String {
+        guard let shortcutIDs = backup.shortcutIDs else {
+            return "ツールバーIDが記録されていないため、iOSの配置は維持しました。"
+        }
+        guard let toolbarImport = backup.toolbarShortcutImport, !toolbarImport.actions.isEmpty else {
+            let fallback = shortcutIDs.isEmpty ? "Androidの設定ショートカット既定" : "AndroidツールバーID"
+            return "対応するツールバー操作がないため、iOSの配置は維持しました（\(fallback)）。"
+        }
+        let skippedText = toolbarImport.unsupportedIDs.isEmpty ? "" : "。未対応ID \(toolbarImport.unsupportedIDs.count) 件はスキップしました"
+        return "対応するツールバー \(toolbarImport.actions.count) 項目をAndroidの順序で設定しました\(skippedText)。"
     }
 
     private var stagedAndroidClipboardExpiryWarningHours: Int? {

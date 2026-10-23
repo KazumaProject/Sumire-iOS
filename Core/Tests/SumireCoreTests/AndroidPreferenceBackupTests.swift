@@ -249,7 +249,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         }
     }
 
-    func testNullRemovesOnlyMappedPreferenceAndVersionTwoRetainsNoToolbarMutation() throws {
+    func testNullRemovesOnlyMappedPreferenceAndImportsSupportedToolbarActions() throws {
         let data = json([
             ["key": "live_conversion_preference", "type": "null"],
             ["key": "clipboard_history_preference", "type": "null"],
@@ -266,6 +266,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             "clipboard.retentionHours", SymbolKeyboardMode.initialModeKey
         ])
         XCTAssertEqual(backup.threeStepInputMode, .all)
+        XCTAssertEqual(backup.toolbarShortcutImport?.actions, [.emoji])
+        XCTAssertEqual(backup.toolbarShortcutImport?.unsupportedIDs, ["symbols"])
 
         let suite = "AndroidPreferenceBackupTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -276,6 +278,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defaults.set(24, forKey: "clipboard.retentionHours")
         defaults.set("symbol", forKey: SymbolKeyboardMode.initialModeKey)
         defaults.set(2, forKey: "candidateRowCount")
+        KeyboardToolbarPreferences.save([.resize], defaults: defaults)
         var existingFlickStyle = FlickStyleSettings()
         existingFlickStyle.threeStepInput = .contracted
         existingFlickStyle.rotation = .counterclockwise
@@ -288,6 +291,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: SymbolKeyboardMode.initialModeKey))
         XCTAssertTrue(defaults.bool(forKey: "learningEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 2)
+        XCTAssertEqual(KeyboardToolbarPreferences.load(defaults: defaults), [.emoji])
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).threeStepInput, .all)
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).rotation, .counterclockwise)
     }
@@ -391,9 +395,59 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
             entry("live_conversion_preference", "null", true)
         ])))
-        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
-            entry("live_conversion_preference", "boolean", true)
-        ], version: 1, shortcutIDs: ["symbols"])))
+        XCTAssertEqual(try AndroidPreferenceBackup.decode(json([], version: 1, shortcutIDs: ["emoji"]))
+            .toolbarShortcutImport?.actions, [.emoji])
+    }
+
+    func testShortcutIDsDistinguishOmittedNullEmptyAndSupportedLists() throws {
+        XCTAssertNil(try AndroidPreferenceBackup.decode(json([])).shortcutIDs)
+        XCTAssertNil(try AndroidPreferenceBackup.decode(json([], nullShortcutIDs: true)).shortcutIDs)
+        XCTAssertEqual(try AndroidPreferenceBackup.decode(json([], version: 2, shortcutIDs: [])).shortcutIDs, [])
+
+        let imported = try AndroidPreferenceBackup.decode(json([], version: 2, shortcutIDs: [
+            "clip_board", "emoji", "paste", "template", "text_macro", "select_date", "keyboard_picker",
+            "live_conversion_toggle", "settings", "voice_input", "emoji"
+        ]))
+        XCTAssertEqual(imported.toolbarShortcutImport?.actions, [
+            .clipboard, .emoji, .paste, .template, .textMacros, .selectDate, .keyboardPicker, .liveConversionToggle
+        ])
+        XCTAssertEqual(imported.toolbarShortcutImport?.unsupportedIDs, ["settings", "voice_input"])
+    }
+
+    func testToolbarImportPreservesExistingActionsWhenNoAndroidActionMaps() throws {
+        let cases: [(Int, [String]?, Bool)] = [
+            (1, nil, false),
+            (2, nil, true),
+            (2, [], false),
+            (2, ["settings", "voice_input"], false)
+        ]
+        for (index, testCase) in cases.enumerated() {
+            let (version, shortcutIDs, nullShortcutIDs) = testCase
+            let backup = try AndroidPreferenceBackup.decode(json([], version: version,
+                shortcutIDs: shortcutIDs, nullShortcutIDs: nullShortcutIDs))
+            let suite = "AndroidPreferenceBackupToolbarPreservation.\(index).\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            KeyboardToolbarPreferences.save([.resize, .liveConversionToggle], defaults: defaults)
+
+            try backup.apply(to: defaults)
+
+            XCTAssertEqual(KeyboardToolbarPreferences.load(defaults: defaults), [.resize, .liveConversionToggle])
+        }
+    }
+
+    func testToolbarImportReplacesExistingActionsWithMappedSubsetInAndroidOrder() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([], version: 2,
+            shortcutIDs: ["settings", "paste", "clip_board", "future_action", "select_date", "paste"]))
+        let suite = "AndroidPreferenceBackupToolbarOrder." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        KeyboardToolbarPreferences.save([.resize, .emoji], defaults: defaults)
+
+        try backup.apply(to: defaults)
+
+        XCTAssertEqual(KeyboardToolbarPreferences.load(defaults: defaults), [.paste, .clipboard, .selectDate])
+        XCTAssertEqual(backup.toolbarShortcutImport?.unsupportedIDs, ["settings", "future_action"])
     }
 
     func testImporterRecognizesAndroidShapeWithoutClaimingNativeEnvelope() throws {
@@ -424,9 +478,11 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ["key": key, "type": type, "value": value]
     }
 
-    private func json(_ entries: [[String: Any]], version: Int = 1, shortcutIDs: [String]? = nil) -> Data {
+    private func json(_ entries: [[String: Any]], version: Int = 1, shortcutIDs: [String]? = nil,
+                      nullShortcutIDs: Bool = false) -> Data {
         var object: [String: Any] = ["version": version, "entries": entries]
         if let shortcutIDs { object["shortcutIds"] = shortcutIDs }
+        if nullShortcutIDs { object["shortcutIds"] = NSNull() }
         return try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
     }
 }
