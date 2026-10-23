@@ -6,6 +6,7 @@
 #include "bunsetsu.hpp"
 #include "unicode_case.hpp"
 #include <algorithm>
+#include <array>
 #include <bit>
 #include <chrono>
 #include <cstring>
@@ -35,9 +36,210 @@ constexpr int32_t MOZC_MAX_WORD_COST = 32767;
 constexpr bool is_ascii_alphabet(char16_t c) {
   return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z');
 }
+constexpr bool is_halfwidth_ascii(char16_t c) { return c >= 0x20 && c <= 0x7e; }
+constexpr bool is_android_whitespace(char16_t c) {
+  // Match the pinned Kotlin Char.isWhitespace predicate used by the deferred
+  // symbol lookup (Java Character.isWhitespace semantics).
+  return (c >= 0x0009 && c <= 0x000d) || (c >= 0x001c && c <= 0x0020) ||
+         c == 0x1680 || (c >= 0x2000 && c <= 0x2006) ||
+         (c >= 0x2008 && c <= 0x200a) || c == 0x2028 || c == 0x2029 ||
+         c == 0x205f || c == 0x3000;
+}
+bool is_android_symbol_only_input(std::u16string_view input) {
+  return !input.empty() && std::all_of(input.begin(), input.end(), [](char16_t c) {
+    return !unicode_is_letter(c) && !unicode_is_digit(c) &&
+           !is_android_whitespace(c);
+  });
+}
 constexpr size_t ANDROID_FORWARD_BEAM_WIDTH = 20;
 constexpr int64_t ANDROID_DIGIT_OUTPUT_PENALTY = 2000;
 constexpr size_t MAX_BUNSETSU_SPLIT_PATTERNS = 4;
+constexpr bool is_numeric_input_digit(char16_t c) {
+  return (c >= u'0' && c <= u'9') || (c >= 0xff10 && c <= 0xff19);
+}
+std::u16string normalize_numeric_input(std::u16string_view input) {
+  std::u16string normalized;
+  normalized.reserve(input.size());
+  for (char16_t c : input)
+    normalized.push_back(c >= 0xff10 && c <= 0xff19 ? char16_t(c - 0xfee0) : c);
+  return normalized;
+}
+bool parse_ascii_nonnegative_long(std::u16string_view input, int64_t &value) {
+  if (input.empty()) return false;
+  uint64_t parsed = 0;
+  constexpr uint64_t maximum = uint64_t(std::numeric_limits<int64_t>::max());
+  for (char16_t c : input) {
+    if (c < u'0' || c > u'9') return false;
+    const uint64_t digit = uint64_t(c - u'0');
+    if (parsed > (maximum - digit) / 10) return false;
+    parsed = parsed * 10 + digit;
+  }
+  value = int64_t(parsed);
+  return true;
+}
+std::string decimal_with_grouping(int64_t value) {
+  std::string result = std::to_string(value);
+  for (size_t position = result.size(); position > 3;) {
+    position -= 3;
+    result.insert(position, ",");
+  }
+  return result;
+}
+std::string integer_to_kanji(int64_t value) {
+  if (value == 0) return "〇";
+  static constexpr std::array<std::string_view, 10> digits = {
+      "〇", "一", "二", "三", "四", "五", "六", "七", "八", "九"};
+  static constexpr std::array<std::string_view, 4> small_units = {
+      "", "十", "百", "千"};
+  static constexpr std::array<std::string_view, 5> large_units = {
+      "", "万", "億", "兆", "京"};
+  uint64_t remaining = uint64_t(value);
+  size_t large_index = 0;
+  std::string result;
+  while (remaining > 0) {
+    const unsigned chunk = unsigned(remaining % 10000);
+    if (chunk > 0) {
+      unsigned number = chunk;
+      size_t unit_index = 0;
+      std::string chunk_text;
+      while (number > 0) {
+        const unsigned digit = number % 10;
+        if (digit > 0) {
+          std::string place;
+          if (!(digit == 1 && unit_index > 0)) place.append(digits[digit]);
+          place.append(small_units[unit_index]);
+          chunk_text = place + chunk_text;
+        }
+        number /= 10;
+        ++unit_index;
+      }
+      result.insert(0, chunk_text + std::string(large_units[large_index]));
+    }
+    remaining /= 10000;
+    ++large_index;
+  }
+  return result;
+}
+std::string integer_to_mixed_kanji(int64_t value) {
+  if (value == 0) return "0";
+  static constexpr std::array<std::pair<uint64_t, std::string_view>, 3> units = {{
+      {1000000000000ULL, "兆"}, {100000000ULL, "億"}, {10000ULL, "万"}}};
+  uint64_t remaining = uint64_t(value);
+  std::string result;
+  for (const auto &[unit_value, unit_name] : units) {
+    if (remaining >= unit_value) {
+      result += std::to_string(remaining / unit_value);
+      result.append(unit_name);
+      remaining %= unit_value;
+    }
+  }
+  if (remaining > 0 || result.empty()) result += std::to_string(remaining);
+  return result;
+}
+void append_value_based_numeric_symbols(std::vector<Candidate> &candidates,
+                                        int64_t number) {
+  // Match the pinned Android helper's Long.toInt() narrowing before its 0..50
+  // range check, including the wraparound behavior of that implementation.
+  const uint32_t low = uint32_t(uint64_t(number));
+  const int64_t narrowed = low <= uint32_t(std::numeric_limits<int32_t>::max())
+      ? int64_t(low) : int64_t(low) - (int64_t(1) << 32);
+  if (narrowed < 0 || narrowed > 50) return;
+  auto append = [&](char16_t surface, int64_t score) {
+    Candidate candidate{utf8(std::u16string(1, surface)), score, {}};
+    candidate.presentation_kind = CandidatePresentationKind::numeric_symbol;
+    candidates.push_back(std::move(candidate));
+  };
+  if (narrowed == 0) {
+    append(0x24ea, 8500); // ⓪
+    append(0x24ff, 8490); // ⓿
+    return;
+  }
+  if (narrowed <= 20) append(char16_t(0x2460 + narrowed - 1), 8500);
+  if (narrowed <= 10) append(char16_t(0x2776 + narrowed - 1), 8490);
+  if (narrowed <= 12) {
+    append(char16_t(0x2160 + narrowed - 1), 8480);
+    append(char16_t(0x2170 + narrowed - 1), 8480);
+  }
+  if (narrowed <= 20) {
+    append(char16_t(0x2487 + narrowed), 8470);
+    append(char16_t(0x2473 + narrowed), 8460);
+  }
+  if (narrowed >= 21 && narrowed <= 35)
+    append(char16_t(0x3251 + narrowed - 21), 8500);
+  if (narrowed >= 36 && narrowed <= 50)
+    append(char16_t(0x32b1 + narrowed - 36), 8500);
+  if (narrowed == 50) {
+    append(0x216c, 8480); // Ⅼ
+    append(0x217c, 8480); // ⅼ
+  }
+}
+void append_digit_prediction_candidates(std::vector<Candidate> &candidates,
+                                        std::u16string_view input,
+                                        bool numeric_symbol_candidates) {
+  auto append = [&](std::string text, int64_t score,
+                    CandidatePresentationKind kind = CandidatePresentationKind::none) {
+    Candidate candidate{std::move(text), score, {}};
+    candidate.presentation_kind = kind;
+    candidates.push_back(std::move(candidate));
+  };
+  const std::u16string digits = normalize_numeric_input(input);
+  std::u16string full_width;
+  full_width.reserve(input.size());
+  for (char16_t c : input)
+    full_width.push_back(c >= u'0' && c <= u'9' ? char16_t(c + 0xfee0) : c);
+
+  int64_t value = 0;
+  const bool has_long_value = parse_ascii_nonnegative_long(digits, value);
+  std::vector<std::pair<std::string, int64_t>> time_candidates;
+  const bool ascii_digits = std::all_of(input.begin(), input.end(), [](char16_t c) {
+    return c >= u'0' && c <= u'9';
+  });
+  if (ascii_digits && input.size() == 4 && has_long_value && value <= 2959 && value % 100 <= 59) {
+    const std::string hours = utf8(digits.substr(0, 2));
+    const std::string minutes = utf8(digits.substr(2, 2));
+    time_candidates.emplace_back(hours + ":" + minutes, 8000);
+    time_candidates.emplace_back(hours + "時" + minutes + "分", 8000);
+  }
+  for (auto &candidate : time_candidates) append(std::move(candidate.first), candidate.second);
+
+  if (ascii_digits && (input.size() == 3 || input.size() == 4) && has_long_value) {
+    int64_t month = 0, day = 0;
+    const size_t split = input.size() - 2;
+    const bool valid_month = parse_ascii_nonnegative_long(digits.substr(0, split), month);
+    const bool valid_day = parse_ascii_nonnegative_long(digits.substr(split), day);
+    if (valid_month && valid_day && month >= 1 && month <= 12 && day >= 1 && day <= 31)
+      append(std::to_string(month) + "月" + std::to_string(day) + "日", 8000);
+  }
+  append(utf8(full_width), 8000, CandidatePresentationKind::full_width);
+  append(utf8(digits), 8000, CandidatePresentationKind::half_width);
+  if (has_long_value) {
+    append(integer_to_kanji(value), 2000);
+    append(decimal_with_grouping(value), 8001);
+    append(utf8(std::u16string(input)), 8002);
+    append(integer_to_mixed_kanji(value), 7900);
+  }
+  static constexpr std::array<char16_t, 10> superscript = {
+      0x2070, 0x00b9, 0x00b2, 0x00b3, 0x2074, 0x2075, 0x2076, 0x2077, 0x2078, 0x2079};
+  std::u16string superscript_text, subscript_text;
+  superscript_text.reserve(input.size());
+  subscript_text.reserve(input.size());
+  for (char16_t c : input) {
+    if (c >= u'0' && c <= u'9') {
+      const size_t digit = size_t(c - u'0');
+      superscript_text.push_back(superscript[digit]);
+      subscript_text.push_back(char16_t(0x2080 + digit));
+    } else {
+      // The pinned Android helpers only map ASCII digits; full-width digits
+      // and any other characters pass through unchanged.
+      superscript_text.push_back(c);
+      subscript_text.push_back(c);
+    }
+  }
+  append(utf8(superscript_text), 8000);
+  append(utf8(subscript_text), 8001);
+  if (numeric_symbol_candidates && has_long_value)
+    append_value_based_numeric_symbols(candidates, value);
+}
 std::u16string hiragana_to_katakana(std::u16string value) {
   for (auto &c : value) {
     if (c == 0x3094 || (c >= 0x3041 && c <= 0x3093))
@@ -434,18 +636,17 @@ Result Engine::lookup_english_reading(const std::string &input, size_t count) co
 Result Engine::lookup_english(const std::string &input, size_t count) const {
   return lookup_word_dictionary(impl->english_words.get(), input, count);
 }
-Result Engine::predict_english(const std::string &input, size_t count, bool case_variants,
-                               const PersonalDictionary *personal, const PersonalDictionary *learned) const {
+static Result english_dictionary_candidates(const Dictionary *dictionary,
+                                             const std::string &input, bool case_variants) {
   auto started = std::chrono::steady_clock::now();
-  require(impl->english_words != nullptr, "English dictionary is not enabled");
-  require(count >= 1 && count <= 100, "invalid candidate count");
+  require(dictionary != nullptr, "English dictionary is not enabled");
   auto reading = utf16(input);
   require(reading.size() <= 8192, "input exceeds 8192 UTF-16 units (not truncated)");
   Result r;
   if (reading.empty()) return r;
   const auto inputLength = reading.size();
   reading = unicode_lower(reading);
-  const auto &d = *impl->english_words;
+  const auto &d = *dictionary;
   d.predictive(reading, inputLength <= 2 ? 6 : 12, [&](size_t node, uint32_t token) {
     auto text = d.surface(token, reading, 0, reading.size(), node);
     r.candidates.push_back({text, d.costs[token], {{text, d.name, 0, uint32_t(inputLength)}}});
@@ -522,6 +723,17 @@ Result Engine::predict_english(const std::string &input, size_t count, bool case
   std::stable_sort(r.candidates.begin(), r.candidates.end(),
       [](const auto &a, const auto &b) { return a.score < b.score; });
   r.lattice_nodes = r.candidates.size();
+  r.elapsed_ms = std::chrono::duration<double, std::milli>(
+      std::chrono::steady_clock::now() - started).count();
+  return r;
+}
+Result Engine::predict_english(const std::string &input, size_t count, bool case_variants,
+                               const PersonalDictionary *personal, const PersonalDictionary *learned) const {
+  const auto started = std::chrono::steady_clock::now();
+  require(count >= 1 && count <= 100, "invalid candidate count");
+  auto r = english_dictionary_candidates(impl->english_words.get(), input, case_variants);
+  const auto inputLength = utf16(input).size();
+  if (input.empty()) return r;
   if (r.candidates.size() > count) r.candidates.resize(count);
   // Overlay readings and surfaces are user-authored and remain case-sensitive.
   // Keep only the requested top count while merging, even for large dictionaries.
@@ -613,6 +825,7 @@ struct Workspace::Impl {
   std::shared_ptr<int> personal_identity, learned_identity;
   size_t previous_count = 0, previous_limit = 0;
   bool previous_omission = false, previous_prefix = false, previous_prediction = false;
+  bool previous_ascii_dictionary_search_skipped = false;
   detail::NgramScratch ngram_scratch;
   bool cache_valid = false;
   std::vector<Node> nodes;
@@ -745,7 +958,9 @@ static void rank_primary(std::vector<Candidate> &candidates,
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
-                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search) const {
+                       const PersonalDictionary *learned, Workspace *workspace,
+                       bool prefix_candidates, bool japanese_prediction,
+                       bool bunsetsu_search, bool numeric_symbol_candidates) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
@@ -762,6 +977,19 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   }
   require(reading.size() <= 8192,
           "input exceeds CLI limit of 8192 UTF-16 units (not truncated)");
+  const bool asciiPredictionInput = japanese_prediction && !bunsetsu_search &&
+      !reading.empty() &&
+      std::all_of(reading.begin(), reading.end(), is_halfwidth_ascii);
+  const bool asciiNumericInput = !reading.empty() &&
+      std::all_of(reading.begin(), reading.end(), [](char16_t c) {
+        return c >= u'0' && c <= u'9';
+      });
+  const bool numericInput = !reading.empty() &&
+      std::all_of(reading.begin(), reading.end(), is_numeric_input_digit);
+  const bool numericPredictionInput = japanese_prediction && !bunsetsu_search && numericInput;
+  // The pinned Android graph bypasses all half-width ASCII. Digit-only input
+  // then receives its own numeric candidate route after the literal fallback.
+  const bool asciiDictionarySearchSkipped = asciiPredictionInput || asciiNumericInput;
   Result result;
   std::unordered_map<std::string, size_t> splitPatternIndex;
   auto setSplitPattern = [&](const std::string &surface,
@@ -800,7 +1028,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       work.personal_identity == personalIdentity && work.learned_identity == learnedIdentity &&
       work.previous_count == count && work.previous_limit == limit &&
       work.previous_omission == omission && work.previous_prefix == prefix_candidates &&
-      work.previous_prediction == japanese_prediction;
+      work.previous_prediction == japanese_prediction &&
+      work.previous_ascii_dictionary_search_skipped == asciiDictionarySearchSkipped;
   size_t common = 0;
   if (compatible)
     while (common < reading.size() && common < work.previous_reading.size() &&
@@ -838,25 +1067,31 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     } else {
       ++result.searched_rows;
       cached.nodes.clear(); cached.horizon = 0;
-      for (auto &d : impl->dictionaries) {
-        auto matched = [&](size_t end, uint32_t token, size_t correctedNode) {
-          if (end < reading.size() && reading[end] >= 0xdc00 &&
-              reading[end] <= 0xdfff)
-            return;
-          auto p = d->pos[token];
-          Node node{i, end, d.get(), token, conn.left[p], conn.right[p],
-                    d->costs[token] + (correctedNode ? 1900 : 0), correctedNode};
-          node.contains_digit = dictionary_surface_has_digit(
-              *d, token, reading, i, end, correctedNode);
-          cached.nodes.push_back(node);
-          add(node);
-        };
-        if (omission)
-          cached.horizon = std::max(cached.horizon, d->omissionPrefixes(reading, i, work.omission_pending, matched));
-        else
-          cached.horizon = std::max(cached.horizon, d->prefixes(reading, i, [&](size_t end, uint32_t token) {
-            matched(end, token, 0);
-          }));
+      if (asciiDictionarySearchSkipped) {
+        // An empty row is cacheable for this input mode. The mode is part of
+        // the cache key so an ASCII prefix can never reuse a kana dictionary row.
+        cached.horizon = reading.size() + 1;
+      } else {
+        for (auto &d : impl->dictionaries) {
+          auto matched = [&](size_t end, uint32_t token, size_t correctedNode) {
+            if (end < reading.size() && reading[end] >= 0xdc00 &&
+                reading[end] <= 0xdfff)
+              return;
+            auto p = d->pos[token];
+            Node node{i, end, d.get(), token, conn.left[p], conn.right[p],
+                      d->costs[token] + (correctedNode ? 1900 : 0), correctedNode};
+            node.contains_digit = dictionary_surface_has_digit(
+                *d, token, reading, i, end, correctedNode);
+            cached.nodes.push_back(node);
+            add(node);
+          };
+          if (omission)
+            cached.horizon = std::max(cached.horizon, d->omissionPrefixes(reading, i, work.omission_pending, matched));
+          else
+            cached.horizon = std::max(cached.horizon, d->prefixes(reading, i, [&](size_t end, uint32_t token) {
+              matched(end, token, 0);
+            }));
+        }
       }
     }
     foundInAnyDictionary = !cached.nodes.empty();
@@ -1012,7 +1247,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   for (auto id : at[0])
     push(id, none,
          int64_t(conn.cost(0, nodes[id].left)) + search_cost(nodes[id]));
-  const bool standaloneMayMatch = impl->standalone && impl->standalone->contains(input) &&
+  const bool standaloneMayMatch = !asciiDictionarySearchSkipped && impl->standalone && impl->standalone->contains(input) &&
       std::any_of(at[0].begin(), at[0].end(), [&](size_t i) { return literal(nodes[i]); });
   bool systemNgramMayAffectCandidates = standaloneMayMatch;
   if (bunsetsu_search && impl->system_ngram &&
@@ -1187,7 +1422,60 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              state.cost + conn.cost(node.right, nodes[id].left) +
                  search_cost(nodes[id]));
   }
-  if (result.candidates.size() > count) {
+  // Android's half-width ASCII fallback is a separate type-1 candidate, even
+  // when a system or overlay path has the same literal surface. Preserve a
+  // personal/learned row and add the fallback alongside it; otherwise replace
+  // a graph-selected literal path with the canonical unknown fallback.
+  if (asciiPredictionInput || asciiNumericInput) {
+    const auto has_personal_source = [](const Candidate &candidate) {
+      return std::any_of(candidate.segments.begin(), candidate.segments.end(),
+                         [](const Segment &segment) {
+        return segment.dictionary == "user" || segment.dictionary == "learning" ||
+               segment.dictionary == "template";
+      });
+    };
+    auto fallback = std::find_if(result.candidates.begin(), result.candidates.end(),
+        [&](const Candidate &candidate) {
+          return candidate.text == input && !candidate.segments.empty() &&
+              candidate.raw_text.empty() &&
+              candidate.corrected_reading.empty() && !has_personal_source(candidate) &&
+              std::all_of(candidate.segments.begin(), candidate.segments.end(),
+                          [](const Segment &segment) {
+                return segment.dictionary == "unknown";
+              });
+        });
+    if (fallback == result.candidates.end() && asciiNumericInput) {
+      // Keep the dedicated numeric candidate paths available, but normalize a
+      // system-selected raw spelling to the fallback that precedes them on Android.
+      fallback = std::find_if(result.candidates.begin(), result.candidates.end(),
+          [&](const Candidate &candidate) {
+            return candidate.text == input && candidate.raw_text.empty() &&
+                candidate.corrected_reading.empty() && !has_personal_source(candidate) &&
+                !candidate.segments.empty() &&
+                std::all_of(candidate.segments.begin(), candidate.segments.end(),
+                            [](const Segment &segment) {
+                  return segment.dictionary == "system" || segment.dictionary == "unknown";
+                });
+          });
+    }
+    if (fallback == result.candidates.end()) {
+      result.candidates.insert(result.candidates.begin(),
+          Candidate{input, 4000, {{input, "unknown", 0, uint32_t(reading.size())}}});
+      seen.insert(input);
+    } else {
+      fallback->score = 4000;
+      fallback->segments = {{input, "unknown", 0, uint32_t(reading.size())}};
+      fallback->bunsetsu_boundaries.clear();
+      fallback->standalone_unigram_matched = false;
+      fallback->classified_categories.clear();
+      fallback->system_ngram_matched = false;
+      fallback->raw_text.clear();
+      fallback->corrected_reading.clear();
+      fallback->is_reading_prefix = false;
+    }
+  }
+  if (result.candidates.size() > count && !numericPredictionInput &&
+      !asciiNumericInput) {
     if (bunsetsu_search) {
       std::stable_sort(result.candidates.begin(), result.candidates.end(),
                        [](const Candidate &a, const Candidate &b) {
@@ -1246,6 +1534,30 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         winner.classified_categories.push_back(node.dict->name);
     }
   }
+  if (numericInput && !numericPredictionInput && !asciiNumericInput) {
+    // Full-width ordinary and bunsetsu inputs retain graph N-best before
+    // generated choices. ASCII digits already have their literal fallback;
+    // preserve it ahead of optional personal overlays and numeric choices.
+    if (bunsetsu_search) {
+      std::stable_sort(result.candidates.begin(), result.candidates.end(),
+                       [](const Candidate &a, const Candidate &b) {
+                         if (a.system_ngram_matched != b.system_ngram_matched)
+                           return a.system_ngram_matched;
+                         return a.score < b.score;
+                       });
+      if (result.candidates.size() > count) result.candidates.resize(count);
+    } else {
+      rank_primary(result.candidates, count);
+    }
+  }
+  if (numericPredictionInput && !asciiNumericInput)
+    rank_primary(result.candidates, count);
+  // The pinned Android engine appends numeric conversions in its ordinary,
+  // prediction and bunsetsu entry points. Keep prediction-only ordering above,
+  // but do not omit the numeric surface candidates when prediction is disabled.
+  if (numericInput)
+    append_digit_prediction_candidates(result.candidates, reading,
+                                       numeric_symbol_candidates);
   for (const auto &candidate : result.candidates) seen.insert(candidate.text);
   if (bunsetsu_search && !result.candidates.empty())
     result.primary_bunsetsu_split_positions =
@@ -1254,7 +1566,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
-  if (japanese_prediction && !bunsetsu_search && impl->reading_correction &&
+  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && impl->reading_correction &&
       reading.size() >= 3 && reading.size() <= 16) {
     const auto &d = *impl->reading_correction;
     const bool complete = d.completion(reading, 3, limit,
@@ -1277,7 +1589,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     });
     result.complete = result.complete && complete;
   }
-  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
     // Retain token references only; materialize surfaces after top-k selection.
     const auto &d = *impl->dictionaries.front();
@@ -1299,7 +1611,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
   }
-  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
     // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
     // category, stable token order on ties, 1500 per additional UTF-16 unit.
     // Retain references until selection, including for large posting lists.
@@ -1357,20 +1669,30 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         candidate.bunsetsu_boundaries =
             result.split_pattern_by_candidate[it->second].positions;
     }
-    std::stable_sort(result.candidates.begin(), result.candidates.end(),
-                     [](const Candidate &a, const Candidate &b) {
-                       if (a.system_ngram_matched != b.system_ngram_matched)
-                         return a.system_ngram_matched;
-                       return a.score < b.score;
-                     });
-  } else {
+    if (!numericInput) {
+      std::stable_sort(result.candidates.begin(), result.candidates.end(),
+                       [](const Candidate &a, const Candidate &b) {
+                         if (a.system_ngram_matched != b.system_ngram_matched)
+                           return a.system_ngram_matched;
+                         return a.score < b.score;
+                       });
+    }
+  } else if (!numericInput) {
     rank_primary(result.candidates);
   }
-  if (impl->english_reading && !reading.empty()) {
+  if (impl->english_reading && !reading.empty() && !numericInput) {
     const auto &d = *impl->english_reading;
+    bool addedExactAsciiEnglishCandidate = false;
     auto add = [&](const std::string &text, int64_t score) {
-      if (seen.insert(text).second)
+      if (asciiPredictionInput && text == input) {
+        // The reference keeps the English dictionary row even when it shares
+        // the raw-input surface with the leading fallback row.
+        if (addedExactAsciiEnglishCandidate) return;
+        addedExactAsciiEnglishCandidate = true;
         result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size())}}});
+      } else if (seen.insert(text).second) {
+        result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size())}}});
+      }
     };
     d.prefixes(reading, 0, [&](size_t end, uint32_t token) {
       if (end != reading.size()) return;
@@ -1390,26 +1712,28 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   std::vector<Candidate> emoji_and_emoticon_candidates;
   std::vector<Candidate> symbol_candidates;
   std::vector<Candidate> single_kanji_candidates;
-  if (impl->auxiliary_dictionaries_available && !reading.empty()) {
-    auto collect_symbol_candidates = [&](const Dictionary &dictionary) {
+  if (impl->auxiliary_dictionaries_available && !reading.empty() && !numericInput) {
+    auto collect_symbol_candidates = [&](const Dictionary &dictionary,
+                                         const std::u16string &lookup,
+                                         bool include_completions) {
       std::vector<Candidate> candidates;
       if (reading.size() > 16)
         return candidates;
-      dictionary.prefixes(reading, 0, [&](size_t end, uint32_t token) {
-        if (end != reading.size()) return;
-        auto text = dictionary.surface(token, reading, 0, end);
+      dictionary.prefixes(lookup, 0, [&](size_t end, uint32_t token) {
+        if (end != lookup.size()) return;
+        auto text = dictionary.surface(token, lookup, 0, end);
         candidates.push_back({
             text, dictionary.costs[token],
-            {{text, dictionary.name, 0, uint32_t(end)}}});
+            {{text, dictionary.name, 0, uint32_t(reading.size())}}});
         if (dictionary.name == "symbol")
           candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
       });
       // Android includes an exact symbol/emoji reading regardless of the
       // prediction minimum, then permits up to three extra UTF-16 units when
       // Japanese prediction is enabled (the production default).
-      if (japanese_prediction && reading.size() >= 3) {
+      if (include_completions && japanese_prediction && reading.size() >= 3) {
         const bool complete = dictionary.completion(
-            reading, 3, limit,
+            lookup, 3, limit,
             [&](size_t node, uint32_t token, size_t extra) {
               auto yomi = dictionary.nodeReading(node);
               const auto text = dictionary.surface(
@@ -1428,8 +1752,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       }
       return candidates;
     };
-    auto emoji = collect_symbol_candidates(*impl->emoji);
-    auto emoticon = collect_symbol_candidates(*impl->emoticon);
+    auto emoji = collect_symbol_candidates(*impl->emoji, reading, true);
+    auto emoticon = collect_symbol_candidates(*impl->emoticon, reading, true);
     emoji_and_emoticon_candidates.reserve(emoji.size() + emoticon.size());
     emoji_and_emoticon_candidates.insert(emoji_and_emoticon_candidates.end(),
                                          emoji.begin(), emoji.end());
@@ -1440,7 +1764,20 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                      [](const Candidate &a, const Candidate &b) {
                        return a.score < b.score;
                      });
-    symbol_candidates = collect_symbol_candidates(*impl->symbol);
+    symbol_candidates = collect_symbol_candidates(*impl->symbol, reading, true);
+    // Pinned Android performs a second type-21 symbol dictionary lookup after
+    // NFKC-normalizing symbol-only input (e.g. full-width ＋ to ASCII +).
+    // Preserve duplicate surfaces: the Android result includes both the
+    // original-reading type-13 row and the normalized type-21 row.
+    if (is_android_symbol_only_input(reading)) {
+      const auto halfwidth = unicode_nfkc(reading);
+      if (halfwidth != reading) {
+        auto normalized_symbols = collect_symbol_candidates(*impl->symbol, halfwidth, false);
+        symbol_candidates.insert(symbol_candidates.end(),
+                                 normalized_symbols.begin(),
+                                 normalized_symbols.end());
+      }
+    }
     impl->single_kanji->prefixes(reading, 0,
                                  [&](size_t end, uint32_t token) {
       if (end != reading.size()) return;
@@ -1454,6 +1791,29 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.candidates.insert(result.candidates.end(), candidates.begin(),
                              candidates.end());
   };
+  const auto englishStart = result.candidates.size();
+  if (japanese_prediction && !reading.empty()) {
+    auto englishInput = reading;
+    const bool letters = std::all_of(reading.begin(), reading.end(), is_ascii_alphabet);
+    const bool wide = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
+      return c == 0x3000 || (c >= 0xff01 && c <= 0xff5e);
+    });
+    if (wide) for (auto &c : englishInput) {
+      if (c == 0x3000) c = u' ';
+      else if ((c >= 0xff21 && c <= 0xff3a) || (c >= 0xff41 && c <= 0xff5a)) c -= 0xfee0;
+    }
+    const bool digits = std::all_of(englishInput.begin(), englishInput.end(), [](char16_t c) {
+      return (c >= u'0' && c <= u'9') || (c >= 0xff10 && c <= 0xff19);
+    });
+    if ((letters || wide) && !digits) {
+      if (impl->english_words) {
+        auto english = english_dictionary_candidates(impl->english_words.get(), utf8(englishInput), true);
+        // This provider is not the standalone English session: no N-best cap
+        // or personal overlay is applied a second time.
+        append_candidates(english.candidates);
+      } else result.complete = false;
+    }
+  }
   // Pinned getCandidatesOriginal adds deterministic mixed-alphanumeric case
   // and full-width ASCII choices before the auxiliary/kana/prefix sections.
   // Numeric inputs take an earlier, separate Android route (including temporal
@@ -1493,10 +1853,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       result.candidates.back().presentation_kind = CandidatePresentationKind::full_width;
     }
   }
+  std::stable_sort(result.candidates.begin() + englishStart, result.candidates.end(),
+                   [](const Candidate &a, const Candidate &b) { return a.score < b.score; });
   // Pinned Android df1f383 prediction paths include these three kana choices
   // even when no dictionary completion matches. One UTF-16 unit places them
   // before emoji/symbols; retain the existing no-prediction CLI behavior.
-  const bool include_kana = bunsetsu_search || japanese_prediction;
+  const bool include_kana = (bunsetsu_search || japanese_prediction) && !numericInput;
   if (include_kana && reading.size() == 1) {
     auto katakana = hiragana_to_katakana(reading);
     result.candidates.push_back({utf8(reading), 6000, {}});
@@ -1520,7 +1882,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   }
   // Reference dev 9506a0b yomiPartList: longest matching reading first,
   // dictionary token order within a reading; input lengths 2...16 only.
-  if (prefix_candidates && reading.size() > 1 && reading.size() <= 16) {
+  if (prefix_candidates && !numericInput && reading.size() > 1 && reading.size() <= 16) {
     const auto &d = *impl->dictionaries.front();
     std::vector<std::pair<size_t, uint32_t>> matches;
     d.prefixes(reading, 0, [&](size_t end, uint32_t token) { matches.emplace_back(end, token); });
@@ -1559,7 +1921,9 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   work.personal_identity = personalIdentity; work.learned_identity = learnedIdentity;
   work.previous_count = count; work.previous_limit = limit;
   work.previous_omission = omission; work.previous_prefix = prefix_candidates;
-  work.previous_prediction = japanese_prediction; work.cache_valid = true;
+  work.previous_prediction = japanese_prediction;
+  work.previous_ascii_dictionary_search_skipped = asciiDictionarySearchSkipped;
+  work.cache_valid = true;
   work.finish();
   cleanup.active = false;
   result.elapsed_ms = std::chrono::duration<double, std::milli>(

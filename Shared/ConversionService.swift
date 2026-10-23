@@ -219,7 +219,8 @@ final class ConversionService {
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
+                let englishWords = english || (!bunsetsuSearch && NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading))
+                try state.open(directories: directories, mask: mask, english: englishWords, englishReading: englishReading)
                 let warnings = [try state.prepareLearning(reading: reading),
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")

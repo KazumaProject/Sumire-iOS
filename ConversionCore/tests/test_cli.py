@@ -554,6 +554,38 @@ class Tests(unittest.TestCase):
         self.assertEqual([c['corrected_reading'] for c in correction],['あ','い'])
         self.assertEqual([c['text'] for c in correction],['同じ','同じ'])
 
+    def test_japanese_english_provider_is_uncapped_and_does_not_duplicate_personal(self):
+        connection(self.data/'connection.sud',1842)
+        dictionary(self.data/'english.sud', [('ab', 'word'+str(i), 0, i+100) for i in range(12)])
+        def provider(reading, *options):
+            result = json.loads(self.run_cli('--predict-japanese','--nbest','1',*options,reading).stdout)
+            return result, [c for c in result['candidates'] if c['segments'] and all(s['dictionary']=='english' for s in c['segments'])]
+        result, english = provider('ab')
+        self.assertTrue(result['complete'])
+        self.assertGreater(len(english),20)
+        self.assertTrue(any(c['text']=='ab' and c['score']==500 for c in english))
+        wide, wide_english = provider('ａｂ')
+        self.assertEqual([(c['text'],c['score']) for c in english],[(c['text'],c['score']) for c in wide_english])
+        for candidate in wide_english:
+            self.assertTrue(all(s['length_utf16']==2 for s in candidate['segments']))
+        for reading in ['a1','a+b','あ','é','123','１２３']:
+            _, values = provider(reading)
+            self.assertFalse(values,reading)
+        for reading, normalized in [('ａ＋ｂ','a＋b'), ('＋','＋'), ('ａ１','a１'), ('　',' ')]:
+            _, values = provider(reading)
+            self.assertTrue(any(c['text']==normalized and c['score']==10000 for c in values), reading)
+        dedicated=json.loads(self.run_cli('--english','--nbest','5','ab').stdout)
+        self.assertEqual(len(dedicated['candidates']),5)
+        self.assertEqual([(c['text'],c['score']) for c in dedicated['candidates']],[(c['text'],c['score']) for c in english[:5]])
+        personal, _ = provider('ab','--user-entry','ab','UserWord','1','-10000')
+        self.assertEqual(sum(c['text']=='UserWord' for c in personal['candidates']),1)
+
+    def test_missing_english_provider_is_explicitly_incomplete_for_qualifying_input(self):
+        connection(self.data/'connection.sud',1842)
+        result=json.loads(self.run_cli('--predict-japanese','ab').stdout)
+        self.assertFalse(result['complete'])
+        self.assertTrue(json.loads(self.run_cli('--predict-japanese','あ').stdout)['complete'])
+
     def test_japanese_ascii_generated_variants_preserve_scores_order_and_duplicates(self):
         connection(self.data/'connection.sud',1842)
         for reading, expected in [('a',[('ａ',30000),('Ａ',30000)]),
@@ -588,6 +620,12 @@ class Tests(unittest.TestCase):
         result=subprocess.run([C_API,str(self.data),'--ascii-generated'],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())
 
+    def test_c_api_generated_numeric_presentation_and_ranges(self):
+        if not C_API: self.skipTest('C ABI fixture executable not supplied')
+        connection(self.data/'connection.sud',1842)
+        result=subprocess.run([C_API,str(self.data),'--numeric-generated'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+
     def test_japanese_prediction_includes_kana_without_dictionary_completion(self):
         for reading, katakana, halfwidth in [('あ', 'ア', 'ｱ'),
                                               ('がぱゔ', 'ガパヴ', 'ｶﾞﾊﾟゔ'),
@@ -605,6 +643,278 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'system.sud', [('あ', 'あ', 1, 100)])
         predicted=json.loads(self.run_cli('--predict-japanese','あ').stdout)['candidates']
         self.assertEqual([c['score'] for c in predicted if c['text']=='あ'], [140,6000])
+
+    def test_japanese_prediction_scores_whole_ascii_unknown_as_literal_fallback(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        # Give the system graph exact ASCII paths with better native costs than
+        # the fallback. Android bypasses that graph for nonnumeric ASCII.
+        dictionary(self.data/'system.sud', [
+            ('a','a',1,-30000), ('a1','a1',1,-30000),
+            ('a+b','a+b',1,-30000), ('123','123',1,-30000),
+        ])
+        for reading in ('a', 'A', 'ab', 'Ab', 'AB', 'NASA', 'zzzzq', 'a1', 'a+b', '123', ' '):
+            with self.subTest(reading=reading):
+                candidates=json.loads(self.run_cli('--predict-japanese','--nbest','100',reading).stdout)['candidates']
+                literal=[candidate for candidate in candidates
+                         if candidate['text']==reading and candidate['segments']==[
+                             {'text':reading, 'dictionary':'unknown', 'start_utf16':0,
+                              'length_utf16':len(reading.encode('utf-16-le'))//2}]]
+                self.assertEqual(len(literal), 1)
+                self.assertEqual(literal[0]['score'], 4000)
+                self.assertFalse(any(candidate['text']==reading and any(
+                    segment['dictionary']=='system' for segment in candidate['segments'])
+                    for candidate in candidates))
+
+        # The reference score applies to Japanese prediction, not the ordinary
+        # no-prediction unknown-word path.
+        ordinary=json.loads(self.run_cli('a').stdout)['candidates']
+        literal=next(candidate for candidate in ordinary if candidate['text']=='a')
+        self.assertNotEqual(literal['score'], 4000)
+
+    def test_japanese_digit_prediction_uses_numeric_route_instead_of_ascii_graph(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        dictionary(self.data/'system.sud', [
+            ('123','System123',1,-30000), ('1','SystemOne',1,-30000),
+            ('23','System23',1,-30000),
+        ])
+        dictionary(self.data/'english_reading.sud',[('123','English123',1,-30000)])
+        candidates=json.loads(self.run_cli('--predict-japanese','--prefix-candidates',
+            '--english-reading','--nbest','100','123').stdout)['candidates']
+        self.assertEqual([(candidate['text'],candidate['score']) for candidate in candidates], [
+            ('123',4000), ('1月23日',8000), ('１２３',8000), ('123',8000),
+            ('百二十三',2000), ('123',8001), ('123',8002), ('123',7900),
+            ('¹²³',8000), ('₁₂₃',8001),
+        ])
+        literal=next(candidate for candidate in candidates
+            if candidate['text']=='123' and candidate['score']==4000 and candidate['segments']
+            and candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['segments'],[
+            {'text':'123','dictionary':'unknown','start_utf16':0,'length_utf16':3}])
+        self.assertFalse(any(segment['dictionary'] in {'system','english_reading'}
+            for candidate in candidates for segment in candidate['segments']))
+        self.assertFalse(any(candidate['is_reading_prefix'] for candidate in candidates))
+
+        # Sumire keeps personal/learned overlays as a product feature even
+        # though Android's half-width-ASCII graph bypass also omits those rows.
+        overlay=json.loads(self.run_cli('--predict-japanese','--nbest','100',
+            '--user-entry','123','123','1','-10000','123').stdout)['candidates']
+        self.assertTrue(any(candidate['text']=='123' and candidate['segments'] and
+            candidate['segments'][0]['dictionary']=='user' for candidate in overlay))
+        self.assertTrue(any(candidate['text']=='123' and candidate['segments'] and
+            candidate['segments'][0]['dictionary']=='unknown' and candidate['score']==4000
+            for candidate in overlay))
+        limited_overlay=json.loads(self.run_cli('--predict-japanese','--nbest','1',
+            '--user-entry','123','123','1','-10000','123').stdout)['candidates']
+        self.assertTrue(any(candidate['segments'] and
+            candidate['segments'][0]['dictionary']=='user' for candidate in limited_overlay))
+        self.assertTrue(any(candidate['text']=='123' and candidate['segments'] and
+            candidate['segments'][0]['dictionary']=='unknown' and candidate['score']==4000
+            for candidate in limited_overlay))
+
+    def test_japanese_full_width_digit_prediction_uses_numeric_route_and_keeps_graph(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        dictionary(self.data/'system.sud',[('１２３','SystemFullWidth',1,-30000)])
+        candidates=json.loads(self.run_cli('--predict-japanese','--prefix-candidates',
+            '--nbest','100','１２３').stdout)['candidates']
+
+        # Android's isDigitsOnly branch still begins with the graph N-best for
+        # full-width digits; only half-width ASCII is bypassed by GraphBuilder.
+        self.assertEqual(candidates[0]['text'],'SystemFullWidth')
+        numeric=[(candidate['text'],candidate['score']) for candidate in candidates[1:]]
+        self.assertEqual(numeric,[
+            ('１２３',8000), ('123',8000), ('百二十三',2000), ('123',8001),
+            ('１２３',8002), ('123',7900), ('１２３',8000), ('１２３',8001),
+        ])
+        self.assertFalse(any(candidate['is_reading_prefix'] for candidate in candidates))
+
+        # Full-width digits take the numeric route too when the graph is empty,
+        # while their literal fallback remains the originally typed surface.
+        dictionary(self.data/'system.sud',[])
+        fallback=json.loads(self.run_cli('--predict-japanese','--nbest','100','１２３').stdout)['candidates']
+        literal=next(candidate for candidate in fallback
+            if candidate['text']=='１２３' and candidate['segments'] and
+            candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['text'],'１２３')
+        self.assertFalse(any(candidate['text']=='1月23日' or candidate['text'].endswith(('時','分',':'))
+            for candidate in fallback))
+
+        # Android's value-based symbol candidates are bounded to 0...50.
+        for reading, expected in [
+            ('０',[('⓪',8500),('⓿',8490)]),
+            ('５０',[('㊿',8500),('Ⅼ',8480),('ⅼ',8480)]),
+        ]:
+            with self.subTest(reading=reading):
+                candidates=json.loads(self.run_cli('--predict-japanese','--nbest','100',reading).stdout)['candidates']
+                actual=[(candidate['text'],candidate['score']) for candidate in candidates]
+                for pair in expected:
+                    self.assertIn(pair,actual)
+                # The full-width variant and Android's ASCII-only script
+                # converters both preserve the original full-width surface.
+                self.assertGreaterEqual(actual.count((reading,8000)),2)
+                self.assertIn((reading,8001),actual)
+
+        above_symbol_limit=json.loads(self.run_cli('--predict-japanese','--nbest','100','５１').stdout)['candidates']
+        self.assertFalse(any(candidate['text'] in {'㊿','⓪','⓿','Ⅰ','ⅰ','Ⅼ','ⅼ'}
+            for candidate in above_symbol_limit))
+
+    def test_japanese_digit_prediction_generates_time_date_and_value_symbols(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        for reading, expected in [
+            ('0101', [('01:01',8000),('01時01分',8000),('1月1日',8000)]),
+            ('2959', [('29:59',8000),('29時59分',8000)]),
+            ('2960', []),
+            ('1231', [('12月31日',8000)]),
+        ]:
+            with self.subTest(reading=reading):
+                candidates=json.loads(self.run_cli('--predict-japanese','--nbest','100',reading).stdout)['candidates']
+                actual=[(candidate['text'],candidate['score']) for candidate in candidates]
+                for pair in expected:
+                    self.assertIn(pair,actual)
+                if not expected:
+                    self.assertFalse(any(candidate['text'].endswith(('時','分',':','月','日'))
+                        for candidate in candidates))
+
+        candidates=json.loads(self.run_cli('--predict-japanese','--nbest','100','1').stdout)['candidates']
+        symbols=[(candidate['text'],candidate['score']) for candidate in candidates
+                 if candidate['text'] in {'①','❶','Ⅰ','ⅰ','⒈','⑴'}]
+        self.assertEqual(symbols,[('①',8500),('❶',8490),('Ⅰ',8480),
+                                  ('ⅰ',8480),('⒈',8470),('⑴',8460)])
+        self.assertEqual([(candidate['text'],candidate['score']) for candidate in candidates], [
+            ('1',4000), ('１',8000), ('1',8000), ('一',2000), ('1',8001), ('1',8002),
+            ('1',7900), ('¹',8000), ('₁',8001), ('①',8500), ('❶',8490), ('Ⅰ',8480),
+            ('ⅰ',8480), ('⒈',8470), ('⑴',8460),
+        ])
+        without_numeric_symbols=json.loads(self.run_cli('--predict-japanese',
+            '--no-numeric-symbol-candidates','--nbest','100','1').stdout)['candidates']
+        self.assertEqual([(candidate['text'],candidate['score']) for candidate in without_numeric_symbols], [
+            ('1',4000), ('１',8000), ('1',8000), ('一',2000), ('1',8001), ('1',8002),
+            ('1',7900), ('¹',8000), ('₁',8001),
+        ])
+
+    def test_japanese_numeric_conversion_survives_prediction_disabled(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        dictionary(self.data/'system.sud', [
+            ('1','SystemOne',1,-30000), ('0101','SystemDate',1,-30000),
+        ])
+        candidates=json.loads(self.run_cli('--nbest','100','1').stdout)['candidates']
+        fallback=next(candidate for candidate in candidates if candidate['text']=='1'
+                      and candidate['segments'] and
+                      candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(fallback['score'],4000)
+        self.assertFalse(any(candidate['text'] in {'SystemOne','SystemDate'} or any(
+            segment['dictionary']=='system' for segment in candidate['segments'])
+            for candidate in candidates))
+        generated={(candidate['text'],candidate['score']) for candidate in candidates
+                   if not candidate['segments']}
+        self.assertIn(('１',8000), generated)
+        self.assertIn(('1',8000), generated)
+        self.assertIn(('一',2000), generated)
+        self.assertIn(('¹',8000), generated)
+        self.assertIn(('₁',8001), generated)
+        self.assertIn(('①',8500), generated)
+        overlay=json.loads(self.run_cli('--nbest','1','--user-entry','1','UserOne',
+            '1','-10000','1').stdout)['candidates']
+        overlay_fallback=next(candidate for candidate in overlay if candidate['text']=='1'
+                              and candidate['segments'] and
+                              candidate['segments'][0]['dictionary']=='unknown')
+        user=next(candidate for candidate in overlay if candidate['text']=='UserOne')
+        self.assertEqual(overlay[0],overlay_fallback)
+        self.assertLess(overlay.index(overlay_fallback),overlay.index(user))
+        self.assertLess(overlay.index(user),next(i for i,candidate in enumerate(overlay)
+                                                   if candidate['text']=='１'))
+        temporal=json.loads(self.run_cli('--nbest','100','0101').stdout)['candidates']
+        self.assertFalse(any(candidate['text']=='SystemDate' or any(
+            segment['dictionary']=='system' for segment in candidate['segments'])
+            for candidate in temporal))
+        temporal_set={(candidate['text'],candidate['score']) for candidate in temporal}
+        self.assertIn(('01:01',8000), temporal_set)
+        self.assertIn(('01時01分',8000), temporal_set)
+        self.assertIn(('1月1日',8000), temporal_set)
+
+    def test_bunsetsu_numeric_route_keeps_fallback_before_generated_choices(self):
+        dictionary(self.data/'system.sud', [('1','PrimaryDigit',1,500)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['PrimaryDigit','Neighbor'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['PrimaryDigit'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        candidates=json.loads(self.run_cli('--bunsetsu','--nbest','1','1').stdout)['candidates']
+        self.assertEqual(candidates[0]['text'],'1')
+        self.assertEqual(candidates[0]['score'],4000)
+        self.assertEqual(candidates[0]['segments'][0]['dictionary'],'unknown')
+        self.assertFalse(any(candidate['text']=='PrimaryDigit' for candidate in candidates))
+        surfaces=[candidate['text'] for candidate in candidates]
+        self.assertIn('１',surfaces)
+        self.assertIn('①',surfaces)
+        self.assertGreater(surfaces.index('１'),surfaces.index('1'))
+
+        without_symbols=json.loads(self.run_cli('--bunsetsu',
+            '--no-numeric-symbol-candidates','--nbest','100','1').stdout)['candidates']
+        without_symbol_surfaces=[candidate['text'] for candidate in without_symbols]
+        self.assertIn('１',without_symbol_surfaces)
+        self.assertIn('¹',without_symbol_surfaces)
+        self.assertFalse(any(surface in {'①','❶','Ⅰ','ⅰ','⒈','⑴'}
+                             for surface in without_symbol_surfaces))
+
+        overlay=json.loads(self.run_cli('--bunsetsu','--nbest','1','--user-entry','1',
+            'UserOne','1','-10000','1').stdout)['candidates']
+        overlay_fallback=next(candidate for candidate in overlay if candidate['text']=='1'
+                              and candidate['segments'] and
+                              candidate['segments'][0]['dictionary']=='unknown')
+        user=next(candidate for candidate in overlay if candidate['text']=='UserOne')
+        self.assertEqual(overlay[0],overlay_fallback)
+        self.assertLess(overlay.index(overlay_fallback),overlay.index(user))
+        self.assertLess(overlay.index(user),next(i for i,candidate in enumerate(overlay)
+                                                   if candidate['text']=='１'))
+
+    def test_japanese_prediction_keeps_same_surface_english_row_after_ascii_fallback(self):
+        connection(self.data/'connection.sud', dimension=1842)
+        dictionary(self.data/'system.sud',[('a','a',1,-30000)])
+        dictionary(self.data/'english_reading.sud',[('a','a',1,500)])
+        candidates=json.loads(self.run_cli('--english-reading','--predict-japanese',
+            '--nbest','100','a').stdout)['candidates']
+        same_surface=[candidate for candidate in candidates if candidate['text']=='a']
+        self.assertEqual([(candidate['score'],[segment['dictionary']
+            for segment in candidate['segments']]) for candidate in same_surface[:2]],
+            [(4000,['unknown']),(500,['english_reading'])])
+
+    def test_japanese_prediction_keeps_unknown_literal_fallback_with_duplicate_sources(self):
+        connection(self.data/'connection.sud', dimension=1842)
+
+        # An exact system path cannot replace the reference's raw-input row.
+        dictionary(self.data/'system.sud',[('ab','ab',1,-30000)])
+        result=json.loads(self.run_cli('--predict-japanese','--nbest','100','ab').stdout)
+        literal=next(candidate for candidate in result['candidates']
+                     if candidate['text']=='ab' and candidate['segments'] and
+                     candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['score'],4000)
+        self.assertFalse(any(candidate['text']=='ab' and any(
+            segment['dictionary']=='system' for segment in candidate['segments'])
+            for candidate in result['candidates']))
+        # A narrow N-best request still has to retain the fallback.
+        bounded=json.loads(self.run_cli('--predict-japanese','--nbest','1','ab').stdout)
+        literal=next(candidate for candidate in bounded['candidates']
+                     if candidate['text']=='ab' and candidate['segments'] and
+                     candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['score'],4000)
+
+        # System paths split across multiple nodes are bypassed as well.
+        dictionary(self.data/'system.sud',[('a','a',1,32767),('b','b',1,32767)])
+        result=json.loads(self.run_cli('--predict-japanese','--nbest','100','ab').stdout)
+        literal=next(candidate for candidate in result['candidates']
+                     if candidate['text']=='ab' and candidate['segments'] and
+                     candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['score'],4000)
+
+        # A higher-priority personal path remains visible alongside the fallback.
+        dictionary(self.data/'system.sud',ENTRIES)
+        result=json.loads(self.run_cli('--predict-japanese','--nbest','100',
+            '--user-entry','ab','ab','1','-10000','ab').stdout)
+        same_surface=[candidate for candidate in result['candidates']
+                      if candidate['text']=='ab']
+        self.assertTrue(any(candidate['segments'][0]['dictionary']=='user'
+                            for candidate in same_surface))
+        literal=next(candidate for candidate in same_surface
+                     if candidate['segments'] and candidate['segments'][0]['dictionary']=='unknown')
+        self.assertEqual(literal['score'],4000)
 
     def test_japanese_prediction_enables_auxiliary_reading_completion(self):
         self.install_auxiliary_dictionary_fixture()
@@ -658,6 +968,21 @@ class Tests(unittest.TestCase):
         texts=[c['text'] for c in json.loads(self.run_cli('--predict-japanese','--nbest','1','あ').stdout)['candidates']]
         self.assertLess(texts.index('ｱ'),texts.index('EMOJI'))
         self.assertLess(texts.index('EMOJI'),texts.index('SYMBOL'))
+
+    def test_symbol_only_fullwidth_input_uses_android_nfkc_symbol_lookup(self):
+        self.install_auxiliary_dictionary_fixture()
+        dictionary(self.data/'symbol.sud',[
+            ('＋','FULLWIDTH-PLUS',0,4000),('＋','+',0,4000),
+            ('+','＋',0,4000),('+','+',0,4000),
+            ('+','CIRCLED-PLUS',0,4000),('+','SUPERSCRIPT-PLUS',0,4000),
+            ('+','SUBSCRIPT-PLUS',0,4000),
+        ])
+        result=json.loads(self.run_cli('--predict-japanese','--nbest','20','＋').stdout)
+        symbols=[c for c in result['candidates'] if c['segments'] and c['segments'][0]['dictionary']=='symbol']
+        self.assertEqual([c['text'] for c in symbols],
+                         ['FULLWIDTH-PLUS','+','＋','+','CIRCLED-PLUS','SUPERSCRIPT-PLUS','SUBSCRIPT-PLUS'])
+        self.assertTrue(all(c['segments']==[dict(text=c['text'],dictionary='symbol',start_utf16=0,length_utf16=1)]
+                            for c in symbols))
 
     def test_bunsetsu_marks_legacy_generation_without_auxiliary_dictionaries_incomplete(self):
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['A','B'])
@@ -830,7 +1155,9 @@ class Tests(unittest.TestCase):
 
     def test_incremental_search_rows_match_fresh_conversion(self):
         if INCREMENTAL is None:self.skipTest("Incremental executable not supplied")
-        dictionary(self.data/'system.sud',ENTRIES+[('しろ','しろ',1,100),('しろ','城',1,-500)])
+        connection(self.data/'connection.sud', dimension=1842)
+        dictionary(self.data/'system.sud',ENTRIES+[('しろ','しろ',1,100),('しろ','城',1,-500),
+            ('a','SystemA',1,-500)])
         standalone(self.data/'standalone.sud',['しろ'])
         result=subprocess.run([INCREMENTAL,str(self.data)],capture_output=True)
         self.assertEqual(result.returncode,0,result.stderr.decode())

@@ -24,6 +24,7 @@ add_test(NAME prediction_quality_policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CU
 add_test(NAME android_display_export_policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_android_display_export.py)
 add_test(NAME display_reference_comparison COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_display_reference_comparison.py)
 add_test(NAME authored_conversion_quality COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_conversion_quality.py)
+add_test(NAME real_english_export_policy COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_real_english_export.py)
 
 add_executable(sumire-c-api-test tests/test_c_api.c)
 target_link_libraries(sumire-c-api-test PRIVATE sumire_conversion)

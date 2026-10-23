@@ -49,6 +49,12 @@ int main(int argc, char **argv) {
     }
   }
   check(half_found, "half-width kana candidate missing");
+  auto ascii = run("a",false,true,true,20,200000);
+  check(ascii.reused_search_rows == 0, "ASCII graph mode reused prior dictionary rows");
+  auto mixed = run("aあ",false,true,true,20,200000);
+  check(mixed.reused_search_rows == 0, "mixed input reused ASCII-only graph rows");
+  ascii = run("a",false,true,true,20,200000);
+  check(ascii.reused_search_rows == 0, "ASCII graph mode reused mixed-input dictionary rows");
   for (bool omission : {false,true}) {
     for (const std::string &s : {"あ", "あい", "あいあ", "あいあい", "あいあいあ", "あいあい", "あいあ", "あああ", "あああ",
                                "😀あいあい", "😁あいあい", "があい", "かあい", "👩‍💻あい", "👩‍💻あ",

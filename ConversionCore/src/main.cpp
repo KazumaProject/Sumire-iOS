@@ -7,6 +7,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <filesystem>
 
 std::string json(const std::string &s) {
   static const char hex[] = "0123456789abcdef";
@@ -62,6 +63,7 @@ void usage() {
                "--bunsetsu enables the pinned Android bunsetsu route and disables Japanese completion; combine with --english-reading to append kana-to-English candidates.\n"
                "--prefix-candidates appends system reading-prefix matches with consumed UTF-16 ranges and word costs.\n"
                "--no-standalone-priority disables the optional standalone.sud table.\n"
+               "--no-numeric-symbol-candidates disables value-based symbol variants for digit-only input.\n"
                "--omission enables directional kana modifier omission (default "
                "OFF).\n"
                "--english-reading appends exact kana-to-English entries after Japanese N-best.\n"
@@ -87,7 +89,7 @@ int main(int argc, char **argv) {
     bool prefix_candidates = false;
     bool japanese_prediction = false;
     bool bunsetsu_search = false;
-    bool standalone_priority = true;
+    bool standalone_priority = true, numeric_symbol_candidates = true;
     bool stream = false, list = false, lookup = false, omission = false, english = false, english_words = false, predict_english = false, english_candidates = false, include_english_reading = false;
     size_t count = 10, limit = 200000;
     for (int i = 1; i < argc; ++i) {
@@ -134,6 +136,8 @@ int main(int argc, char **argv) {
         bunsetsu_search = true;
       else if (a == "--no-standalone-priority")
         standalone_priority = false;
+      else if (a == "--no-numeric-symbol-candidates")
+        numeric_symbol_candidates = false;
       else if (a == "--prefix-candidates")
         prefix_candidates = true;
       else if (a == "--omission")
@@ -197,7 +201,8 @@ int main(int argc, char **argv) {
     if (count < 1 || count > 100 || limit < 1 || limit > 2000000)
       throw std::runtime_error("invalid search limits");
     auto start = std::chrono::steady_clock::now();
-    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates, standalone_priority);
+    const bool japaneseEnglishWords = japanese_prediction && std::filesystem::exists(dir + "/english.sud");
+    sumire::Engine engine(dir, categories, english || include_english_reading, english_words || predict_english || english_candidates || japaneseEnglishWords, standalone_priority);
     const auto personal = personal_entries.empty() ? std::shared_ptr<const sumire::PersonalDictionary>{}
                                                  : engine.personal_dictionary(std::move(personal_entries));
     sumire::Workspace workspace;
@@ -208,7 +213,7 @@ int main(int argc, char **argv) {
     auto run = [&](const std::string &reading) {
       try {
         auto r = (predict_english || english_candidates) ? engine.predict_english(reading, count, english_candidates, personal.get()) : english_words ? engine.lookup_english(reading, count) : english ? engine.lookup_english_reading(reading, count) : lookup ? engine.lookup(reading, count)
-                        : engine.convert(reading, count, limit, omission, personal.get(), nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search);
+                        : engine.convert(reading, count, limit, omission, personal.get(), nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search, numeric_symbol_candidates);
         std::cout << "{\"reading\":" << json(reading)
                   << ",\"mode\":" << json(bunsetsu_search ? "bunsetsu" : english_candidates ? "english" : predict_english ? "english-predict" : english_words ? "english-lookup" : english ? "english-reading-lookup" : lookup ? "lookup" : "convert")
                   << ",\"complete\":" << (r.complete ? "true" : "false")
