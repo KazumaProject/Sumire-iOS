@@ -7,7 +7,10 @@ final class HistoricKanaFontTests: XCTestCase {
     func testBundledFontHasRealGlyphsForHistoricKanaCandidates() throws {
         let font = try XCTUnwrap(HistoricKanaFont.fallback(size: 18))
         XCTAssertEqual(font.fontName, "NotoSerifHentaigana-Regular")
-        for point: UInt32 in [0x1B005, 0x1B116, 0x1B117, 0x1B118, 0x1B119, 0x1B11A, 0x1B11B, 0x1B11C] {
+        for point: UInt32 in [
+            0x1B002, 0x1B003, 0x1B004, 0x1B005,
+            0x1B116, 0x1B117, 0x1B118, 0x1B119, 0x1B11A, 0x1B11B, 0x1B11C
+        ] {
             let text = String(UnicodeScalar(point)!)
             let line = CTLineCreateWithAttributedString(HistoricKanaFont.attributed(text))
             let runs = CTLineGetGlyphRuns(line) as! [CTRun]
@@ -24,14 +27,14 @@ final class HistoricKanaFontTests: XCTestCase {
     }
 
     func testMixedTextPreservesScalarsAndUsesUTF16Ranges() throws {
-        let text = "👨‍👩‍👧‍👦か\u{3099}\u{1B005}\u{1B116}を✈️"
+        let text = "👨‍👩‍👧‍👦か\u{3099}\u{1B002}\u{1B003}\u{1B004}\u{1B005}\u{1B116}を✈️"
         let attributed = HistoricKanaFont.attributed(text)
         XCTAssertEqual(Array(attributed.string.utf16), Array(text.utf16))
         let normal = UIFont.systemFont(ofSize: 18).fontName
         var offset = 0
         for scalar in text.unicodeScalars {
             let font = try XCTUnwrap(attributed.attribute(.font, at: offset, effectiveRange: nil) as? UIFont)
-            let historic = scalar.value == 0x1B005 || scalar.value == 0x1B116
+            let historic = [0x1B002, 0x1B003, 0x1B004, 0x1B005, 0x1B116].contains(scalar.value)
             XCTAssertEqual(font.fontName, historic ? HistoricKanaFont.assetName : normal)
             offset += scalar.utf16.count
         }
