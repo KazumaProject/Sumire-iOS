@@ -7,6 +7,8 @@ import CoreFoundation
 public struct AndroidPreferenceBackup: Equatable {
     public let version: Int
     public let settings: KeyboardSettingsSnapshot
+    /// Android's three-step flick input mode, stored inside the iOS flick-style blob.
+    public let threeStepInputMode: FlickStyleSettings.ThreeStepInput
     public let removingKeys: Set<String>
     public let importedKeys: [String]
     public let unsupportedEntryCount: Int
@@ -14,7 +16,7 @@ public struct AndroidPreferenceBackup: Equatable {
 
     /// Number of iOS setting changes that will be applied, including an
     /// Android effective default synthesized for an omitted preference.
-    public var importedSettingCount: Int { settings.values.count + removingKeys.count }
+    public var importedSettingCount: Int { settings.values.count + removingKeys.count + 1 }
 
     /// Android's effective retention default applies when an enabled expiry
     /// preference is exported without its unchanged hour value.
@@ -71,10 +73,12 @@ public struct AndroidPreferenceBackup: Equatable {
         case boolean(String)
         case integer(String, range: ClosedRange<Int>)
         case text(String, values: [String: String])
+        case threeStepInputMode
 
         var targetKey: String {
             switch self {
             case .boolean(let key), .integer(let key, _), .text(let key, _): return key
+            case .threeStepInputMode: return FlickStyleSettings.storageKey
             }
         }
     }
@@ -96,7 +100,8 @@ public struct AndroidPreferenceBackup: Equatable {
         ]),
         "default_emoji_skin_tone_preference": .text(EmojiSkinTone.settingsKey, values:
             Dictionary(uniqueKeysWithValues: EmojiSkinTone.allCases.map { ($0.rawValue, $0.rawValue) })
-        )
+        ),
+        "sumire_flick_input_mode_preference": .threeStepInputMode
     ]
     /// Defaults returned by Android Sumire when a preference is absent from
     /// SharedPreferences. Android restore replaces the preference store, so an
@@ -158,6 +163,7 @@ public struct AndroidPreferenceBackup: Equatable {
         var imported = [String]()
         var unsupported = 0
         var seenKeys = Set<String>()
+        var threeStepInputMode = FlickStyleSettings.ThreeStepInput.all
 
         for rawEntry in entries {
             guard let entry = rawEntry as? [String: Any],
@@ -179,7 +185,13 @@ public struct AndroidPreferenceBackup: Equatable {
                 guard entry["value"] == nil || entry["value"] is NSNull else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
-                removals.insert(mapping.targetKey)
+                if case .threeStepInputMode = mapping {
+                    // Android's null/removal reads as its default (`all`). Do
+                    // not remove the entire iOS blob, which also stores iOS-only settings.
+                    threeStepInputMode = .all
+                } else {
+                    removals.insert(mapping.targetKey)
+                }
             case "boolean":
                 guard case .boolean(let targetKey) = mapping else {
                     throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
@@ -204,12 +216,23 @@ public struct AndroidPreferenceBackup: Equatable {
                 }
                 snapshot.values[targetKey] = .number(number.doubleValue)
             case "string":
-                guard case .text(let targetKey, let values) = mapping,
-                      let value = entry["value"] as? String,
-                      let translatedValue = values[value] else {
+                guard let value = entry["value"] as? String else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
-                snapshot.values[targetKey] = .text(translatedValue)
+                switch mapping {
+                case .text(let targetKey, let values):
+                    guard let translatedValue = values[value] else {
+                        throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                    }
+                    snapshot.values[targetKey] = .text(translatedValue)
+                case .threeStepInputMode:
+                    guard let mode = FlickStyleSettings.ThreeStepInput(rawValue: value) else {
+                        throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                    }
+                    threeStepInputMode = mode
+                case .boolean, .integer:
+                    throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
+                }
             default:
                 throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
             }
@@ -220,6 +243,11 @@ public struct AndroidPreferenceBackup: Equatable {
         // restores with replaceAll=true. Restore omitted compatible settings
         // to Android's effective defaults; explicit nulls still remove keys.
         for (androidKey, mapping) in mappings where !seenKeys.contains(androidKey) {
+            if case .threeStepInputMode = mapping {
+                // Android restores omitted SharedPreferences to its effective default.
+                threeStepInputMode = .all
+                continue
+            }
             guard let value = defaultValues[androidKey] else {
                 throw PersonalDataError("Android設定の既定値がありません: \(androidKey)")
             }
@@ -227,7 +255,8 @@ public struct AndroidPreferenceBackup: Equatable {
         }
 
         try snapshot.validate()
-        return Self(version: version, settings: snapshot, removingKeys: removals,
+        return Self(version: version, settings: snapshot, threeStepInputMode: threeStepInputMode,
+                    removingKeys: removals,
                     importedKeys: imported.sorted(), unsupportedEntryCount: unsupported,
                     shortcutIDs: shortcutIDs)
     }
@@ -235,6 +264,23 @@ public struct AndroidPreferenceBackup: Equatable {
     /// Restores compatible Android settings, including Android defaults for
     /// omitted entries. Unrepresented iOS settings are deliberately preserved.
     public func apply(to defaults: UserDefaults) throws {
-        try settings.applyImportedValues(to: defaults, removingKeys: removingKeys)
+        var importedSettings = settings
+        var flickStyle = try Self.currentFlickStyle(from: defaults)
+        flickStyle.threeStepInput = threeStepInputMode
+        importedSettings.values[FlickStyleSettings.storageKey] = .data(
+            try JSONEncoder().encode(flickStyle.normalized)
+        )
+        try importedSettings.applyImportedValues(to: defaults, removingKeys: removingKeys)
+    }
+
+    private static func currentFlickStyle(from defaults: UserDefaults) throws -> FlickStyleSettings {
+        guard let raw = defaults.object(forKey: FlickStyleSettings.storageKey) else {
+            return FlickStyleSettings()
+        }
+        guard let data = raw as? Data, data.count <= 4096,
+              let style = try? JSONDecoder().decode(FlickStyleSettings.self, from: data) else {
+            throw PersonalDataError("保存済みのフリック設定が不正です")
+        }
+        return style.normalized
     }
 }
