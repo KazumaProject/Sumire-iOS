@@ -12,18 +12,107 @@ public struct AndroidPreferenceBackup: Equatable {
     public let unsupportedEntryCount: Int
     public let shortcutIDs: [String]
 
-    public var importedSettingCount: Int { importedKeys.count }
+    /// Number of iOS setting changes that will be applied, including an
+    /// Android effective default synthesized for an omitted preference.
+    public var importedSettingCount: Int { settings.values.count + removingKeys.count }
+
+    /// Android's effective retention default applies when an enabled expiry
+    /// preference is exported without its unchanged hour value.
+    public var enabledClipboardExpiryRetentionHours: Int? {
+        guard case .boolean(true)? = settings.values["clipboard.expirationEnabled"] else { return nil }
+        guard case .number(let hours)? = settings.values["clipboard.retentionHours"] else { return 1 }
+        return Int(hours)
+    }
+
+    /// Returns the post-import expiry threshold when this import newly enables
+    /// expiry or shortens its active threshold. The caller can use this to warn
+    /// about a later history reload deleting expired, unpinned clipboard entries.
+    public func clipboardExpiryDeletionWarningHours(currentDefaults: UserDefaults) -> Int? {
+        let expiryKey = "clipboard.expirationEnabled"
+        let retentionKey = "clipboard.retentionHours"
+        let updatesExpiry = settings.values[expiryKey] != nil || removingKeys.contains(expiryKey)
+        let updatesRetention = settings.values[retentionKey] != nil || removingKeys.contains(retentionKey)
+        guard updatesExpiry || updatesRetention else { return nil }
+
+        let currentExpiryEnabled = currentDefaults.bool(forKey: expiryKey)
+        let expiryEnabled: Bool
+        if case .boolean(let value)? = settings.values[expiryKey] {
+            expiryEnabled = value
+        } else if removingKeys.contains(expiryKey) {
+            expiryEnabled = false
+        } else {
+            expiryEnabled = currentDefaults.bool(forKey: expiryKey)
+        }
+        guard expiryEnabled else { return nil }
+
+        let importedHours: Int
+        if case .number(let value)? = settings.values[retentionKey] {
+            importedHours = Int(value)
+        } else if removingKeys.contains(retentionKey) {
+            importedHours = 1
+        } else if currentDefaults.object(forKey: retentionKey) == nil {
+            importedHours = 1
+        } else {
+            importedHours = currentDefaults.integer(forKey: retentionKey)
+        }
+        let postImportHours = min(72, max(1, importedHours))
+        let currentHours = min(72, max(1, currentDefaults.object(forKey: retentionKey) == nil
+            ? 1
+            : currentDefaults.integer(forKey: retentionKey)))
+        guard !currentExpiryEnabled || postImportHours < currentHours else { return nil }
+        return postImportHours
+    }
 
     private static let maximumBytes = 128 * 1024 * 1024
     private static let maximumEntries = 100_000
     private static let maximumKeyBytes = 512
     private static let maximumShortcutIDBytes = 512
-    private static let mappings: [String: String] = [
-        "live_conversion_preference": "liveConversion",
-        "omission_search_preference": "omissionSearch",
-        "conversion_bunsetsu_separation_preference": "bunsetsuSeparation",
-        "learn_dictionary_preference": "learningEnabled",
-        "learn_first_candidate_dictionary_preference": "learnFirstCandidate"
+    private enum Mapping {
+        case boolean(String)
+        case integer(String, range: ClosedRange<Int>)
+        case text(String, values: [String: String])
+
+        var targetKey: String {
+            switch self {
+            case .boolean(let key), .integer(let key, _), .text(let key, _): return key
+            }
+        }
+    }
+    private static let mappings: [String: Mapping] = [
+        "live_conversion_preference": .boolean("liveConversion"),
+        "omission_search_preference": .boolean("omissionSearch"),
+        "conversion_bunsetsu_separation_preference": .boolean("bunsetsuSeparation"),
+        "learn_dictionary_preference": .boolean("learningEnabled"),
+        "learn_first_candidate_dictionary_preference": .boolean("learnFirstCandidate"),
+        "clipboard_history_preference": .boolean(ClipboardHistorySettings.enabledKey),
+        "clipboard_delete_unpinned_after_hours_preference": .boolean("clipboard.expirationEnabled"),
+        "clipboard_unpinned_retention_hours_preference": .integer("clipboard.retentionHours", range: 1...72),
+        "custom_direct_input_replace_composing_preference": .boolean(CustomInputModeStore.replaceKey),
+        "symbol_mode_preference": .text(SymbolKeyboardMode.initialModeKey, values: [
+            "EMOJI": SymbolKeyboardMode.emoji.rawValue,
+            "EMOTICON": SymbolKeyboardMode.emoticon.rawValue,
+            "SYMBOL": SymbolKeyboardMode.symbol.rawValue,
+            "CLIPBOARD": SymbolKeyboardMode.clipboard.rawValue
+        ]),
+        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.settingsKey, values:
+            Dictionary(uniqueKeysWithValues: EmojiSkinTone.allCases.map { ($0.rawValue, $0.rawValue) })
+        )
+    ]
+    /// Defaults returned by Android Sumire when a preference is absent from
+    /// SharedPreferences. Android restore replaces the preference store, so an
+    /// omitted compatible entry must not leave a stale iOS value behind.
+    private static let defaultValues: [String: KeyboardSettingsSnapshot.Value] = [
+        "live_conversion_preference": .boolean(false),
+        "omission_search_preference": .boolean(false),
+        "conversion_bunsetsu_separation_preference": .boolean(false),
+        "learn_dictionary_preference": .boolean(true),
+        "learn_first_candidate_dictionary_preference": .boolean(false),
+        "clipboard_history_preference": .boolean(false),
+        "clipboard_delete_unpinned_after_hours_preference": .boolean(false),
+        "clipboard_unpinned_retention_hours_preference": .number(1),
+        "custom_direct_input_replace_composing_preference": .boolean(false),
+        "symbol_mode_preference": .text(SymbolKeyboardMode.emoji.rawValue),
+        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.standard.rawValue)
     ]
 
     /// Returns nil for a JSON document that is not shaped like Android
@@ -79,7 +168,7 @@ public struct AndroidPreferenceBackup: Equatable {
                 throw PersonalDataError("Android設定バックアップの項目が不正です")
             }
 
-            guard let targetKey = mappings[key] else {
+            guard let mapping = mappings[key] else {
                 unsupported += 1
                 continue
             }
@@ -90,8 +179,11 @@ public struct AndroidPreferenceBackup: Equatable {
                 guard entry["value"] == nil || entry["value"] is NSNull else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
-                removals.insert(targetKey)
+                removals.insert(mapping.targetKey)
             case "boolean":
+                guard case .boolean(let targetKey) = mapping else {
+                    throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
+                }
                 guard let value = entry["value"] else {
                     throw PersonalDataError("Android設定バックアップの対応項目に値がありません")
                 }
@@ -100,10 +192,38 @@ public struct AndroidPreferenceBackup: Equatable {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
                 snapshot.values[targetKey] = .boolean(number.boolValue)
+            case "int":
+                guard case .integer(let targetKey, let range) = mapping,
+                      let number = entry["value"] as? NSNumber,
+                      CFGetTypeID(number) != CFBooleanGetTypeID(),
+                      number.doubleValue.isFinite,
+                      number.doubleValue.rounded() == number.doubleValue,
+                      number.doubleValue >= Double(range.lowerBound),
+                      number.doubleValue <= Double(range.upperBound) else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                snapshot.values[targetKey] = .number(number.doubleValue)
+            case "string":
+                guard case .text(let targetKey, let values) = mapping,
+                      let value = entry["value"] as? String,
+                      let translatedValue = values[value] else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                snapshot.values[targetKey] = .text(translatedValue)
             default:
                 throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
             }
             imported.append(key)
+        }
+
+        // Android exports only values present in SharedPreferences, then
+        // restores with replaceAll=true. Restore omitted compatible settings
+        // to Android's effective defaults; explicit nulls still remove keys.
+        for (androidKey, mapping) in mappings where !seenKeys.contains(androidKey) {
+            guard let value = defaultValues[androidKey] else {
+                throw PersonalDataError("Android設定の既定値がありません: \(androidKey)")
+            }
+            snapshot.values[mapping.targetKey] = value
         }
 
         try snapshot.validate()
@@ -112,8 +232,8 @@ public struct AndroidPreferenceBackup: Equatable {
                     shortcutIDs: shortcutIDs)
     }
 
-    /// Merges the compatible Android settings into the app's current settings.
-    /// Unrepresented iOS settings are deliberately preserved.
+    /// Restores compatible Android settings, including Android defaults for
+    /// omitted entries. Unrepresented iOS settings are deliberately preserved.
     public func apply(to defaults: UserDefaults) throws {
         try settings.applyImportedValues(to: defaults, removingKeys: removingKeys)
     }
