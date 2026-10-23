@@ -252,10 +252,14 @@ private struct TextMacroEditorBlockItem: Identifiable, Equatable {
     }
 }
 
-private enum TextMacroEditorMode: String, CaseIterable, Identifiable {
+enum TextMacroEditorMode: String, CaseIterable, Identifiable {
     case blocks = "ブロック"
     case source = "構文"
     var id: String { rawValue }
+
+    static func initial(for parsedDocument: AndroidTextMacroEditorDocument?) -> TextMacroEditorMode {
+        parsedDocument == nil ? .source : .blocks
+    }
 }
 
 private struct RemovedTextMacroEditorBlock: Identifiable {
@@ -268,7 +272,7 @@ private struct PersonalTextMacroEditor: View {
     @Environment(\.dismiss) private var dismiss
     @State private var macro: PersonalTextMacro
     @State private var blocks: [TextMacroEditorBlockItem]
-    @State private var mode = TextMacroEditorMode.blocks
+    @State private var mode: TextMacroEditorMode
     @State private var removedBlock: RemovedTextMacroEditorBlock?
     @State private var error: String?
     @State private var showDiscardConfirmation = false
@@ -279,9 +283,11 @@ private struct PersonalTextMacroEditor: View {
     init(macro: PersonalTextMacro, save: @escaping (PersonalTextMacro) throws -> Void) {
         _macro = State(initialValue: macro)
         originalMacro = macro
-        let parsed = (try? AndroidTextMacroEditorDocument.parse(macro.body).blocks) ?? []
+        let parsedDocument = try? AndroidTextMacroEditorDocument.parse(macro.body)
+        let parsed = parsedDocument?.blocks ?? []
         let initialBlocks: [AndroidTextMacroEditorBlock] = parsed.isEmpty ? [.text("")] : parsed
         _blocks = State(initialValue: initialBlocks.map { TextMacroEditorBlockItem(block: $0) })
+        _mode = State(initialValue: TextMacroEditorMode.initial(for: parsedDocument))
         self.save = save
     }
 
