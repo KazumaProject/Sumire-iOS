@@ -18,12 +18,33 @@ public struct AndroidPreferenceBackup: Equatable {
     private static let maximumEntries = 100_000
     private static let maximumKeyBytes = 512
     private static let maximumShortcutIDBytes = 512
-    private static let mappings: [String: String] = [
-        "live_conversion_preference": "liveConversion",
-        "omission_search_preference": "omissionSearch",
-        "conversion_bunsetsu_separation_preference": "bunsetsuSeparation",
-        "learn_dictionary_preference": "learningEnabled",
-        "learn_first_candidate_dictionary_preference": "learnFirstCandidate"
+    private enum Mapping {
+        case boolean(String)
+        case text(String, values: [String: String])
+
+        var targetKey: String {
+            switch self {
+            case .boolean(let key), .text(let key, _): return key
+            }
+        }
+    }
+    private static let mappings: [String: Mapping] = [
+        "live_conversion_preference": .boolean("liveConversion"),
+        "omission_search_preference": .boolean("omissionSearch"),
+        "conversion_bunsetsu_separation_preference": .boolean("bunsetsuSeparation"),
+        "learn_dictionary_preference": .boolean("learningEnabled"),
+        "learn_first_candidate_dictionary_preference": .boolean("learnFirstCandidate"),
+        "clipboard_history_preference": .boolean(ClipboardHistorySettings.enabledKey),
+        "custom_direct_input_replace_composing_preference": .boolean(CustomInputModeStore.replaceKey),
+        "symbol_mode_preference": .text(SymbolKeyboardMode.initialModeKey, values: [
+            "EMOJI": SymbolKeyboardMode.emoji.rawValue,
+            "EMOTICON": SymbolKeyboardMode.emoticon.rawValue,
+            "SYMBOL": SymbolKeyboardMode.symbol.rawValue,
+            "CLIPBOARD": SymbolKeyboardMode.clipboard.rawValue
+        ]),
+        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.settingsKey, values:
+            Dictionary(uniqueKeysWithValues: EmojiSkinTone.allCases.map { ($0.rawValue, $0.rawValue) })
+        )
     ]
 
     /// Returns nil for a JSON document that is not shaped like Android
@@ -79,7 +100,7 @@ public struct AndroidPreferenceBackup: Equatable {
                 throw PersonalDataError("Android設定バックアップの項目が不正です")
             }
 
-            guard let targetKey = mappings[key] else {
+            guard let mapping = mappings[key] else {
                 unsupported += 1
                 continue
             }
@@ -90,8 +111,11 @@ public struct AndroidPreferenceBackup: Equatable {
                 guard entry["value"] == nil || entry["value"] is NSNull else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
-                removals.insert(targetKey)
+                removals.insert(mapping.targetKey)
             case "boolean":
+                guard case .boolean(let targetKey) = mapping else {
+                    throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
+                }
                 guard let value = entry["value"] else {
                     throw PersonalDataError("Android設定バックアップの対応項目に値がありません")
                 }
@@ -100,6 +124,13 @@ public struct AndroidPreferenceBackup: Equatable {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
                 snapshot.values[targetKey] = .boolean(number.boolValue)
+            case "string":
+                guard case .text(let targetKey, let values) = mapping,
+                      let value = entry["value"] as? String,
+                      let translatedValue = values[value] else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                snapshot.values[targetKey] = .text(translatedValue)
             default:
                 throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
             }
