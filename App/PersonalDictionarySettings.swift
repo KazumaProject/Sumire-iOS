@@ -198,6 +198,24 @@ struct PersonalDictionarySettings: View {
                         Text("新規追加：\(item.application.addedEntries)件")
                         Text("登録済みとの重複：\(item.application.existingDuplicates)件（既存登録を保持）")
                         Text("読み・表記が一致する登録は保持し、新しい登録だけ追加します。")
+                        if !item.data.entries.isEmpty {
+                            Section("読みと表記（先頭50件）") {
+                                ForEach(Array(item.data.entries.prefix(50).enumerated()), id: \.offset) { row in
+                                    VStack(alignment: .leading, spacing: 3) {
+                                        Text(row.element.reading)
+                                            .font(.caption)
+                                            .foregroundStyle(.secondary)
+                                        Text(row.element.word)
+                                            .lineLimit(2)
+                                    }
+                                }
+                                if item.data.entries.count > 50 {
+                                    Text("ほか\(item.data.entries.count - 50)件は一覧に表示していません")
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
                         ForEach(Array(item.data.errors.enumerated()), id: \.offset) { _, message in Text(message).font(.caption) }
                         Button("新しい登録を反映") {
                             do {
