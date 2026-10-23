@@ -1,0 +1,120 @@
+import Foundation
+import CoreFoundation
+
+/// Reader for Android Sumire's `PrefBackup` JSON. Only settings with a
+/// confirmed iOS equivalent are imported; Android-only values and toolbar IDs
+/// are reported but never written into unrelated iOS preferences.
+public struct AndroidPreferenceBackup: Equatable {
+    public let version: Int
+    public let settings: KeyboardSettingsSnapshot
+    public let removingKeys: Set<String>
+    public let importedKeys: [String]
+    public let unsupportedEntryCount: Int
+    public let shortcutIDs: [String]
+
+    public var importedSettingCount: Int { importedKeys.count }
+
+    private static let maximumBytes = 128 * 1024 * 1024
+    private static let maximumEntries = 100_000
+    private static let maximumKeyBytes = 512
+    private static let maximumShortcutIDBytes = 512
+    private static let mappings: [String: String] = [
+        "live_conversion_preference": "liveConversion",
+        "omission_search_preference": "omissionSearch",
+        "conversion_bunsetsu_separation_preference": "bunsetsuSeparation",
+        "learn_dictionary_preference": "learningEnabled",
+        "learn_first_candidate_dictionary_preference": "learnFirstCandidate"
+    ]
+
+    /// Returns nil for a JSON document that is not shaped like Android
+    /// `PrefBackup`; malformed documents that claim that shape throw.
+    public static func decodeIfMatching(_ data: Data) throws -> Self? {
+        guard data.count <= maximumBytes else { throw PersonalDataError("バックアップが大きすぎます") }
+        guard let root = try? JSONSerialization.jsonObject(with: data, options: [.fragmentsAllowed]) as? [String: Any],
+              root["format"] == nil,
+              root.keys.contains("entries") else { return nil }
+        return try decode(data)
+    }
+
+    public static func decode(_ data: Data) throws -> Self {
+        guard data.count <= maximumBytes,
+              let root = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+              let rawVersion = root["version"] as? NSNumber,
+              CFGetTypeID(rawVersion) != CFBooleanGetTypeID(),
+              rawVersion.doubleValue.rounded() == rawVersion.doubleValue,
+              let entries = root["entries"] as? [Any],
+              entries.count <= maximumEntries else {
+            throw PersonalDataError("Android設定バックアップの形式が不正です")
+        }
+        let version = rawVersion.intValue
+        guard version == 1 || version == 2 else {
+            throw PersonalDataError("未対応のAndroid設定バックアップ形式です")
+        }
+
+        let shortcutIDs: [String]
+        if let rawShortcuts = root["shortcutIds"], !(rawShortcuts is NSNull) {
+            guard version >= 2,
+                  let values = rawShortcuts as? [String],
+                  values.count <= maximumEntries,
+                  values.allSatisfy({ !$0.isEmpty && $0.utf8.count <= maximumShortcutIDBytes }) else {
+                throw PersonalDataError("Android設定バックアップのツールバー項目が不正です")
+            }
+            shortcutIDs = values
+        } else {
+            shortcutIDs = []
+        }
+
+        var snapshot = KeyboardSettingsSnapshot()
+        var removals = Set<String>()
+        var imported = [String]()
+        var unsupported = 0
+        var seenKeys = Set<String>()
+
+        for rawEntry in entries {
+            guard let entry = rawEntry as? [String: Any],
+                  let key = entry["key"] as? String,
+                  !key.isEmpty, key.utf8.count <= maximumKeyBytes,
+                  let type = entry["type"] as? String,
+                  seenKeys.insert(key).inserted else {
+                throw PersonalDataError("Android設定バックアップの項目が不正です")
+            }
+
+            guard let targetKey = mappings[key] else {
+                unsupported += 1
+                continue
+            }
+            switch type {
+            case "null":
+                // Default Gson omits null-valued object members, so Android's
+                // PrefEntry(key, "null", null) may have no value field.
+                guard entry["value"] == nil || entry["value"] is NSNull else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                removals.insert(targetKey)
+            case "boolean":
+                guard let value = entry["value"] else {
+                    throw PersonalDataError("Android設定バックアップの対応項目に値がありません")
+                }
+                guard let number = value as? NSNumber,
+                      CFGetTypeID(number) == CFBooleanGetTypeID() else {
+                    throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                }
+                snapshot.values[targetKey] = .boolean(number.boolValue)
+            default:
+                throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
+            }
+            imported.append(key)
+        }
+
+        try snapshot.validate()
+        return Self(version: version, settings: snapshot, removingKeys: removals,
+                    importedKeys: imported.sorted(), unsupportedEntryCount: unsupported,
+                    shortcutIDs: shortcutIDs)
+    }
+
+    /// Merges the compatible Android settings into the app's current settings.
+    /// Unrepresented iOS settings are deliberately preserved.
+    public func apply(to defaults: UserDefaults) throws {
+        try settings.applyImportedValues(to: defaults, removingKeys: removingKeys)
+    }
+}

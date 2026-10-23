@@ -23,13 +23,16 @@ struct PersonalBackupSettings: View {
     @State private var exporting = false
     @State private var importing = false
     @State private var staged: PersonalBackup.Contents?
+    @State private var stagedAndroid: AndroidPreferenceBackup?
     @State private var confirming = false
+    @State private var confirmingAndroidSettings = false
     @State private var message: String?
     @State private var processing = false
     var body: some View {
         NavigationStack {
             Form {
                 Text("ユーザー辞書・定型文と入力設定をJSONファイルに保存します。配色、キーサイズ、配列・ローマ字、辞書の有効設定を含みます。学習データも含みます。標準・外部辞書の本体は含みません。")
+                Text("Android版の設定バックアップJSONも選択できます。iOSで対応する設定だけを取り込み、未対応の設定やツールバー項目は無視します。既存のiOS専用設定、辞書、学習データは変更しません。")
                 Text("単語：\(library.lexicon.words.count)件／定型文：\(library.lexicon.templates.count)件")
                 Button("バックアップを保存") {
                     processing = true; message = nil
@@ -63,11 +66,24 @@ struct PersonalBackupSettings: View {
                     PersonalLibrary.readBackup(url) { result in
                         processing = false
                         switch result {
-                        case .success(let contents): staged = contents; confirming = true
-                        case .failure(let error): staged = nil; message = error.localizedDescription
+                        case .success(.sumire(let contents)):
+                            stagedAndroid = nil
+                            staged = contents
+                            confirming = true
+                        case .success(.androidSettings(let backup)):
+                            staged = nil
+                            stagedAndroid = backup
+                            confirmingAndroidSettings = true
+                        case .failure(let error):
+                            staged = nil
+                            stagedAndroid = nil
+                            message = error.localizedDescription
                         }
                     }
-                case .failure(let error): staged = nil; message = error.localizedDescription
+                case .failure(let error):
+                    staged = nil
+                    stagedAndroid = nil
+                    message = error.localizedDescription
                 }
             }
             .alert("辞書を復元しますか？", isPresented: $confirming) {
@@ -88,6 +104,30 @@ struct PersonalBackupSettings: View {
                 }
             } message: {
                 Text("現在の登録を、単語\(staged?.lexicon.words.count ?? 0)件・定型文\(staged?.lexicon.templates.count ?? 0)件に置き換えます。\(staged?.settings == nil ? "設定は変更しません。" : "入力設定もバックアップの内容に置き換えます。")\(staged?.learning == nil ? "学習データは変更しません。" : "学習データも置き換えます。")必要な場合は先に現在のバックアップを保存してください。")
+            }
+            .confirmationDialog("Android設定を取り込みますか？", isPresented: $confirmingAndroidSettings, titleVisibility: .visible) {
+                Button("対応する設定を取り込む") {
+                    guard let stagedAndroid else { return }
+                    restoreAndroidSettings(stagedAndroid)
+                    self.stagedAndroid = nil
+                }
+                Button("キャンセル", role: .cancel) { stagedAndroid = nil }
+            } message: {
+                Text("iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込みます。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。その他のiOS設定、辞書、学習データは変更しません。")
+            }
+        }
+    }
+
+    private func restoreAndroidSettings(_ backup: AndroidPreferenceBackup) {
+        processing = true
+        message = nil
+        library.restoreAndroidSettings(backup) { result in
+            processing = false
+            switch result {
+            case .success(let count):
+                onRestore()
+                message = "Android設定からiOS対応の \(count) 項目を取り込みました。未対応のAndroid設定は変更していません。"
+            case .failure(let error): message = error.localizedDescription
             }
         }
     }
