@@ -89,7 +89,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 2)
+        XCTAssertEqual(backup.importedSettingCount, 11)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -101,14 +101,63 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(defaults.integer(forKey: "clipboard.retentionHours"), 1)
     }
 
-    func testDisabledClipboardExpiryDoesNotImportAnOmittedRetentionDefault() throws {
+    func testDisabledClipboardExpiryStillRestoresOmittedRetentionDefault() throws {
         let backup = try AndroidPreferenceBackup.decode(json([
             entry("clipboard_delete_unpinned_after_hours_preference", "boolean", false)
         ]))
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
-        XCTAssertNil(backup.settings.values["clipboard.retentionHours"])
-        XCTAssertEqual(backup.importedSettingCount, 1)
+        XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
+        XCTAssertEqual(backup.importedSettingCount, 11)
+
+        let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(48, forKey: "clipboard.retentionHours")
+        try backup.apply(to: defaults)
+        XCTAssertFalse(defaults.bool(forKey: "clipboard.expirationEnabled"))
+        XCTAssertEqual(defaults.integer(forKey: "clipboard.retentionHours"), 1)
+    }
+
+    func testOmittedCompatibleSettingsUseAndroidDefaultsButPreserveIOSOnlySettings() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("omission_search_preference", "boolean", true),
+            entry("android.only.setting", "string", "ignored")
+        ]))
+
+        XCTAssertEqual(backup.importedSettingCount, 11)
+        XCTAssertEqual(backup.unsupportedEntryCount, 1)
+        XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
+        XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
+        XCTAssertEqual(backup.settings.values["bunsetsuSeparation"], .boolean(false))
+        XCTAssertEqual(backup.settings.values["learningEnabled"], .boolean(true))
+        XCTAssertEqual(backup.settings.values["learnFirstCandidate"], .boolean(false))
+        XCTAssertEqual(backup.settings.values[ClipboardHistorySettings.enabledKey], .boolean(false))
+        XCTAssertEqual(backup.settings.values["clipboard.expirationEnabled"], .boolean(false))
+        XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
+        XCTAssertEqual(backup.settings.values[CustomInputModeStore.replaceKey], .boolean(false))
+        XCTAssertEqual(backup.settings.values[SymbolKeyboardMode.initialModeKey], .text("emoji"))
+        XCTAssertEqual(backup.settings.values[EmojiSkinTone.settingsKey], .text("default"))
+
+        let suite = "AndroidPreferenceBackupOmittedSettings." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(true, forKey: "liveConversion")
+        defaults.set(false, forKey: "learningEnabled")
+        defaults.set(true, forKey: "englishReadingEnabled")
+        defaults.set(3, forKey: "candidateRowCount")
+        defaults.set(false, forKey: "clipboardAutomaticPreview")
+        try backup.apply(to: defaults)
+
+        XCTAssertFalse(defaults.bool(forKey: "liveConversion"))
+        XCTAssertTrue(defaults.bool(forKey: "omissionSearch"))
+        XCTAssertTrue(defaults.bool(forKey: "learningEnabled"))
+        XCTAssertFalse(defaults.bool(forKey: "learnFirstCandidate"))
+        XCTAssertEqual(SymbolKeyboardMode.initialMode(defaults: defaults), .emoji)
+        XCTAssertEqual(EmojiSkinTone.load(defaults: defaults), .standard)
+        XCTAssertTrue(defaults.bool(forKey: "englishReadingEnabled"))
+        XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 3)
+        XCTAssertFalse(defaults.bool(forKey: "clipboardAutomaticPreview"))
     }
 
     func testClipboardExpiryWarningCoversNewDeletionRiskWithoutOverwarning() throws {
@@ -128,9 +177,9 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             return backup.clipboardExpiryDeletionWarningHours(currentDefaults: defaults)
         }
 
-        XCTAssertEqual(try warning([
+        XCTAssertNil(try warning([
             entry("clipboard_unpinned_retention_hours_preference", "int", 1)
-        ], currentExpiryEnabled: true, currentRetentionHours: 24), 1)
+        ], currentExpiryEnabled: true, currentRetentionHours: 24))
         XCTAssertNil(try warning([
             entry("clipboard_unpinned_retention_hours_preference", "int", 24)
         ], currentExpiryEnabled: true, currentRetentionHours: 24))
@@ -146,9 +195,9 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertNil(try warning([
             entry("live_conversion_preference", "boolean", true)
         ], currentExpiryEnabled: true, currentRetentionHours: 24))
-        XCTAssertEqual(try warning([
+        XCTAssertNil(try warning([
             ["key": "clipboard_unpinned_retention_hours_preference", "type": "null"]
-        ], currentExpiryEnabled: true, currentRetentionHours: 24), 1)
+        ], currentExpiryEnabled: true, currentRetentionHours: 24))
         XCTAssertNil(try warning([
             ["key": "clipboard_delete_unpinned_after_hours_preference", "type": "null"]
         ], currentExpiryEnabled: true, currentRetentionHours: 24))

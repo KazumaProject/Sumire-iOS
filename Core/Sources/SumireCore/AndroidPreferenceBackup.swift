@@ -98,6 +98,22 @@ public struct AndroidPreferenceBackup: Equatable {
             Dictionary(uniqueKeysWithValues: EmojiSkinTone.allCases.map { ($0.rawValue, $0.rawValue) })
         )
     ]
+    /// Defaults returned by Android Sumire when a preference is absent from
+    /// SharedPreferences. Android restore replaces the preference store, so an
+    /// omitted compatible entry must not leave a stale iOS value behind.
+    private static let defaultValues: [String: KeyboardSettingsSnapshot.Value] = [
+        "live_conversion_preference": .boolean(false),
+        "omission_search_preference": .boolean(false),
+        "conversion_bunsetsu_separation_preference": .boolean(false),
+        "learn_dictionary_preference": .boolean(true),
+        "learn_first_candidate_dictionary_preference": .boolean(false),
+        "clipboard_history_preference": .boolean(false),
+        "clipboard_delete_unpinned_after_hours_preference": .boolean(false),
+        "clipboard_unpinned_retention_hours_preference": .number(1),
+        "custom_direct_input_replace_composing_preference": .boolean(false),
+        "symbol_mode_preference": .text(SymbolKeyboardMode.emoji.rawValue),
+        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.standard.rawValue)
+    ]
 
     /// Returns nil for a JSON document that is not shaped like Android
     /// `PrefBackup`; malformed documents that claim that shape throw.
@@ -200,14 +216,14 @@ public struct AndroidPreferenceBackup: Equatable {
             imported.append(key)
         }
 
-        // Android exports only values present in SharedPreferences. If expiry
-        // is explicitly enabled while its unchanged hours value is omitted,
-        // carry Android's effective default (one hour) into the iOS snapshot.
-        // An explicit null remains a removal and resolves to the same iOS default.
-        if snapshot.values["clipboard.expirationEnabled"] == .boolean(true),
-           snapshot.values["clipboard.retentionHours"] == nil,
-           !removals.contains("clipboard.retentionHours") {
-            snapshot.values["clipboard.retentionHours"] = .number(1)
+        // Android exports only values present in SharedPreferences, then
+        // restores with replaceAll=true. Restore omitted compatible settings
+        // to Android's effective defaults; explicit nulls still remove keys.
+        for (androidKey, mapping) in mappings where !seenKeys.contains(androidKey) {
+            guard let value = defaultValues[androidKey] else {
+                throw PersonalDataError("Android設定の既定値がありません: \(androidKey)")
+            }
+            snapshot.values[mapping.targetKey] = value
         }
 
         try snapshot.validate()
@@ -216,8 +232,8 @@ public struct AndroidPreferenceBackup: Equatable {
                     shortcutIDs: shortcutIDs)
     }
 
-    /// Merges the compatible Android settings into the app's current settings.
-    /// Unrepresented iOS settings are deliberately preserved.
+    /// Restores compatible Android settings, including Android defaults for
+    /// omitted entries. Unrepresented iOS settings are deliberately preserved.
     public func apply(to defaults: UserDefaults) throws {
         try settings.applyImportedValues(to: defaults, removingKeys: removingKeys)
     }

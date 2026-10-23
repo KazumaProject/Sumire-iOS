@@ -32,7 +32,7 @@ struct PersonalBackupSettings: View {
         NavigationStack {
             Form {
                 Text("ユーザー辞書・定型文と入力設定をJSONファイルに保存します。配色、キーサイズ、配列・ローマ字、辞書の有効設定を含みます。学習データも含みます。標準・外部辞書の本体は含みません。")
-                Text("Android版の設定バックアップJSONも選択できます。iOSで対応する設定だけを取り込み、未対応の設定やツールバー項目は無視します。既存のiOS専用設定、辞書、学習データは変更しません。")
+                Text("Android版の設定バックアップJSONも選択できます。iOS対応の設定を取り込み、バックアップに記録されていない対応設定はAndroidの既定値に戻します。未対応の設定やツールバー項目、iOS専用設定、辞書、学習データは変更しません。")
                 Text("単語：\(library.lexicon.words.count)件／定型文：\(library.lexicon.templates.count)件")
                 Button("バックアップを保存") {
                     processing = true; message = nil
@@ -143,7 +143,7 @@ struct PersonalBackupSettings: View {
     }
 
     private var androidImportConfirmationMessage: String {
-        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込みます。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。その他のiOS設定、辞書、学習データは変更しません。"
+        var text = "iOS対応の設定 \(stagedAndroid?.importedSettingCount ?? 0) 項目を取り込み、記録されていない設定はAndroidの既定値に戻します。未対応のAndroid設定 \(stagedAndroid?.unsupportedEntryCount ?? 0) 項目とツールバーID \(stagedAndroid?.shortcutIDs.count ?? 0) 件は取り込みません。iOS専用設定、辞書、学習データは変更しません。"
         if let hours = stagedAndroidClipboardExpiryWarningHours {
             text += "取込後は期限削除が有効で、\(hours)時間を超えた未固定のクリップボード履歴がキーボード側の次回読み込み時に削除される場合があります。"
         }
