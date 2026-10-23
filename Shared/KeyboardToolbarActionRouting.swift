@@ -9,4 +9,11 @@ extension KeyboardSurface: KeyboardToolbarActionRouting {
         onSettingsWritten?(["liveConversion"])
         return enabled
     }
+
+    var keyboardToolbarLearningPaused: Bool { learningPausedForSession }
+
+    @discardableResult
+    func toggleKeyboardToolbarLearningPause() -> Bool {
+        toggleLearningPauseForSession()
+    }
 }

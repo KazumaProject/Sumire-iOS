@@ -8,6 +8,8 @@ import SumireCore
 protocol KeyboardToolbarActionRouting: AnyObject {
     var keyboardToolbarLiveConversionEnabled: Bool { get }
     @discardableResult func toggleKeyboardToolbarLiveConversion() -> Bool
+    var keyboardToolbarLearningPaused: Bool { get }
+    @discardableResult func toggleKeyboardToolbarLearningPause() -> Bool
 }
 
 /// Horizontally scrolling, reusable candidate cells. No mock conversion candidates.
@@ -17,6 +19,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     private let expand = UIButton(type: .system)
     private let keyboardPicker = UIButton(type: .system)
     private let liveConversionToggle = UIButton(type: .system)
+    private let learningPauseToggle = UIButton(type: .system)
     private let datePicker = UIButton(type: .system)
     private let toolbarStack = UIStackView()
     private let pasteGroup = UIStackView()
@@ -212,6 +215,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         resize.tintColor = value.foreground
         clipboard.tintColor = value.foreground
         liveConversionToggle.tintColor = value.foreground
+        learningPauseToggle.tintColor = value.foreground
         clipboardShortcut.tintColor = value.foreground
         templates.tintColor = value.foreground
         textMacros.tintColor = value.foreground
@@ -240,6 +244,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                 case .selectDate: toolbarStack.addArrangedSubview(datePicker)
                 case .keyboardPicker: toolbarStack.addArrangedSubview(keyboardPicker)
                 case .liveConversionToggle: toolbarStack.addArrangedSubview(liveConversionToggle)
+                case .learningPause: toolbarStack.addArrangedSubview(learningPauseToggle)
                 }
             }
             for view in toolbarStack.arrangedSubviews.dropLast() { toolbarStack.setCustomSpacing(0, after: view) }
@@ -248,6 +253,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
             }
         }
         refreshLiveConversionToggle()
+        refreshLearningPauseToggle()
         refreshClipboard()
     }
 
@@ -423,6 +429,14 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         liveConversionToggle.translatesAutoresizingMaskIntoConstraints = false
         NSLayoutConstraint.activate([liveConversionToggle.widthAnchor.constraint(equalToConstant: 44),
                                      liveConversionToggle.heightAnchor.constraint(equalToConstant: 44)])
+        learningPauseToggle.setImage(UIImage(systemName: "pause.fill"), for: .normal)
+        learningPauseToggle.setImage(UIImage(systemName: "play.fill"), for: .selected)
+        learningPauseToggle.accessibilityIdentifier = "toolbar-learning-pause"
+        learningPauseToggle.layer.cornerRadius = 8
+        learningPauseToggle.addAction(UIAction { [weak self] _ in self?.toggleLearningPauseAction() }, for: .touchUpInside)
+        learningPauseToggle.translatesAutoresizingMaskIntoConstraints = false
+        NSLayoutConstraint.activate([learningPauseToggle.widthAnchor.constraint(equalToConstant: 44),
+                                     learningPauseToggle.heightAnchor.constraint(equalToConstant: 44)])
         pasteConfiguration = UIPasteConfiguration(acceptableTypeIdentifiers: [UTType.text.identifier, UTType.image.identifier])
         pasteControl.target = self
         pasteControl.accessibilityIdentifier = "clipboard-preview"
@@ -482,6 +496,26 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     private func refreshLiveConversionToggle() {
         guard let router = toolbarActionRouter() else { return }
         setLiveConversionToggle(enabled: router.keyboardToolbarLiveConversionEnabled)
+    }
+
+    private func toggleLearningPauseAction() {
+        guard let router = toolbarActionRouter() else { return }
+        setLearningPause(paused: router.toggleKeyboardToolbarLearningPause())
+    }
+
+    private func refreshLearningPauseToggle() {
+        guard let router = toolbarActionRouter() else { return }
+        setLearningPause(paused: router.keyboardToolbarLearningPaused)
+    }
+
+    private func setLearningPause(paused: Bool) {
+        learningPauseToggle.isSelected = paused
+        learningPauseToggle.accessibilityLabel = paused ? "変換学習を再開" : "変換学習を一時停止"
+        learningPauseToggle.accessibilityHint = paused
+            ? "このキーボードセッション中の学習記録を再開します"
+            : "このキーボードセッション中の学習記録を一時停止します"
+        learningPauseToggle.accessibilityValue = paused ? "一時停止中" : "有効"
+        learningPauseToggle.backgroundColor = paused ? UIColor.secondarySystemFill : .clear
     }
 
     private func setLiveConversionToggle(enabled: Bool) {

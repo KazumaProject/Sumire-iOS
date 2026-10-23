@@ -55,6 +55,42 @@ final class EnglishServiceTests: XCTestCase {
         service = nil
     }
 
+    func testLearningPauseStopsWritesWhileKeepingExistingLearningAvailable() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let seed = try LearningStore(url: database)
+        try seed.record(reading: "iph", text: "iPhone")
+
+        let service = ConversionService()
+        service.setLearning(url: database)
+        let first = try convert(service, "iph", generation: 1)
+        let phone = try XCTUnwrap(first.candidates.first { $0.text == "iPhone" })
+        XCTAssertTrue(phone.dictionaries.contains("learning"))
+
+        service.setLearningPaused(true)
+        service.commit(generation: 1, candidate: phone.id, learn: true) { _ in
+            XCTFail("Paused learning must not report a saved record")
+        }
+        let whilePaused = try convert(service, "iph", generation: 2)
+        XCTAssertTrue(whilePaused.candidates.contains {
+            $0.text == "iPhone" && $0.dictionaries.contains("learning")
+        })
+        XCTAssertEqual(try LearningStore(url: database).snapshot().first?.count, 1)
+
+        service.setLearningPaused(false)
+        let afterResume = try convert(service, "iph", generation: 3)
+        let resumedPhone = try XCTUnwrap(afterResume.candidates.first { $0.text == "iPhone" })
+        let committed = expectation(description: "Learning resumes")
+        service.commit(generation: 3, candidate: resumedPhone.id, learn: true) { message in
+            XCTAssertEqual(message, "学習しました")
+            committed.fulfill()
+        }
+        wait(for: [committed], timeout: 10)
+        _ = try convert(service, "iph", generation: 4)
+        XCTAssertEqual(try LearningStore(url: database).snapshot().first?.count, 2)
+    }
+
     func testEnglishUserWordsAndTemplatesFromPersistedGeneration() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

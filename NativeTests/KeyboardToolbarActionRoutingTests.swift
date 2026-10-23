@@ -213,5 +213,36 @@ final class KeyboardToolbarActionRoutingTests: XCTestCase {
         XCTAssertFalse(KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
             .readDefaults.bool(forKey: "liveConversion"))
     }
+
+    func testLearningPauseIsSessionOnlyAndDoesNotWriteSettings() {
+        let sharedDomain = "toolbar-learning-pause-shared-" + UUID().uuidString
+        let localDomain = "toolbar-learning-pause-local-" + UUID().uuidString
+        let shared = UserDefaults(suiteName: sharedDomain)!
+        let local = UserDefaults(suiteName: localDomain)!
+        defer {
+            shared.removePersistentDomain(forName: sharedDomain)
+            local.removePersistentDomain(forName: localDomain)
+        }
+        let access = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
+        let surface = Sumire.KeyboardSurface()
+        surface.settingsDefaults = access.readDefaults
+        surface.settingsWriteDefaults = access.writeDefaults
+        var writtenKeys: [[String]] = []
+        surface.onSettingsWritten = { writtenKeys.append($0) }
+        let router: Sumire.KeyboardToolbarActionRouting = surface
+
+        XCTAssertFalse(router.keyboardToolbarLearningPaused)
+        XCTAssertTrue(router.toggleKeyboardToolbarLearningPause())
+        XCTAssertTrue(surface.learningPausedForSession)
+        XCTAssertFalse(local.bool(forKey: "learningPausedForSession"))
+        XCTAssertFalse(shared.bool(forKey: "learningPausedForSession"))
+        XCTAssertTrue(writtenKeys.isEmpty)
+
+        XCTAssertFalse(router.toggleKeyboardToolbarLearningPause())
+        XCTAssertFalse(surface.learningPausedForSession)
+        XCTAssertFalse(local.bool(forKey: "learningPausedForSession"))
+        XCTAssertFalse(shared.bool(forKey: "learningPausedForSession"))
+        XCTAssertTrue(writtenKeys.isEmpty)
+    }
 }
 #endif

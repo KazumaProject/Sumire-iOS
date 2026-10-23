@@ -11,6 +11,7 @@ public enum KeyboardToolbarAction: String, CaseIterable, Identifiable, Hashable 
     case selectDate = "select_date"
     case keyboardPicker = "keyboard_picker"
     case liveConversionToggle = "live_conversion_toggle"
+    case learningPause = "learning_pause"
 
     public var id: String { rawValue }
 
@@ -25,6 +26,7 @@ public enum KeyboardToolbarAction: String, CaseIterable, Identifiable, Hashable 
         case .selectDate: return "日付"
         case .keyboardPicker: return "キーボード切替"
         case .liveConversionToggle: return "ライブ変換"
+        case .learningPause: return "学習一時停止"
         }
     }
 
@@ -39,6 +41,7 @@ public enum KeyboardToolbarAction: String, CaseIterable, Identifiable, Hashable 
         case .selectDate: return "calendar"
         case .keyboardPicker: return "globe"
         case .liveConversionToggle: return "textformat"
+        case .learningPause: return "pause.fill"
         }
     }
 }
@@ -59,7 +62,8 @@ public struct AndroidToolbarShortcutImport: Equatable {
             "clip_board": .clipboard,
             "select_date": .selectDate,
             "keyboard_picker": .keyboardPicker,
-            "live_conversion_toggle": .liveConversionToggle
+            "live_conversion_toggle": .liveConversionToggle,
+            "learning_pause": .learningPause
         ]
         var seenIDs = Set<String>()
         var seenActions = Set<KeyboardToolbarAction>()

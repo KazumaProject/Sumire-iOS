@@ -18,10 +18,10 @@ final class KeyboardToolbarPreferencesTests: XCTestCase {
 
     func testSavePreservesOrderAndRemovesDuplicates() {
         let defaults = makeDefaults()
-        let saved = KeyboardToolbarPreferences.save([.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .emoji, .resize], defaults: defaults)
-        XCTAssertEqual(saved, [.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .emoji])
-        XCTAssertEqual(defaults.stringArray(forKey: KeyboardToolbarPreferences.storageKey), ["resize", "select_date", "keyboard_picker", "live_conversion_toggle", "emoji"])
-        XCTAssertEqual(KeyboardToolbarPreferences.load(defaults: defaults), [.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .emoji])
+        let saved = KeyboardToolbarPreferences.save([.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .learningPause, .emoji, .resize], defaults: defaults)
+        XCTAssertEqual(saved, [.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .learningPause, .emoji])
+        XCTAssertEqual(defaults.stringArray(forKey: KeyboardToolbarPreferences.storageKey), ["resize", "select_date", "keyboard_picker", "live_conversion_toggle", "learning_pause", "emoji"])
+        XCTAssertEqual(KeyboardToolbarPreferences.load(defaults: defaults), [.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .learningPause, .emoji])
     }
 
     func testLoadDropsUnknownValuesAndUsesDefaultWhenNothingIsSupported() {

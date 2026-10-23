@@ -9,7 +9,7 @@ final class KeyboardToolbarCandidateBarTests: XCTestCase {
         let suite = "KeyboardToolbarCandidateBarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
-        KeyboardToolbarPreferences.save([.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .template, .textMacros, .clipboard, .paste, .emoji], defaults: defaults)
+        KeyboardToolbarPreferences.save([.resize, .selectDate, .keyboardPicker, .liveConversionToggle, .learningPause, .template, .textMacros, .clipboard, .paste, .emoji], defaults: defaults)
 
         let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
         bar.reloadToolbarSettings(defaults: defaults)
@@ -17,7 +17,7 @@ final class KeyboardToolbarCandidateBarTests: XCTestCase {
             .first { $0.accessibilityIdentifier == "keyboard-toolbar-actions" }
 
         XCTAssertEqual(toolbar?.arrangedSubviews.compactMap(\.accessibilityIdentifier), [
-            "toolbar-resize", "toolbar-date-picker", "toolbar-keyboard-picker", "toolbar-live-conversion", "toolbar-template", "toolbar-text-macros", "toolbar-clipboard", "toolbar-paste-group", "symbol-open"
+            "toolbar-resize", "toolbar-date-picker", "toolbar-keyboard-picker", "toolbar-live-conversion", "toolbar-learning-pause", "toolbar-template", "toolbar-text-macros", "toolbar-clipboard", "toolbar-paste-group", "symbol-open"
         ])
         let datePicker = toolbar?.arrangedSubviews.first { $0.accessibilityIdentifier == "toolbar-date-picker" } as? UIButton
         XCTAssertTrue(datePicker?.showsMenuAsPrimaryAction == true)
@@ -92,6 +92,32 @@ final class KeyboardToolbarCandidateBarTests: XCTestCase {
         XCTAssertTrue(router.keyboardToolbarLiveConversionEnabled)
         XCTAssertTrue(toggle?.isSelected == true)
         XCTAssertEqual(toggle?.accessibilityValue, "オン")
+    }
+
+    @MainActor
+    func testLearningPauseToolbarActionUsesHostAndUpdatesItsAccessibleState() {
+        let suite = "KeyboardToolbarCandidateBarTests.LearningPause.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+        KeyboardToolbarPreferences.save([.learningPause], defaults: defaults)
+
+        let router = KeyboardToolbarActionRouterProbe(frame: CGRect(x: 0, y: 0, width: 320, height: 60))
+        let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 320, height: 44))
+        router.addSubview(bar)
+        bar.reloadToolbarSettings(defaults: defaults)
+        let toolbar = bar.subviews.compactMap { $0 as? UIStackView }
+            .first { $0.accessibilityIdentifier == "keyboard-toolbar-actions" }
+        let toggle = toolbar?.arrangedSubviews.first { $0.accessibilityIdentifier == "toolbar-learning-pause" } as? UIButton
+
+        XCTAssertEqual(toggle?.accessibilityLabel, "変換学習を一時停止")
+        XCTAssertEqual(toggle?.accessibilityValue, "有効")
+        toggle?.sendActions(for: .touchUpInside)
+
+        XCTAssertEqual(router.learningPauseToggleCount, 1)
+        XCTAssertTrue(router.keyboardToolbarLearningPaused)
+        XCTAssertTrue(toggle?.isSelected == true)
+        XCTAssertEqual(toggle?.accessibilityLabel, "変換学習を再開")
+        XCTAssertEqual(toggle?.accessibilityValue, "一時停止中")
     }
 
     @MainActor
@@ -291,11 +317,19 @@ private func descendants(of view: UIView) -> [UIView] {
 private final class KeyboardToolbarActionRouterProbe: UIView, KeyboardToolbarActionRouting {
     private(set) var toggleCount = 0
     private(set) var keyboardToolbarLiveConversionEnabled = false
+    private(set) var learningPauseToggleCount = 0
+    private(set) var keyboardToolbarLearningPaused = false
 
     func toggleKeyboardToolbarLiveConversion() -> Bool {
         toggleCount += 1
         keyboardToolbarLiveConversionEnabled.toggle()
         return keyboardToolbarLiveConversionEnabled
+    }
+
+    func toggleKeyboardToolbarLearningPause() -> Bool {
+        learningPauseToggleCount += 1
+        keyboardToolbarLearningPaused.toggle()
+        return keyboardToolbarLearningPaused
     }
 }
 

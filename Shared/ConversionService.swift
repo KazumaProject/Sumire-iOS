@@ -202,6 +202,10 @@ final class ConversionService {
             } catch { state.learningFailure = "学習データの削除を再試行します: " + error.localizedDescription }
         }
     }
+    func setLearningPaused(_ paused: Bool) {
+        let state = state
+        queue.async { state.learningPaused = paused }
+    }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
@@ -324,7 +328,7 @@ final class ConversionService {
         queue.async {
             var error = [CChar](repeating: 0, count: 1024)
             guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0,
-                  learn, state.learningURL != nil, let store = state.learning,
+                  learn, !state.learningPaused, state.learningURL != nil, let store = state.learning,
                   let selected = state.lastCandidates[candidate],
                   let range = Range(selected.range, in: state.lastReading) else { return }
             do {
@@ -376,6 +380,7 @@ final class ConversionService {
         var session: OpaquePointer?
         var personal = PersonalLexicon()
         var learningURL: URL?
+        var learningPaused = false
         var learning: LearningStore?
         var learningFailure: String?
         var standaloneAvailable = false

@@ -314,6 +314,7 @@ final class KeyboardSurface: UIInputView {
         stack.accessibilityElementsHidden = false
     }
     private var learningURL: URL?
+    private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
     func reloadLearningResults() {
         if hasComposition { composition.optionsChanged(); refreshConversion() }
@@ -323,6 +324,11 @@ final class KeyboardSurface: UIInputView {
         learningURL = url
         converter.setLearning(url: url, localReset: localReset)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
+    }
+    func toggleLearningPauseForSession() -> Bool {
+        learningPausedForSession.toggle()
+        converter.setLearningPaused(learningPausedForSession)
+        return learningPausedForSession
     }
     private var composition = CompositionState()
     private var converted: [ConversionCandidate] = []
@@ -2097,7 +2103,8 @@ final class KeyboardSurface: UIInputView {
         if let generation = resultGeneration, composition.accepts(generation),
            let index = selectedCandidate, converted.indices.contains(index) {
             candidate = converted[index]
-            converter.commit(generation: generation, candidate: converted[index].id, learn: index > 0 || learnFirstCandidate) { [weak self] message in
+            converter.commit(generation: generation, candidate: converted[index].id,
+                             learn: index > 0 || learnFirstCandidate) { [weak self] message in
                 if self?.hasComposition == false { self?.showDataNotice(message) }
             }
         }

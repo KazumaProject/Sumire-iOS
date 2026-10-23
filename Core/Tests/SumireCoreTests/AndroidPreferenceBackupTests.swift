@@ -406,10 +406,10 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         let imported = try AndroidPreferenceBackup.decode(json([], version: 2, shortcutIDs: [
             "clip_board", "emoji", "paste", "template", "text_macro", "select_date", "keyboard_picker",
-            "live_conversion_toggle", "settings", "voice_input", "emoji"
+            "live_conversion_toggle", "learning_pause", "settings", "voice_input", "emoji"
         ]))
         XCTAssertEqual(imported.toolbarShortcutImport?.actions, [
-            .clipboard, .emoji, .paste, .template, .textMacros, .selectDate, .keyboardPicker, .liveConversionToggle
+            .clipboard, .emoji, .paste, .template, .textMacros, .selectDate, .keyboardPicker, .liveConversionToggle, .learningPause
         ])
         XCTAssertEqual(imported.toolbarShortcutImport?.unsupportedIDs, ["settings", "voice_input"])
     }
