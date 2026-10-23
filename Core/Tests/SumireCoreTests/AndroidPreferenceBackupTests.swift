@@ -15,12 +15,13 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("custom_direct_input_replace_composing_preference", "boolean", true),
             entry("symbol_mode_preference", "string", "CLIPBOARD"),
             entry("default_emoji_skin_tone_preference", "string", "1F3FD"),
+            entry("sumire_flick_input_mode_preference", "string", "voiced"),
             entry("clipboard_preview_enable_preference", "boolean", false),
             entry("android.only.setting", "string", "kept out of iOS settings")
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 11)
+        XCTAssertEqual(backup.importedSettingCount, 12)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -33,6 +34,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(backup.settings.values[CustomInputModeStore.replaceKey], .boolean(true))
         XCTAssertEqual(backup.settings.values[SymbolKeyboardMode.initialModeKey], .text("clipboard"))
         XCTAssertEqual(backup.settings.values[EmojiSkinTone.settingsKey], .text("1F3FD"))
+        XCTAssertEqual(backup.threeStepInputMode, .voiced)
 
         let suite = "AndroidPreferenceBackupTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -42,6 +44,16 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defaults.set(false, forKey: "clipboard.expirationEnabled")
         defaults.set(1, forKey: "clipboard.retentionHours")
         defaults.set(3, forKey: "candidateRowCount")
+        var existingFlickStyle = FlickStyleSettings()
+        existingFlickStyle.style = .threeStep
+        existingFlickStyle.rotation = .clockwise
+        existingFlickStyle.diagonal = .stable
+        existingFlickStyle.startPosition = .keyCenter
+        existingFlickStyle.presentation = .guideAboveKey
+        existingFlickStyle.popupTextSize = 19
+        existingFlickStyle.circularDirectionCount = 7
+        existingFlickStyle.hierarchicalModeAngleMargin = 34
+        existingFlickStyle.save(defaults: defaults)
         try backup.apply(to: defaults)
 
         XCTAssertTrue(defaults.bool(forKey: "liveConversion"))
@@ -55,6 +67,16 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: CustomInputModeStore.replaceKey))
         XCTAssertEqual(SymbolKeyboardMode.initialMode(defaults: defaults), .clipboard)
         XCTAssertEqual(EmojiSkinTone.load(defaults: defaults), .medium)
+        let importedFlickStyle = FlickStyleSettings.load(defaults: defaults)
+        XCTAssertEqual(importedFlickStyle.threeStepInput, .voiced)
+        XCTAssertEqual(importedFlickStyle.style, .threeStep)
+        XCTAssertEqual(importedFlickStyle.rotation, .clockwise)
+        XCTAssertEqual(importedFlickStyle.diagonal, .stable)
+        XCTAssertEqual(importedFlickStyle.startPosition, .keyCenter)
+        XCTAssertEqual(importedFlickStyle.presentation, .guideAboveKey)
+        XCTAssertEqual(importedFlickStyle.popupTextSize, 19)
+        XCTAssertEqual(importedFlickStyle.circularDirectionCount, 7)
+        XCTAssertEqual(importedFlickStyle.hierarchicalModeAngleMargin, 34)
         XCTAssertTrue(defaults.bool(forKey: "englishReadingEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 3)
         XCTAssertNil(defaults.object(forKey: "clipboardAutomaticPreview"))
@@ -80,6 +102,14 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             ]))
             XCTAssertEqual(backup.settings.values[EmojiSkinTone.settingsKey], .text(skinTone))
         }
+
+        for mode in FlickStyleSettings.ThreeStepInput.allCases {
+            let backup = try AndroidPreferenceBackup.decode(json([
+                entry("sumire_flick_input_mode_preference", "string", mode.rawValue)
+            ]))
+            XCTAssertEqual(backup.threeStepInputMode, mode)
+            XCTAssertTrue(backup.importedKeys.contains("sumire_flick_input_mode_preference"))
+        }
     }
 
     func testEnabledClipboardExpiryUsesAndroidDefaultWhenRetentionIsOmitted() throws {
@@ -89,7 +119,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 11)
+        XCTAssertEqual(backup.importedSettingCount, 12)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -108,7 +138,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 11)
+        XCTAssertEqual(backup.importedSettingCount, 12)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -125,7 +155,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 11)
+        XCTAssertEqual(backup.importedSettingCount, 12)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
@@ -138,6 +168,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(backup.settings.values[CustomInputModeStore.replaceKey], .boolean(false))
         XCTAssertEqual(backup.settings.values[SymbolKeyboardMode.initialModeKey], .text("emoji"))
         XCTAssertEqual(backup.settings.values[EmojiSkinTone.settingsKey], .text("default"))
+        XCTAssertEqual(backup.threeStepInputMode, .all)
 
         let suite = "AndroidPreferenceBackupOmittedSettings." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -147,6 +178,10 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defaults.set(true, forKey: "englishReadingEnabled")
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "clipboardAutomaticPreview")
+        var existingFlickStyle = FlickStyleSettings()
+        existingFlickStyle.threeStepInput = .contracted
+        existingFlickStyle.rotation = .clockwise
+        existingFlickStyle.save(defaults: defaults)
         try backup.apply(to: defaults)
 
         XCTAssertFalse(defaults.bool(forKey: "liveConversion"))
@@ -158,6 +193,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "englishReadingEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 3)
         XCTAssertFalse(defaults.bool(forKey: "clipboardAutomaticPreview"))
+        XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).threeStepInput, .all)
+        XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).rotation, .clockwise)
     }
 
     func testClipboardExpiryWarningCoversNewDeletionRiskWithoutOverwarning() throws {
@@ -219,6 +256,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             ["key": "clipboard_delete_unpinned_after_hours_preference", "type": "null"],
             ["key": "clipboard_unpinned_retention_hours_preference", "type": "null"],
             ["key": "symbol_mode_preference", "type": "null"],
+            ["key": "sumire_flick_input_mode_preference", "type": "null"],
             entry("learn_dictionary_preference", "boolean", true)
         ], version: 2, shortcutIDs: ["symbols", "emoji"])
         let backup = try AndroidPreferenceBackup.decode(data)
@@ -227,6 +265,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             "liveConversion", ClipboardHistorySettings.enabledKey, "clipboard.expirationEnabled",
             "clipboard.retentionHours", SymbolKeyboardMode.initialModeKey
         ])
+        XCTAssertEqual(backup.threeStepInputMode, .all)
 
         let suite = "AndroidPreferenceBackupTests." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -237,6 +276,10 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defaults.set(24, forKey: "clipboard.retentionHours")
         defaults.set("symbol", forKey: SymbolKeyboardMode.initialModeKey)
         defaults.set(2, forKey: "candidateRowCount")
+        var existingFlickStyle = FlickStyleSettings()
+        existingFlickStyle.threeStepInput = .contracted
+        existingFlickStyle.rotation = .counterclockwise
+        existingFlickStyle.save(defaults: defaults)
         try backup.apply(to: defaults)
         XCTAssertNil(defaults.object(forKey: "liveConversion"))
         XCTAssertNil(defaults.object(forKey: ClipboardHistorySettings.enabledKey))
@@ -245,6 +288,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertNil(defaults.object(forKey: SymbolKeyboardMode.initialModeKey))
         XCTAssertTrue(defaults.bool(forKey: "learningEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 2)
+        XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).threeStepInput, .all)
+        XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).rotation, .counterclockwise)
     }
 
     func testImportedSharedSettingsRemainVisibleWithSharedWritesDisabled() throws {
@@ -328,6 +373,15 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("default_emoji_skin_tone_preference", "string", "1F3FA")
         ])))
         XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("sumire_flick_input_mode_preference", "string", "unknown")
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("sumire_flick_input_mode_preference", "boolean", true)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
+            entry("sumire_flick_input_mode_preference", "int", 1)
+        ])))
+        XCTAssertThrowsError(try AndroidPreferenceBackup.decode(json([
             entry("live_conversion_preference", "boolean", true),
             entry("live_conversion_preference", "boolean", false)
         ])))
@@ -349,6 +403,21 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertNil(try AndroidPreferenceBackup.decodeIfMatching(PersonalBackup.encode(PersonalLexicon())))
         XCTAssertNil(try AndroidPreferenceBackup.decodeIfMatching(Data("{}".utf8)))
         XCTAssertThrowsError(try AndroidPreferenceBackup.decodeIfMatching(json([], version: 99)))
+    }
+
+    func testInvalidExistingFlickStyleDoesNotPartiallyApplyAndroidSettings() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("live_conversion_preference", "boolean", true),
+            entry("sumire_flick_input_mode_preference", "string", "voiced")
+        ]))
+        let suite = "AndroidPreferenceBackupInvalidFlickStyle." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        defaults.set(Data("not-json".utf8), forKey: FlickStyleSettings.storageKey)
+
+        XCTAssertThrowsError(try backup.apply(to: defaults))
+        XCTAssertNil(defaults.object(forKey: "liveConversion"))
+        XCTAssertEqual(defaults.data(forKey: FlickStyleSettings.storageKey), Data("not-json".utf8))
     }
 
     private func entry(_ key: String, _ type: String, _ value: Any) -> [String: Any] {
