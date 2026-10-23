@@ -90,10 +90,10 @@ public enum SumireDictionarySourceConverter {
         }
         guard node == 1 else { throw PersonalDataError("辞書の表記経路がrootに接続していません") }
         let orderedUnits = Array(units.reversed())
+        // Java/Kotlin strings can contain lone UTF-16 surrogates. Android's
+        // pinned dictionary generation replaces them with U+FFFD when writing
+        // UTF-8 surfaces, so use Swift's matching replacement decoder here.
         let text = String(decoding: orderedUnits, as: UTF16.self)
-        guard Array(text.utf16) == orderedUnits else {
-            throw PersonalDataError("辞書の表記に不正なUTF-16があります")
-        }
         return Data(text.utf8)
     }
 

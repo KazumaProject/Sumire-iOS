@@ -82,7 +82,9 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
     }
 
     private func sourceFiles(includeMacMetadata: Bool = true, ambiguousInnerZIP: Bool = false,
-                             corruptSystemTokens: Bool = false) -> [(String, Data)] {
+                             corruptSystemTokens: Bool = false,
+                             includeReadingCorrection: Bool = false,
+                             includeAuxiliaryDictionaries: Bool = false) -> [(String, Data)] {
         let reading = javaStream([
             .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
             .init(kind: .characters, values: [0, 0x20, 0x3042]), .init(kind: .ints, values: [1])
@@ -107,7 +109,7 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             if ambiguous { entries.append(("unexpected.bin", Data([9]))) }
             return storedZIP(entries)
         }
-        return [
+        var files = [
             ("connectionId.dat.zip", inner("connectionId.dat", matrix)),
             ("pos_table.dat", pos),
             ("system/yomi.dat.zip", inner("yomi.dat", reading)),
@@ -115,6 +117,22 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             ("system/token.dat.zip", inner("token.dat", corruptSystemTokens ? Data([0]) : tokens,
                                                ambiguous: ambiguousInnerZIP))
         ]
+        if includeReadingCorrection {
+            files += [
+                ("reading_correction/tango_reading_correction.dat", surface),
+                ("reading_correction/yomi_reading_correction.dat", reading),
+                ("reading_correction/token_reading_correction.dat", tokens)
+            ]
+        }
+        if includeAuxiliaryDictionaries {
+            for group in ["single_kanji", "emoji", "emoticon", "symbol"] {
+                let suffix = group == "single_kanji" ? "singleKanji" : group
+                files += [("\(group)/tango_\(suffix).dat", surface),
+                          ("\(group)/yomi_\(suffix).dat", reading),
+                          ("\(group)/token_\(suffix).dat", tokens)]
+            }
+        }
+        return files
     }
 
     private func longSurfaceSource(depth: Int) throws -> ValidatedDictionarySource {
@@ -170,6 +188,146 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
         for name in names {
             let data = try Data(contentsOf: output.appendingPathComponent(name))
             XCTAssertEqual(String(data: data.prefix(8), encoding: .ascii), "SUMIRE01")
+        }
+    }
+
+    func testConvertsAndroidReadingCorrectionDictionaryGroup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(sourceFiles(includeReadingCorrection: true)).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles, ["connection.sud", "reading_correction.sud", "system.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        let correction = try Data(contentsOf: output.appendingPathComponent("reading_correction.sud"))
+        XCTAssertEqual(String(data: correction.prefix(8), encoding: .ascii), "SUMIRE01")
+    }
+
+    func testConvertsAndroidAuxiliaryDictionaryGroups() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(sourceFiles(includeAuxiliaryDictionaries: true)).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles,
+                       ["connection.sud", "emoji.sud", "emoticon.sud", "single_kanji.sud", "symbol.sud", "system.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        for name in ["single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"] {
+            let data = try Data(contentsOf: output.appendingPathComponent(name))
+            XCTAssertEqual(String(data: data.prefix(8), encoding: .ascii), "SUMIRE01", name)
+        }
+    }
+
+    func testConvertsPinnedAndroidReadingCorrectionArchiveByteForByteWhenConfigured() throws {
+        let referencePath = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_ASSETS"]
+        guard let referencePath, !referencePath.isEmpty else {
+            throw XCTSkip("Set SUMIRE_REFERENCE_ASSETS to verify the pinned Android distribution")
+        }
+        let reference = URL(fileURLWithPath: referencePath, isDirectory: true)
+        let expectedSourceHashes = [
+            "connectionId.dat.zip": "f68938f2c3f48ad4176bb8feec874e2ae6a924343ccc0feec8ae858c92ffd6df",
+            "pos_table.dat": "2aa09e7f5318cb7be2f7d88c4a4473987a480bbecce3269685f7696797ed9f48",
+            "reading_correction/tango_reading_correction.dat": "3f102aa7f31a51657473352fb3cb35f4c48fb0943efbe2b057ccecade2de08d6",
+            "reading_correction/yomi_reading_correction.dat": "e9d2348bd7caf264e14da611effba1bc524467ac211afe158243f794eb81432b",
+            "reading_correction/token_reading_correction.dat": "8cefa1af8298363347674221f6a1620494b328face07873e1296f3fce51f3720"
+        ]
+        var archiveFiles: [(String, Data)] = []
+        for (path, expectedHash) in expectedSourceHashes {
+            let data = try Data(contentsOf: reference.appendingPathComponent(path), options: .mappedIfSafe)
+            let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(actualHash, expectedHash, path)
+            archiveFiles.append((path, data))
+        }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(archiveFiles).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles, ["connection.sud", "reading_correction.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        let converted = try Data(contentsOf: output.appendingPathComponent("reading_correction.sud"), options: .mappedIfSafe)
+        let convertedHash = SHA256.hash(data: converted).map { String(format: "%02x", $0) }.joined()
+        XCTAssertEqual(convertedHash, "f7bbb41a50f2e57bc305319994540e098082447c6b01eed5674be4eb3bb18762")
+    }
+
+    func testConvertsPinnedAndroidAuxiliaryDictionariesByteForByteWhenConfigured() throws {
+        struct Manifest: Decodable {
+            let sourceRevision: String
+            let outputSHA256: [String: String]
+            enum CodingKeys: String, CodingKey {
+                case sourceRevision = "source_revision"
+                case outputSHA256 = "output_sha256"
+            }
+        }
+        guard let referencePath = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_ASSETS"], !referencePath.isEmpty,
+              let nativePath = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_NATIVE_DICTIONARIES"], !nativePath.isEmpty else {
+            throw XCTSkip("Set pinned Android asset and native-dictionary paths to verify auxiliary dictionary parity")
+        }
+        let reference = URL(fileURLWithPath: referencePath, isDirectory: true)
+        let native = URL(fileURLWithPath: nativePath, isDirectory: true)
+        let manifest = try JSONDecoder().decode(Manifest.self, from: Data(contentsOf: native.appendingPathComponent("manifest.json")))
+        XCTAssertEqual(manifest.sourceRevision, "df1f38315bf56d860d32919a3eaed6a75499e91e")
+
+        let expectedSourceHashes = [
+            "connectionId.dat.zip": "f68938f2c3f48ad4176bb8feec874e2ae6a924343ccc0feec8ae858c92ffd6df",
+            "pos_table.dat": "2aa09e7f5318cb7be2f7d88c4a4473987a480bbecce3269685f7696797ed9f48",
+            "single_kanji/tango_singleKanji.dat": "30f5a78cea54d6359a3591b741896674002b3e2bac580bc59269eb8c593f929b",
+            "single_kanji/yomi_singleKanji.dat": "a9d02f6e81ad2e48ec187bc5c03c57660de7178f34204149ba45482178e98f76",
+            "single_kanji/token_singleKanji.dat": "4d60dc524cfdffdb576102429a3a5a7c625f0c3581ba248a81fbc852eaa33166",
+            "emoji/tango_emoji.dat": "f05fcb3b56aaf683910847342a33e36009676ad9a5abc2d43d3620dbc07700a4",
+            "emoji/yomi_emoji.dat": "cdd5f223ccfcb63f22a317b5a9aa97e240a98b28571fbf4905758d5205162950",
+            "emoji/token_emoji.dat": "1c25ddcf25f61595915f3a37e1d76665a7eeff2110d2521322817618e0f535a5",
+            "emoticon/tango_emoticon.dat": "ec102a95f3a490587940d4035ebeedfad4438fa13eb1b37c54ac544059c6ff6a",
+            "emoticon/yomi_emoticon.dat": "15f32cda380dae4581abbeef1ae0a43f12d7980cf37b84408e1920b980e5318b",
+            "emoticon/token_emoticon.dat": "c4c88e2f84342aa4f13b295d37947fa4d222b019325d32346333b71989c069c5",
+            "symbol/tango_symbol.dat": "5a8d615f4697533079d201da0049c0ed3b8eabcf5de536b35552a3afee78acca",
+            "symbol/yomi_symbol.dat": "7ac99f6184ba6c20b8bad0bcf1f2386d10b45ff60138f166731b091459a93482",
+            "symbol/token_symbol.dat": "22a13bdf86a6e88cb270e6f6dbadf444efd57bf451ed0d250b9c370bc1e31dcb"
+        ]
+        var archiveFiles: [(String, Data)] = []
+        for (path, expectedHash) in expectedSourceHashes {
+            let data = try Data(contentsOf: reference.appendingPathComponent(path), options: .mappedIfSafe)
+            let actualHash = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(actualHash, expectedHash, path)
+            archiveFiles.append((path, data))
+        }
+
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let sourceByPath = Dictionary(uniqueKeysWithValues: archiveFiles.map { ($0.0, $0.1) })
+        let commonFiles = ["connectionId.dat.zip", "pos_table.dat"].map { ($0, sourceByPath[$0]!) }
+        for group in ["single_kanji", "emoji", "emoticon", "symbol"] {
+            let archiveURL = root.appendingPathComponent(group + ".zip")
+            let groupFiles = archiveFiles.filter { $0.0.hasPrefix(group + "/") }
+            try storedZIP(commonFiles + groupFiles).write(to: archiveURL)
+            let output = root.appendingPathComponent(group, isDirectory: true)
+
+            let report: DictionarySourceImportReport
+            do {
+                report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+            } catch {
+                XCTFail("\(group) failed pinned Android source conversion: \(error)")
+                continue
+            }
+            XCTAssertEqual(report.convertedFiles, ["connection.sud", group + ".sud"], group)
+            XCTAssertTrue(report.skippedGroups.isEmpty, group)
+            let converted = try Data(contentsOf: output.appendingPathComponent(group + ".sud"), options: .mappedIfSafe)
+            let convertedHash = SHA256.hash(data: converted).map { String(format: "%02x", $0) }.joined()
+            XCTAssertEqual(convertedHash, manifest.outputSHA256[group + ".sud"], group)
         }
     }
 
