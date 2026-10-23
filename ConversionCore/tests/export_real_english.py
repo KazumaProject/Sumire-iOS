@@ -84,7 +84,7 @@ def compare(rows, cli, data):
     before = raw.digest(cli.read_bytes())
     results = []
     for row in rows:
-        command = [str(cli), '--data', str(data), '--predict-japanese', '--nbest', '20', row['reading']]
+        command = [str(cli), '--data', str(data), '--predict-japanese', '--prefix-candidates', '--nbest', '20', row['reading']]
         native = json.loads(subprocess.check_output(command, text=True))
         provider = [c for c in native['candidates'] if c['segments'] and all(s['dictionary'] == 'english' for s in c['segments'])]
         expected = [(c['text'], c['score']) for c in row['provider']]
