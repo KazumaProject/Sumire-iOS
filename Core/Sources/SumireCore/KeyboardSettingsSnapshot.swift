@@ -146,6 +146,28 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             }
         }
     }
+
+    /// Applies only the values present in this snapshot. This is for importing
+    /// another product's partial settings format; absent iOS-only preferences
+    /// remain unchanged. `removingKeys` represents explicit null entries from
+    /// that source format.
+    public func applyImportedValues(to defaults: UserDefaults, removingKeys: Set<String> = []) throws {
+        try validate()
+        let rules = Self.rules
+        guard removingKeys.allSatisfy({ rules[$0] != nil }),
+              removingKeys.isDisjoint(with: values.keys) else {
+            throw PersonalDataError("設定バックアップの削除対象が不正です")
+        }
+        for (key, value) in values {
+            switch value {
+            case .boolean(let value): defaults.set(value, forKey: key)
+            case .number(let value): defaults.set(value, forKey: key)
+            case .text(let value): defaults.set(value, forKey: key)
+            case .data(let value): defaults.set(value, forKey: key)
+            }
+        }
+        for key in removingKeys { defaults.removeObject(forKey: key) }
+    }
     private static func invalid(_ key: String) -> PersonalDataError {
         PersonalDataError("設定バックアップの値またはキーが不正です: \(key.prefix(128))")
     }
