@@ -346,7 +346,7 @@ final class ConversionService {
         }
     }
     func commit(generation: UInt64, candidate: UInt64, candidateIndex: Int,
-                learningAllowed: Bool, learnFirstCandidate: Bool,
+                learningAllowed: Bool, learnFirstCandidate: Bool, learnMixedSymbolsAndNumbers: Bool,
                 onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {
@@ -377,7 +377,10 @@ final class ConversionService {
             )
             guard !entries.isEmpty else { return }
             do {
-                try store.upsertLearningEntries(entries)
+                try store.upsertLearningEntries(
+                    entries,
+                    allowJapaneseWithSymbolsAndNumbers: learnMixedSymbolsAndNumbers
+                )
                 DispatchQueue.main.async { onNotice("学習しました") }
             }
             catch { let message = error.localizedDescription; DispatchQueue.main.async { onNotice(message) } }

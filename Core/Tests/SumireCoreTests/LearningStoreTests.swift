@@ -176,6 +176,25 @@ final class LearningStoreTests: XCTestCase {
 
         XCTAssertEqual(try store.snapshot().map(\.text), ["言葉"])
     }
+    func testMixedSymbolLearningCanBeDisabledAndEnabledWithoutLearningSymbolOnlyRows() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LearningStore(url: directory.appendingPathComponent("learning.sqlite"))
+        let mixed = LearningSessionEntry(
+            input: "れいわはちねん", output: "令和8年", score: 3_000,
+            leftID: nil, rightID: nil, lastUsedAt: 1, isPhrase: false
+        )
+        let symbolsOnly = LearningSessionEntry(
+            input: "ばんごう", output: "123", score: 3_000,
+            leftID: nil, rightID: nil, lastUsedAt: 2, isPhrase: false
+        )
+
+        try store.upsertLearningEntries([mixed, symbolsOnly], allowJapaneseWithSymbolsAndNumbers: false)
+        XCTAssertTrue(try store.snapshot().isEmpty)
+
+        try store.upsertLearningEntries([mixed, symbolsOnly], allowJapaneseWithSymbolsAndNumbers: true)
+        XCTAssertEqual(try store.snapshot().map(\.text), ["令和8年"])
+    }
     func testEntryDecodesLegacyBackupAndSnapshotKeysUseExactUTF8() throws {
         let legacy = Data(#"{"reading":"あ","text":"亜","count":2}"#.utf8)
         XCTAssertEqual(try JSONDecoder().decode(LearningStore.Entry.self, from: legacy),

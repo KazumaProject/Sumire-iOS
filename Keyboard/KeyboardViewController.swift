@@ -114,6 +114,7 @@ final class KeyboardViewController: UIInputViewController {
         let learningReset = LocalDataReset(store: .learning, url: PersonalDataLocation.learningURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
         surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: hasFullAccess) : nil, localReset: learningReset)
         surface.learnFirstCandidate = defaults.bool(forKey: "learnFirstCandidate")
+        surface.learnMixedSymbolsAndNumbers = defaults.object(forKey: "learnMixedSymbolsAndNumbers") as? Bool ?? true
         updateTextMacroContext()
         surface.reloadSizing()
         do {

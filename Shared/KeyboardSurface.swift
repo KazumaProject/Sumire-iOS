@@ -316,6 +316,7 @@ final class KeyboardSurface: UIInputView {
     private var learningURL: URL?
     private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
+    var learnMixedSymbolsAndNumbers = true
     func reloadLearningResults() {
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
@@ -2130,7 +2131,8 @@ final class KeyboardSurface: UIInputView {
                 candidate: candidate.id,
                 candidateIndex: candidateIndex,
                 learningAllowed: !englishComposition && !bunsetsuActionHandled,
-                learnFirstCandidate: learnFirstCandidate
+                learnFirstCandidate: learnFirstCandidate,
+                learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers
             ) { [weak self] message in
                 if self?.hasComposition == false { self?.showDataNotice(message) }
             }

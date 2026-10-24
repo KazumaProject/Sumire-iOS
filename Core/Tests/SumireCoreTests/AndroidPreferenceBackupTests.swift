@@ -9,6 +9,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("conversion_bunsetsu_separation_preference", "boolean", true),
             entry("learn_dictionary_preference", "boolean", false),
             entry("learn_first_candidate_dictionary_preference", "boolean", true),
+            entry("learn_dictionary_allow_mixed_symbols_numbers_preference", "boolean", false),
             entry("clipboard_history_preference", "boolean", true),
             entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true),
             entry("clipboard_unpinned_retention_hours_preference", "int", 24),
@@ -21,13 +22,14 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
         XCTAssertEqual(backup.settings.values["bunsetsuSeparation"], .boolean(true))
         XCTAssertEqual(backup.settings.values["learningEnabled"], .boolean(false))
         XCTAssertEqual(backup.settings.values["learnFirstCandidate"], .boolean(true))
+        XCTAssertEqual(backup.settings.values["learnMixedSymbolsAndNumbers"], .boolean(false))
         XCTAssertEqual(backup.settings.values[ClipboardHistorySettings.enabledKey], .boolean(true))
         XCTAssertEqual(backup.settings.values["clipboard.expirationEnabled"], .boolean(true))
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(24))
@@ -61,6 +63,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "bunsetsuSeparation"))
         XCTAssertFalse(defaults.bool(forKey: "learningEnabled"))
         XCTAssertTrue(defaults.bool(forKey: "learnFirstCandidate"))
+        XCTAssertFalse(defaults.bool(forKey: "learnMixedSymbolsAndNumbers"))
         XCTAssertTrue(defaults.bool(forKey: ClipboardHistorySettings.enabledKey))
         XCTAssertTrue(defaults.bool(forKey: "clipboard.expirationEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "clipboard.retentionHours"), 24)
@@ -119,7 +122,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +141,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,13 +158,14 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
         XCTAssertEqual(backup.settings.values["bunsetsuSeparation"], .boolean(false))
         XCTAssertEqual(backup.settings.values["learningEnabled"], .boolean(true))
         XCTAssertEqual(backup.settings.values["learnFirstCandidate"], .boolean(false))
+        XCTAssertEqual(backup.settings.values["learnMixedSymbolsAndNumbers"], .boolean(true))
         XCTAssertEqual(backup.settings.values[ClipboardHistorySettings.enabledKey], .boolean(false))
         XCTAssertEqual(backup.settings.values["clipboard.expirationEnabled"], .boolean(false))
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
@@ -175,6 +179,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "liveConversion")
         defaults.set(false, forKey: "learningEnabled")
+        defaults.set(false, forKey: "learnMixedSymbolsAndNumbers")
         defaults.set(true, forKey: "englishReadingEnabled")
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "clipboardAutomaticPreview")
@@ -188,6 +193,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertTrue(defaults.bool(forKey: "omissionSearch"))
         XCTAssertTrue(defaults.bool(forKey: "learningEnabled"))
         XCTAssertFalse(defaults.bool(forKey: "learnFirstCandidate"))
+        XCTAssertTrue(defaults.bool(forKey: "learnMixedSymbolsAndNumbers"))
         XCTAssertEqual(SymbolKeyboardMode.initialMode(defaults: defaults), .emoji)
         XCTAssertEqual(EmojiSkinTone.load(defaults: defaults), .standard)
         XCTAssertTrue(defaults.bool(forKey: "englishReadingEnabled"))
