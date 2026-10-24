@@ -2,10 +2,11 @@ import XCTest
 import SumireCore
 
 final class ReadOnlySettingsTests: XCTestCase {
-    private func convert(_ service: ConversionService, generation: UInt64) throws -> ConversionResponse {
+    private func convert(_ service: ConversionService, _ reading: String,
+                         generation: UInt64) throws -> ConversionResponse {
         let complete = expectation(description: "Reset conversion")
         var result: Result<ConversionResponse, Error>?
-        service.convert("iph", generation: generation, editStart: 0, english: true) {
+        service.convert(reading, generation: generation, editStart: 0, english: false) {
             result = $0; complete.fulfill()
         }
         wait(for: [complete], timeout: 20)
@@ -21,18 +22,21 @@ final class ReadOnlySettingsTests: XCTestCase {
             try? FileManager.default.removeItem(at: root)
         }
         let url = root.appendingPathComponent("private-learning.sqlite")
-        try LearningStore(url: url).record(reading: "iph", text: "PrivateFixture")
+        try LearningStore(url: url).record(reading: "しろ", text: "白")
         let service = ConversionService()
         service.setLearning(url: url)
-        XCTAssertEqual(try convert(service, generation: 1).candidates.first?.text, "PrivateFixture")
+        let learned = try convert(service, "しろ", generation: 1).candidates.first {
+            $0.text == "白" && $0.dictionaries.contains("learning")
+        }
+        XCTAssertNotNil(learned)
         let token = UUID().uuidString
         shared.set(token, forKey: "learning.resetToken")
         let reset = try XCTUnwrap(LocalDataReset(store: .learning, url: url, sharedDefaults: shared, localDefaults: local))
         service.setLearning(url: url, localReset: reset)
-        let cleared = try convert(service, generation: 2)
+        let cleared = try convert(service, "しろ", generation: 2)
         XCTAssertFalse(cleared.candidates.contains { $0.dictionaries.contains("learning") })
         XCTAssertNil(cleared.warning)
-        XCTAssertEqual(try LearningStore(url: url).candidates(reading: "iph"), [])
+        XCTAssertEqual(try LearningStore(url: url).candidates(reading: "しろ"), [])
         XCTAssertEqual(local.string(forKey: "internal.appliedReset.learning"), token)
         XCTAssertNil(shared.object(forKey: "internal.appliedReset.learning"))
 
@@ -44,7 +48,7 @@ final class ReadOnlySettingsTests: XCTestCase {
         shared.set(next, forKey: "learning.resetToken")
         let failed = try XCTUnwrap(LocalDataReset(store: .learning, url: broken, sharedDefaults: shared, localDefaults: local))
         service.setLearning(url: url, localReset: failed)
-        let stopped = try convert(service, generation: 3)
+        let stopped = try convert(service, "しろ", generation: 3)
         XCTAssertFalse(stopped.candidates.contains { $0.dictionaries.contains("learning") })
         XCTAssertTrue(stopped.warning?.contains("削除を再試行") == true)
         XCTAssertEqual(local.string(forKey: "internal.appliedReset.learning"), token)
