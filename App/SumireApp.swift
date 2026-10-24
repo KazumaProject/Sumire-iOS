@@ -255,6 +255,7 @@ struct InputHarness: UIViewRepresentable {
         surface.delete = { [weak text, weak coordinator] in
             coordinator?.perform { text?.deleteBackward() }
         }
+        Self.configureForwardDelete(surface: surface, text: text, coordinator: coordinator)
         surface.deleteUntilBoundary = { [weak text, weak coordinator] in
             coordinator?.perform {
                 guard let text else { return }
@@ -446,5 +447,25 @@ struct InputHarness: UIViewRepresentable {
             }
         }
         let surface = KeyboardSurface(frame: CGRect(x: 0, y: 0, width: 390, height: 464))
+    }
+
+    static func deleteForward(in text: UITextView?) {
+        guard let text else { return }
+        let selection = text.selectedRange
+        if selection.length > 0 {
+            text.deleteBackward()
+            return
+        }
+        let contents = text.text as NSString
+        guard selection.location < contents.length else { return }
+        let nextCharacter = contents.rangeOfComposedCharacterSequence(at: selection.location)
+        text.selectedRange = NSRange(location: NSMaxRange(nextCharacter), length: 0)
+        text.deleteBackward()
+    }
+
+    static func configureForwardDelete(surface: KeyboardSurface, text: UITextView, coordinator: Coordinator) {
+        surface.deleteForward = { [weak text, weak coordinator] in
+            coordinator?.perform { deleteForward(in: text) }
+        }
     }
 }

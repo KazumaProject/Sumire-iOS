@@ -1197,6 +1197,7 @@ final class KeyboardSurface: UIInputView {
                 repeating.exclusiveTouchAction = needsExclusiveTouch
                 repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft), .command(.cursorRight)].contains(normalAction)
+                repeating.longPressCancelsTap = normalAction == .command(.deleteAfterCursor)
                 switch normalAction {
                 case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.switchDirect), .command(.switchRomaji), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
@@ -1205,7 +1206,9 @@ final class KeyboardSurface: UIInputView {
                 repeating.onCommittedPress = { isTap in
                     if isTap {
                         tapController.committedTap(keyIdentity: placement.id, action: normalAction, binding: doubleTap)
-                    } else { tapController.committedGesture(normalAction) }
+                    } else if normalAction != .command(.deleteAfterCursor) {
+                        tapController.committedGesture(normalAction)
+                    }
                 }
             } else if let flick = key as? MultiStageFlickKey, let runtime {
                 flick.definition = runtime.gesture
@@ -1242,21 +1245,26 @@ final class KeyboardSurface: UIInputView {
     private static func customAction(for event: MultiStageFlickKey.CommitEvent,
                                      runtime: CustomMultiStageFlick.RuntimeDefinition,
                                      targets: CustomLayoutTargets) -> CustomKeyAction? {
+        func tapOnly(_ action: CustomKeyAction?) -> CustomKeyAction? {
+            guard event.isLongPress, action == .command(.deleteAfterCursor) else { return action }
+            return nil
+        }
         if event.circularSlot != nil {
             switch event.output {
             case .text(let text, _): return .text(text)
-            case .action(let type, let value, _): return .flick(type: type, value: value, targets: targets)
+            case .action(let type, let value, _):
+                return tapOnly(.flick(type: type, value: value, targets: targets))
             case .referenceAction(let action, _):
                 // The same pinned action vocabulary is used by built-in reference maps.
                 let type = action["type"]?.string ?? ""
                 let value = action["text"]?.string
-                return .flick(type: type, value: value, targets: targets)
+                return tapOnly(.flick(type: type, value: value, targets: targets))
             case .mapSwitch: return .command(.moveCustomKeyboardTab)
             }
         }
         if let direction = event.direction {
-            if event.isLongPress, let alternate = runtime.longPressActions[direction] { return alternate }
-            if let action = runtime.actions[direction] { return action }
+            if event.isLongPress, let alternate = runtime.longPressActions[direction] { return tapOnly(alternate) }
+            if let action = runtime.actions[direction] { return tapOnly(action) }
         }
         if case .text(let text, _) = event.output, !text.isEmpty { return .text(text) }
         return nil

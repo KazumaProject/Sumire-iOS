@@ -14,6 +14,9 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         didSet { hold.minimumPressDuration = Double(min(2000, max(100, longPressMilliseconds))) / 1000 }
     }
     var repeatEnabled: Bool?
+    /// Recognize a hold to consume its release without repeating an action.
+    /// Used by tap-only commands that otherwise look like a tap on release.
+    var longPressCancelsTap = false
     /// Custom layouts resolve only actual taps as double-tap candidates.
     var onCommittedPress: ((_ isTap: Bool) -> Void)?
     private var activeTouch: UITouch?
@@ -74,6 +77,9 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
         touchRouter?.end(self)
     }
     private var repeatTimer: Timer?
+    private var repeatsOnLongPress: Bool {
+        repeatEnabled ?? ["削除", "⌫", "←", "→"].contains(accessibilityLabel ?? "")
+    }
     private lazy var hold: UILongPressGestureRecognizer = {
         let gesture = UILongPressGestureRecognizer(target: self, action: #selector(held(_:)))
         gesture.minimumPressDuration = 0.3
@@ -92,7 +98,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
     }
     override func gestureRecognizerShouldBegin(_ gestureRecognizer: UIGestureRecognizer) -> Bool {
         guard gestureRecognizer === hold else { return super.gestureRecognizerShouldBegin(gestureRecognizer) }
-        return repeatEnabled ?? ["削除", "⌫", "←", "→"].contains(accessibilityLabel ?? "")
+        return repeatsOnLongPress || longPressCancelsTap
     }
     @objc private func held(_ gesture: UILongPressGestureRecognizer) {
         switch gesture.state {
@@ -100,6 +106,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
             guard activeTouch != nil else { return }
             emission.markEmitted()
             emitPress(isTap: false)
+            guard repeatsOnLongPress else { return }
             guard window != nil, activeTouch != nil else { return }
             repeatTimer = Timer(timeInterval: 0.07, repeats: true) { [weak self] _ in
                 guard let self else { return }

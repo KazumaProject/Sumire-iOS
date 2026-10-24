@@ -18,13 +18,19 @@ final class CustomInputTextActionTests: XCTestCase {
         var selection = NSRange(location: 0, length: 0)
         var rawParts: [(left: String, tail: String)] = []
         var deleteForwardCalls = 0
-        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false) throws {
+        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false,
+             flickMappings: [LayoutJSON]? = nil, flickType: String = "PETAL_FLICK",
+             flickField: String = "flicks") throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
             editor.setInputMode(romaji: romaji, direct: direct)
             for (index, item) in actions.enumerated() {
                 editor.putKey(id: item.0, label: item.0, action: item.1, special: true,
                               row: 0, column: index * 2, height: 2, width: 2)
+            }
+            if let flickMappings, let keyID = actions.first?.0 {
+                try editor.setKeyType(id: keyID, type: flickType)
+                try editor.setGestureMappings(id: keyID, field: flickField, mappings: flickMappings)
             }
             if flickToggle {
                 try editor.setKeyType(id: "toggle", type: "STANDARD_FLICK")
@@ -121,6 +127,62 @@ final class CustomInputTextActionTests: XCTestCase {
         let committedTextFixture = try Fixture(actions: [("forward", "DeleteAfterCursor")])
         try committedTextFixture.tap("forward")
         XCTAssertEqual(committedTextFixture.deleteForwardCalls, 1)
+    }
+
+    func testCustomDeleteAfterCursorFlickIsTapOnlyWhenHeld() throws {
+        let directional = try Fixture(actions: [("forward", "DoNothing")], flickMappings: [
+            .object(["flickDirection": .string("TAP"), "actionType": .string("DELETE_AFTER_CURSOR")])
+        ])
+        let directionalKey = try XCTUnwrap(directional.find("custom-forward") as? Sumire.MultiStageFlickKey)
+        let directionalCallback = try XCTUnwrap(directionalKey.onCommit)
+        directionalCallback(.init(output: .text(""), isTap: false, wasFlick: false, isLongPress: true,
+                                  direction: .tap, secondDirection: nil, circularSlot: nil))
+        XCTAssertEqual(directional.deleteForwardCalls, 0)
+        directionalCallback(.init(output: .text(""), isTap: true, wasFlick: false, isLongPress: false,
+                                  direction: .tap, secondDirection: nil, circularSlot: nil))
+        XCTAssertEqual(directional.deleteForwardCalls, 1)
+
+        let circular = try Fixture(actions: [("forward", "DoNothing")], flickMappings: [
+            .object(["circularDirection": .string("TAP"), "actionType": .string("DELETE_AFTER_CURSOR")])
+        ], flickType: "CIRCULAR_FLICK", flickField: "circularFlicks")
+        let circularKey = try XCTUnwrap(circular.find("custom-forward") as? Sumire.MultiStageFlickKey)
+        let circularCallback = try XCTUnwrap(circularKey.onCommit)
+        let output = SumireCore.CircularFlickOutput.action("DELETE_AFTER_CURSOR", value: nil, label: "")
+        circularCallback(.init(output: output, isTap: false, wasFlick: false, isLongPress: true,
+                               direction: nil, secondDirection: nil, circularSlot: .tap))
+        XCTAssertEqual(circular.deleteForwardCalls, 0)
+        circularCallback(.init(output: output, isTap: true, wasFlick: false, isLongPress: false,
+                               direction: nil, secondDirection: nil, circularSlot: .tap))
+        XCTAssertEqual(circular.deleteForwardCalls, 1)
+    }
+
+    func testCustomNormalDeleteAfterCursorLongPressConsumesRelease() throws {
+        let fixture = try Fixture(actions: [("forward", "DeleteAfterCursor")])
+        let key = try XCTUnwrap(fixture.find("custom-forward") as? Sumire.RepeatingKey)
+        XCTAssertFalse(key.repeatEnabled ?? true)
+        XCTAssertTrue(key.longPressCancelsTap)
+        let hold = try XCTUnwrap(key.gestureRecognizers?.first)
+        XCTAssertTrue(key.gestureRecognizerShouldBegin(hold))
+        let callback = try XCTUnwrap(key.onCommittedPress)
+        callback(false)
+        XCTAssertEqual(fixture.deleteForwardCalls, 0)
+        callback(true)
+        XCTAssertEqual(fixture.deleteForwardCalls, 1)
+    }
+
+    func testInputHarnessForwardDeleteRemovesNextComposedCharacter() {
+        let text = UITextView()
+        text.text = "a👩‍💻い"
+        text.selectedRange = NSRange(location: 1, length: 0)
+
+        let surface = Sumire.KeyboardSurface()
+        let coordinator = InputHarness.Coordinator()
+        coordinator.textView = text
+        InputHarness.configureForwardDelete(surface: surface, text: text, coordinator: coordinator)
+        surface.deleteForward?()
+
+        XCTAssertEqual(text.text, "aい")
+        XCTAssertEqual(text.selectedRange, NSRange(location: 1, length: 0))
     }
 
     func testCustomShiftConsumesTextButNotCommandsOrInputTextWithoutRebuilding() throws {
