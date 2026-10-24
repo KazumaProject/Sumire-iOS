@@ -14,6 +14,9 @@ final class KeyboardSettingsAccessTests: XCTestCase {
         try stores { shared, local in
             shared.set(3, forKey: "candidateRowCount")
             shared.set(true, forKey: "bunsetsuSeparation")
+            shared.set(5, forKey: JapanesePredictionSettings.lookaheadStorageKey)
+            shared.set(JapanesePredictionAggressiveness.aggressive.rawValue,
+                       forKey: JapanesePredictionSettings.aggressivenessStorageKey)
             let theme = KeyboardTheme(hue: 0.2, mode: .dark, saturation: 0.8, brightness: 0.9)
             theme.save(defaults: shared)
             local.set(1, forKey: "candidateRowCount")
@@ -25,6 +28,8 @@ final class KeyboardSettingsAccessTests: XCTestCase {
             XCTAssertTrue(access.writeDefaults === local)
             XCTAssertEqual(access.readDefaults.integer(forKey: "candidateRowCount"), 3)
             XCTAssertTrue(access.readDefaults.bool(forKey: "bunsetsuSeparation"))
+            XCTAssertEqual(JapanesePredictionSettings.load(defaults: access.readDefaults),
+                           JapanesePredictionSettings(lookaheadCharacterCount: 5, aggressiveness: .aggressive))
             XCTAssertEqual(KeyboardTheme.load(defaults: access.readDefaults), theme)
             // Accidental readers calling a save method cannot write either store.
             KeyboardTheme().save(defaults: access.readDefaults)

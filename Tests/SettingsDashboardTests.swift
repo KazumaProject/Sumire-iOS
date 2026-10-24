@@ -39,6 +39,21 @@ final class SettingsDashboardTests: XCTestCase {
         XCTAssertTrue(app.staticTexts.matching(NSPredicate(format: "label CONTAINS %@", "zzzz-no-setting")).firstMatch.exists)
     }
 
+    func testConversionSettingsExposeAndroidPredictionControls() {
+        let app = XCUIApplication(); app.launch()
+        app.buttons["settings-category-input"].tap()
+        let conversion = app.buttons["settings-destination-conversion"]
+        XCTAssertTrue(conversion.waitForExistence(timeout: 3)); conversion.tap()
+        XCTAssertTrue(app.staticTexts["変換候補の予測"].waitForExistence(timeout: 3))
+        XCTAssertTrue(app.descendants(matching: .any)["prediction-lookahead"].exists)
+        let aggressiveness = app.descendants(matching: .any)["prediction-aggressiveness"]
+        XCTAssertTrue(aggressiveness.exists)
+        XCTAssertEqual(aggressiveness.buttons.count, 3)
+        XCTAssertEqual(aggressiveness.buttons.element(boundBy: 0).label, "控えめ")
+        XCTAssertEqual(aggressiveness.buttons.element(boundBy: 1).label, "標準")
+        XCTAssertEqual(aggressiveness.buttons.element(boundBy: 2).label, "積極的")
+    }
+
     func testPreviewRowsAndThemeKeepUncommittedInput() {
         let app = XCUIApplication(); app.launchArguments = ["-liveConversion", "NO"]
         app.launch(); app.buttons["settings-preview"].tap()

@@ -1,6 +1,8 @@
 #pragma once
 #include <cstdint>
+#include <cstddef>
 #include <memory>
+#include <optional>
 #include <string>
 #include <vector>
 namespace sumire {
@@ -84,6 +86,29 @@ public:
   void purge() noexcept;
   size_t retained_bytes() const noexcept;
 };
+enum class PredictionAggressiveness : uint32_t {
+  conservative = 0, standard = 1, aggressive = 2
+};
+struct PredictionConfig {
+  size_t lookahead_character_count = 3;
+  PredictionAggressiveness aggressiveness = PredictionAggressiveness::standard;
+
+  int64_t completion_penalty(size_t input_length, size_t reading_length,
+                             int64_t penalty_per_character = 8000,
+                             std::optional<int64_t> long_input_flat_penalty = 6000) const {
+    const size_t extra = reading_length > input_length ? reading_length - input_length : 0;
+    if (!extra) return 0;
+    const int64_t standard = input_length <= 5 || !long_input_flat_penalty
+        ? penalty_per_character * static_cast<int64_t>(extra)
+        : *long_input_flat_penalty;
+    switch (aggressiveness) {
+    case PredictionAggressiveness::conservative: return standard * 3 / 2;
+    case PredictionAggressiveness::aggressive: return standard / 2;
+    case PredictionAggressiveness::standard: return standard;
+    }
+    return standard;
+  }
+};
 class Engine {
   struct Impl;
   std::unique_ptr<Impl> impl;
@@ -98,7 +123,8 @@ public:
                  const PersonalDictionary *personal = nullptr,
                  const PersonalDictionary *learned = nullptr,
                  Workspace *workspace = nullptr, bool prefix_candidates = false,
-                 bool japanese_prediction = false, bool bunsetsu_search = false) const;
+                 bool japanese_prediction = false, bool bunsetsu_search = false,
+                 const PredictionConfig &prediction_config = {}) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;

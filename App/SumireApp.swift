@@ -29,6 +29,10 @@ struct HomeView: View {
     @AppStorage("liveConversion", store: KeyboardSettings.appDefaults) private var liveConversion = false
     @AppStorage("omissionSearch", store: KeyboardSettings.appDefaults) private var omissionSearch = false
     @AppStorage("bunsetsuSeparation", store: KeyboardSettings.appDefaults) private var bunsetsuSeparation = false
+    @AppStorage(JapanesePredictionSettings.lookaheadStorageKey, store: KeyboardSettings.appDefaults)
+    private var predictionLookaheadCharacterCount = JapanesePredictionSettings.defaultLookaheadCharacterCount
+    @AppStorage(JapanesePredictionSettings.aggressivenessStorageKey, store: KeyboardSettings.appDefaults)
+    private var predictionAggressivenessRawValue = JapanesePredictionAggressiveness.standard.rawValue
     @State private var destination: SettingsDestination?
     @State private var showPreview = false
     var body: some View {
@@ -60,7 +64,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), predictionSettings: predictionSettings)
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -107,6 +111,24 @@ struct HomeView: View {
                     Toggle("文節ごとに変換", isOn: $bunsetsuSeparation)
                 } header: { Text("変換") } footer: {
                     Text("ONにすると、変換キーを押したときに文節を切り分けて先頭から候補を選べます。選んだ後も残りの読みは未確定のまま続きます。")
+                }
+                Section {
+                    Picker("先読み文字数", selection: $predictionLookaheadCharacterCount) {
+                        ForEach(JapanesePredictionSettings.lookaheadRange, id: \.self) { count in
+                            Text("\(count)文字").tag(count)
+                        }
+                    }
+                    .pickerStyle(.menu)
+                    .accessibilityIdentifier("prediction-lookahead")
+                    Picker("予測の積極性", selection: $predictionAggressivenessRawValue) {
+                        ForEach(JapanesePredictionAggressiveness.allCases, id: \.rawValue) { value in
+                            Text(value.title).tag(value.rawValue)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    .accessibilityIdentifier("prediction-aggressiveness")
+                } header: { Text("変換候補の予測") } footer: {
+                    Text("先読み文字数は候補に含める読みの長さ、積極性は予測候補の順位に反映します。標準は Android の初期設定です。")
                 }
                 Section {
                     TextField("削除キー左フリックの区切り記号", text: $deleteBoundarySymbols)
@@ -174,6 +196,12 @@ struct HomeView: View {
         }
     }
 
+    private var predictionSettings: JapanesePredictionSettings {
+        JapanesePredictionSettings(
+            lookaheadCharacterCount: predictionLookaheadCharacterCount,
+            aggressiveness: JapanesePredictionAggressiveness(rawValue: predictionAggressivenessRawValue) ?? .standard)
+    }
+
     private func detail<Content: View>(title: String, @ViewBuilder content: () -> Content) -> some View {
         NavigationStack {
             content().navigationTitle(title).navigationBarTitleDisplayMode(.inline)
@@ -216,6 +244,7 @@ struct InputHarness: UIViewRepresentable {
     let bunsetsuSeparation: Bool
     let englishReadingEnabled: Bool
     let categoryMask: UInt32
+    let predictionSettings: JapanesePredictionSettings
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextView {
         #if DEBUG
@@ -333,6 +362,7 @@ struct InputHarness: UIViewRepresentable {
         surface.bunsetsuSeparation = bunsetsuSeparation
         surface.englishReadingEnabled = englishReadingEnabled
         surface.categoryMask = categoryMask
+        surface.predictionSettings = predictionSettings
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }
         surface.saturation = CGFloat(saturation)
         surface.brightness = CGFloat(brightness)

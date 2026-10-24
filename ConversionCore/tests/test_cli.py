@@ -622,6 +622,101 @@ class Tests(unittest.TestCase):
             self.assertEqual(predicted_candidates[key]['score'],score)
         self.assertFalse(any(c['text']=='EMOJI-TOO-FAR' for c in predicted['candidates']))
 
+    def test_japanese_prediction_settings_match_android_lookahead_and_penalties(self):
+        dictionary(self.data/'system.sud',[('あいうえお','SYSTEM-PREDICT',1,100)])
+        def system_candidate(*options):
+            candidates=json.loads(self.run_cli('--predict-japanese',*options,'あいう').stdout)['candidates']
+            return next((candidate for candidate in candidates if candidate['text']=='SYSTEM-PREDICT'),None)
+        self.assertIsNone(system_candidate('--prediction-lookahead','1'))
+        standard=system_candidate('--prediction-lookahead','2','--prediction-aggressiveness','standard')
+        conservative=system_candidate('--prediction-lookahead','2','--prediction-aggressiveness','conservative')
+        aggressive=system_candidate('--prediction-lookahead','2','--prediction-aggressiveness','aggressive')
+        self.assertEqual(standard['score'],16100)
+        self.assertEqual(conservative['score'],24100)
+        self.assertEqual(aggressive['score'],8100)
+
+        # Android uses a flat 6000 standard penalty for long input, then
+        # applies the same 3/2, 1, 1/2 aggressiveness multipliers.
+        dictionary(self.data/'system.sud',[('あいうえおかき','LONG-PREDICT',1,100)])
+        def long_candidate(aggressiveness):
+            candidates=json.loads(self.run_cli('--predict-japanese','--prediction-lookahead','1',
+                '--prediction-aggressiveness',aggressiveness,'あいうえおか').stdout)['candidates']
+            return next(candidate for candidate in candidates if candidate['text']=='LONG-PREDICT')
+        self.assertEqual(long_candidate('standard')['score'],6100)
+        self.assertEqual(long_candidate('conservative')['score'],9100)
+        self.assertEqual(long_candidate('aggressive')['score'],3100)
+
+        self.install_auxiliary_dictionary_fixture()
+        for aggressiveness, expected_score in [
+            ('conservative', 3500), ('standard', 3000), ('aggressive', 2500)
+        ]:
+            candidates=json.loads(self.run_cli('--predict-japanese','--prediction-lookahead','1',
+                '--prediction-aggressiveness',aggressiveness,'あいう').stdout)['candidates']
+            symbol=next(candidate for candidate in candidates if candidate['text']=='SYMBOL-PREDICT')
+            self.assertEqual(symbol['score'], expected_score)
+
+    def test_bunsetsu_japanese_prediction_settings_match_android(self):
+        reading='あいう'
+        dictionary(self.data/'system.sud',[
+            (reading,'BASE',1,100),
+            (reading+'えお','SYSTEM-PREDICT',1,100),
+            (reading+'えおかき','SYSTEM-TOO-FAR',1,-10000),
+        ])
+        dictionary(self.data/'reading_correction.sud',[
+            (reading+'えお','訂正\tていせい',1,100),
+        ])
+        dictionary(self.data/'medical.sud',[
+            (reading+'えお','CATEGORY-PREDICT',1,100),
+        ])
+        self.install_auxiliary_dictionary_fixture()
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['BASE','SYSTEM-PREDICT'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['BASE'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        def candidates(*options):
+            row=json.loads(self.run_cli('--bunsetsu','--predict-japanese',
+                '--categories','medical',*options,reading).stdout)
+            return row, row['candidates']
+
+        standard_row, standard=candidates('--prediction-lookahead','2',
+            '--prediction-aggressiveness','standard')
+        by_text={candidate['text']:candidate for candidate in standard}
+        self.assertEqual(by_text['SYSTEM-PREDICT']['score'],16100)
+        self.assertEqual(by_text['CATEGORY-PREDICT']['score'],3100)
+        self.assertEqual(by_text['訂正']['score'],16100)
+        self.assertNotIn('SYSTEM-TOO-FAR',by_text)
+        for text in ('SYSTEM-PREDICT','CATEGORY-PREDICT','訂正'):
+            self.assertEqual(by_text[text]['bunsetsu_boundaries_utf16'],[])
+        correction=by_text['訂正']
+        self.assertEqual(correction['raw_text'],'訂正\tていせい')
+        self.assertEqual(correction['corrected_reading'],'ていせい')
+        self.assertTrue(standard_row['complete'])
+
+        lookahead_one_row,lookahead_one=candidates('--prediction-lookahead','1',
+            '--prediction-aggressiveness','standard')
+        lookahead_one_texts={candidate['text'] for candidate in lookahead_one}
+        self.assertFalse({'SYSTEM-PREDICT','CATEGORY-PREDICT','訂正'} & lookahead_one_texts)
+        self.assertTrue(lookahead_one_row['complete'])
+
+        for aggressiveness, expected in (
+            ('conservative',(24100,4600,24100)),
+            ('aggressive',(8100,1600,8100)),
+        ):
+            _, values=candidates('--prediction-lookahead','2',
+                '--prediction-aggressiveness',aggressiveness)
+            values_by_text={candidate['text']:candidate for candidate in values}
+            self.assertEqual(values_by_text['SYSTEM-PREDICT']['score'],expected[0])
+            self.assertEqual(values_by_text['CATEGORY-PREDICT']['score'],expected[1])
+            self.assertEqual(values_by_text['訂正']['score'],expected[2])
+        if C_API is not None:
+            result=subprocess.run([C_API,str(self.data),'--bunsetsu-prediction'],capture_output=True)
+            self.assertEqual(result.returncode,0,result.stderr.decode())
+
+    def test_japanese_prediction_settings_reject_invalid_cli_values(self):
+        for value in ['0','7']:
+            self.run_cli('--prediction-lookahead',value,'--predict-japanese','あいう',ok=False)
+        self.run_cli('--prediction-aggressiveness','unknown','--predict-japanese','あいう',ok=False)
+
     def test_auxiliary_completion_ranges_consume_only_typed_utf16(self):
         dictionary(self.data/'english_reading.sud',[('えいご','English',0,10000)])
         dictionary(self.data/'single_kanji.sud',[('べつ','別',0,10000)])

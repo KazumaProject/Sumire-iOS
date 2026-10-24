@@ -133,6 +133,7 @@ final class ConversionService {
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var categoryMask: UInt32
+    private var predictionSettings = JapanesePredictionSettings()
     private var personal = PersonalLexicon()
     private var learningURL: URL?
 
@@ -182,6 +183,11 @@ final class ConversionService {
         let state = state
         queue.async { state.close() }
     }
+    func setPredictionSettings(_ settings: JapanesePredictionSettings) {
+        guard predictionSettings != settings else { return }
+        predictionSettings = settings
+        _ = pending.advance()
+    }
     func setPersonal(_ value: PersonalLexicon) {
         guard value != personal else { return }
         personal = value
@@ -211,6 +217,7 @@ final class ConversionService {
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directoryOverride = directoryOverride
         let mask = categoryMask, englishReading = englishReadingEnabled
+        let predictionSettings = predictionSettings
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
@@ -220,6 +227,7 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
+                try state.setPredictionSettings(predictionSettings)
                 let warnings = [try state.prepareLearning(reading: reading),
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
@@ -227,7 +235,7 @@ final class ConversionService {
                 var result: OpaquePointer?
                 let flags: UInt32
                 if english { flags = 2 }
-                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) }
+                else { flags = (omission ? 1 : 0) | 12 | (bunsetsuSearch ? 16 : 0) }
                 let status = reading.utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
                     var request = sumire_request(generation: generation, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,
@@ -392,6 +400,7 @@ final class ConversionService {
         private var rejectedDirectories = Set<URL>()
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
+        private var appliedPredictionSettings: JapanesePredictionSettings?
         func prepareLearning(reading: String) throws -> String? {
             var entries: [LearningStore.Entry] = []
             if let url = learningURL, learningFailure == nil {
@@ -426,6 +435,22 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
+        func setPredictionSettings(_ settings: JapanesePredictionSettings) throws {
+            guard appliedPredictionSettings != settings else { return }
+            guard let session else { throw NativeError("変換セッションがありません") }
+            let aggressiveness: UInt32
+            switch settings.aggressiveness {
+            case .conservative: aggressiveness = 0
+            case .standard: aggressiveness = 1
+            case .aggressive: aggressiveness = 2
+            }
+            var error = [CChar](repeating: 0, count: 1024)
+            guard sumire_session_set_prediction_config(session, UInt32(settings.lookaheadCharacterCount),
+                                                         aggressiveness, &error, error.count) == 0 else {
+                throw NativeError(String(cString: error))
+            }
+            appliedPredictionSettings = settings
+        }
         func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool) throws {
             let candidates = directories.map(\.standardizedFileURL).filter { !rejectedDirectories.contains($0) }
             let requestedDirectory = candidates.first
@@ -488,6 +513,7 @@ final class ConversionService {
             openedDirectory = nil
             openedMask = nil
             openedEnglishReading = nil
+            appliedPredictionSettings = nil
         }
         deinit { close() }
     }

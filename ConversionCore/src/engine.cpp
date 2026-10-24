@@ -745,17 +745,23 @@ static void rank_primary(std::vector<Candidate> &candidates,
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
-                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search) const {
+                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search,
+                       const PredictionConfig &prediction_config) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
+  require(prediction_config.lookahead_character_count >= 1 &&
+          prediction_config.lookahead_character_count <= 6,
+          "prediction lookahead must be 1..6");
+  require(static_cast<uint32_t>(prediction_config.aggressiveness) <=
+          static_cast<uint32_t>(PredictionAggressiveness::aggressive),
+          "invalid prediction aggressiveness");
   auto reading = utf16(input);
   if (bunsetsu_search) {
     require(impl->system_ngram && impl->system_ngram->available(),
             "bunsetsu search requires the pinned system n-gram assets");
     require(impl->mozc_scoring_data != nullptr,
             "bunsetsu search requires the pinned Mozc scoring assets");
-    japanese_prediction = false;
     // The Android bunsetsu API always appends all exact and partial system
     // reading matches after its primary path candidates.
     prefix_candidates = true;
@@ -1254,10 +1260,10 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
-  if (japanese_prediction && !bunsetsu_search && impl->reading_correction &&
+  if (japanese_prediction && impl->reading_correction &&
       reading.size() >= 3 && reading.size() <= 16) {
     const auto &d = *impl->reading_correction;
-    const bool complete = d.completion(reading, 3, limit,
+    const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit,
         [&](size_t node, uint32_t token, size_t extra) {
       auto raw = d.surface(token, reading, 0, reading.size(), node);
       const auto tab = raw.find('\t');
@@ -1269,7 +1275,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         return;
       }
       auto text = raw.substr(0, tab);
-      Candidate candidate{text, int64_t(d.costs[token]) + int64_t(extra) * 8000,
+      Candidate candidate{text, int64_t(d.costs[token]) + prediction_config.completion_penalty(reading.size(), reading.size() + extra, 8000, std::nullopt),
           {{text, d.name, 0, uint32_t(reading.size())}}};
       candidate.corrected_reading = raw.substr(tab + 1);
       candidate.raw_text = std::move(raw);
@@ -1277,14 +1283,15 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     });
     result.complete = result.complete && complete;
   }
-  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
-    // PredictionConfig defaults in Sumire dev 9506a0b: lookahead 3, limit 4.
+  if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
+    // PredictionConfig defaults to lookahead 3 and standard aggressiveness.
     // Retain token references only; materialize surfaces after top-k selection.
     const auto &d = *impl->dictionaries.front();
     struct Prediction { size_t node; uint32_t token; int64_t score; };
     std::vector<Prediction> best;
-    const bool complete = d.completion(reading, 3, limit, [&](size_t node, uint32_t token, size_t extra) {
-      const int64_t score = d.costs[token] + (reading.size() <= 5 ? int64_t(extra) * 8000 : 6000);
+    const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit, [&](size_t node, uint32_t token, size_t extra) {
+      const int64_t score = int64_t(d.costs[token]) + prediction_config.completion_penalty(
+          reading.size(), reading.size() + extra, 8000, 6000);
       const auto at = std::upper_bound(best.begin(), best.end(), score,
           [](int64_t value, const Prediction &entry) { return value < entry.score; });
       if (best.size() == 4 && at == best.end()) return;
@@ -1299,7 +1306,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             {{text, d.name, 0, uint32_t(reading.size())}}});
     }
   }
-  if (japanese_prediction && !bunsetsu_search && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && reading.size() >= 3 && reading.size() <= 16) {
     // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
     // category, stable token order on ties, 1500 per additional UTF-16 unit.
     // Retain references until selection, including for large posting lists.
@@ -1315,9 +1322,10 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       const auto &d = *impl->dictionaries[index];
       struct Prediction { size_t node; uint32_t token; int64_t score; };
       std::vector<Prediction> best;
-      const bool complete = d.completion(reading, 3, limit,
+      const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit,
           [&](size_t node, uint32_t token, size_t extra) {
-        const int64_t score = int64_t(d.costs[token]) + int64_t(extra) * 1500;
+        const int64_t score = int64_t(d.costs[token]) + prediction_config.completion_penalty(
+            reading.size(), reading.size() + extra, 1500, std::nullopt);
         const auto at = std::upper_bound(best.begin(), best.end(), score,
             [](int64_t value, const Prediction &entry) { return value < entry.score; });
         if (best.size() == 4 && at == best.end()) return;
@@ -1409,13 +1417,15 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       // Japanese prediction is enabled (the production default).
       if (japanese_prediction && reading.size() >= 3) {
         const bool complete = dictionary.completion(
-            reading, 3, limit,
+            reading, prediction_config.lookahead_character_count, limit,
             [&](size_t node, uint32_t token, size_t extra) {
               auto yomi = dictionary.nodeReading(node);
               const auto text = dictionary.surface(
                   token, yomi, 0, yomi.size(), node);
               const auto score = int64_t(dictionary.costs[token]) +
-                                 int64_t(extra) * 1000;
+                                 prediction_config.completion_penalty(
+                                     reading.size(), reading.size() + extra,
+                                     1000, std::nullopt);
               candidates.push_back(
                   {text, score,
                    // The longer dictionary reading selects the completion, but

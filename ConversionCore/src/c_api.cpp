@@ -20,6 +20,7 @@ struct sumire_session {
   std::shared_ptr<const Snapshot> latest;
   std::shared_ptr<const sumire::PersonalDictionary> personal;
   std::shared_ptr<const sumire::PersonalDictionary> learned;
+  sumire::PredictionConfig prediction_config;
   uint64_t generation = 0;
   bool has_generation = false;
 };
@@ -163,6 +164,25 @@ int sumire_session_create(sumire_engine *engine, sumire_session **out,
   });
 }
 void sumire_session_destroy(sumire_session *session) { delete session; }
+int sumire_session_set_prediction_config(sumire_session *session,
+                                         uint32_t lookahead,
+                                         uint32_t aggressiveness,
+                                         char *error, size_t size) {
+  return guarded(error, size, [&] {
+    check(session, "null session argument");
+    check(lookahead >= 1 && lookahead <= 6,
+          "prediction lookahead must be 1..6");
+    check(aggressiveness <= static_cast<uint32_t>(sumire::PredictionAggressiveness::aggressive),
+          "invalid prediction aggressiveness");
+    auto &current = session->prediction_config;
+    if (current.lookahead_character_count == lookahead &&
+        static_cast<uint32_t>(current.aggressiveness) == aggressiveness)
+      return;
+    current.lookahead_character_count = lookahead;
+    current.aggressiveness = static_cast<sumire::PredictionAggressiveness>(aggressiveness);
+    session->latest.reset();
+  });
+}
 int sumire_session_update(sumire_session *session,
                           const sumire_request *request, sumire_result **out,
                           char *error, size_t size) {
@@ -172,7 +192,6 @@ int sumire_session_update(sumire_session *session,
     check(out && session && request, "null update argument");
     check(request->reading || request->reading_bytes == 0, "null reading");
     check((request->flags & ~uint32_t(31)) == 0 &&
-          ((request->flags & 16) == 0 || (request->flags & 8) == 0) &&
           ((request->flags & 2) == 0 || request->flags == 2), "unsupported or incompatible conversion flags");
     check(!session->has_generation || request->generation > session->generation,
           "stale generation");
@@ -193,7 +212,7 @@ int sumire_session_update(sumire_session *session,
         ? session->engine->predict_english(reading, request->candidate_count, true, session->personal.get(), session->learned.get())
         : session->engine->convert(
         reading, request->candidate_count, request->max_states,
-        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0);
+        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0, session->prediction_config);
     snapshot->generation = request->generation;
     snapshot->length = uint32_t(units.size());
     auto result = std::make_unique<sumire_result>();
