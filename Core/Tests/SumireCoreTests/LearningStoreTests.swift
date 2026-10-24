@@ -27,7 +27,7 @@ final class LearningStoreTests: XCTestCase {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
         let store = try LearningStore(url: directory.appendingPathComponent("learning.sqlite"))
-        let entries = (0..<25).map { index in
+        let entries = (0..<125).map { index in
             LearningSessionEntry(
                 input: "おなじ",
                 output: "候補\(index)",
@@ -41,14 +41,16 @@ final class LearningStoreTests: XCTestCase {
         }
 
         // Candidate0 has the best score but was inserted first (oldest). It
-        // must survive the default fetch limit even when more than 20 rows
-        // share one reading.
+        // must survive the default 100-row fetch limit when more than 100 rows
+        // share one reading, while the lowest-scored 100 rows are retained.
         try store.upsertLearningEntries(entries)
 
         let candidates = try store.candidates(reading: "おなじ")
-        XCTAssertEqual(candidates.count, 25)
+        XCTAssertEqual(candidates.count, 100)
         XCTAssertEqual(candidates.first?.text, "候補0")
         XCTAssertEqual(candidates.first?.score, 1_000)
+        XCTAssertEqual(candidates.last?.text, "候補99")
+        XCTAssertFalse(candidates.contains { $0.text == "候補100" })
         XCTAssertEqual(try store.candidates(reading: "おなじ", limit: 5).map(\.text),
                        ["候補0", "候補1", "候補2", "候補3", "候補4"])
     }
