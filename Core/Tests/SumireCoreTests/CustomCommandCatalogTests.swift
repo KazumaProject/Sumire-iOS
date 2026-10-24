@@ -15,6 +15,7 @@ final class CustomCommandCatalogTests: XCTestCase {
         // Literal expectations are independent of the catalog and decoder.
         let table: [(CustomKeyAction.Command, String, String)] = [
             (.doNothing,"DoNothing","DoNothing"), (.delete,"Delete","DELETE"), (.backspace,"Backspace","BACKSPACE"),
+            (.deleteAfterCursor,"DeleteAfterCursor","DELETE_AFTER_CURSOR"),
             (.space,"Space","SPACE"), (.enter,"Enter","ENTER"), (.newLine,"NewLine","NEW_LINE"),
             (.confirm,"Confirm","CONFIRM"), (.convert,"Convert","CONVERT"), (.paste,"Paste","PASTE"),
             (.cursorLeft,"MoveCursorLeft","MOVE_CURSOR_LEFT"), (.cursorRight,"MoveCursorRight","MOVE_CURSOR_RIGHT"),
