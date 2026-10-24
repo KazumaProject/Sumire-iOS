@@ -126,6 +126,7 @@ final class KeyboardViewController: UIInputViewController {
         surface.omissionSearch = defaults.bool(forKey: "omissionSearch")
         surface.englishReadingEnabled = defaults.object(forKey: "englishReadingEnabled") as? Bool ?? true
         surface.categoryMask = UInt32(defaults.integer(forKey: "categoryMask") & 0x3fff_ffff)
+        surface.kotowazaEnabled = KotowazaSettings.isEnabled(defaults: defaults)
         surface.candidateRowCount = rows
         surface.candidateBar.reloadToolbarSettings(defaults: defaults)
         keyboardHeight.constant = surface.requestedHeight

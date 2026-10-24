@@ -208,6 +208,7 @@ final class ConversionService {
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
+                 kotowazaEnabled: Bool = true,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directoryOverride = directoryOverride
         let mask = categoryMask, englishReading = englishReadingEnabled
@@ -227,7 +228,7 @@ final class ConversionService {
                 var result: OpaquePointer?
                 let flags: UInt32
                 if english { flags = 2 }
-                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) }
+                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) | (kotowazaEnabled ? 0 : 32) }
                 let status = reading.utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
                     var request = sumire_request(generation: generation, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,

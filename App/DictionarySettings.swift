@@ -59,6 +59,7 @@ private struct DictionaryImportOutcomeView: View {
 struct DictionarySettings: View {
     @Binding var categoryMask: Int
     @Binding var englishReadingEnabled: Bool
+    @AppStorage(KotowazaSettings.enabledKey, store: KeyboardSettings.appDefaults) private var kotowazaEnabled = true
     @Environment(\.dismiss) private var dismiss
     @State private var importingArchive = false
     @State private var importInProgress = false
@@ -88,6 +89,12 @@ struct DictionarySettings: View {
                 Section("英単語読み辞書") {
                     Toggle("かなから英単語を表示", isOn: $englishReadingEnabled)
                     Text("学習済み・ユーザー辞書の英単語は、この設定とは別に表示されます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("諺辞書") {
+                    Toggle("諺を候補に表示", isOn: $kotowazaEnabled)
+                        .accessibilityIdentifier("kotowaza-enabled")
+                    Text("読みの途中でも、入力中の文字を消費する続きの候補を表示します。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("外部辞書") {

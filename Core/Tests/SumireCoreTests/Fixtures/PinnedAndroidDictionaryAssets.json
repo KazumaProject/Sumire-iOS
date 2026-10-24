@@ -101,6 +101,9 @@
     "english_reading/token.dat.zip": "35e4e090ae13e0f71302b5f71a17d7919adfb910184cbbcee4f2fdf8fe0bbcbb",
     "english/reading.dat.zip": "9b1afbf844503b1dcd6b1c55d3f12091fcbc36ee2c2a39525926ddd7699010dd",
     "english/word.dat": "7d726e5d1e8ff8f84f87299a83c456daed9aac86640cbb1c561db44170c52439",
-    "english/token.dat.zip": "956e94c0f59910c44bd4189cff3fafd87b03838906d418a7f57112b9113f05d6"
+    "english/token.dat.zip": "956e94c0f59910c44bd4189cff3fafd87b03838906d418a7f57112b9113f05d6",
+    "kotowaza/tango_kotowaza.dat": "72c5d9ab47e5b162fbe906b058b05f459a26375398479f5306c58f538afbac95",
+    "kotowaza/token_kotowaza.dat": "9ae52da4fc166157502db3aa23a8258d387ec9dc9d75350a418c021e307c96c9",
+    "kotowaza/yomi_kotowaza.dat": "835ac910789fc33335b626154e704d35d0398d153ce21cc70ea589a1d00ed111"
   }
 }

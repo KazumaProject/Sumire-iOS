@@ -52,6 +52,15 @@ final class KeyboardSurface: UIInputView {
             refreshConversion()
         }
     }
+    var kotowazaEnabled = true {
+        didSet {
+            guard oldValue != kotowazaEnabled else { return }
+            beforeInput?()
+            guard hasComposition else { return }
+            composition.optionsChanged()
+            refreshConversion()
+        }
+    }
     var categoryMask: UInt32 = 0 {
         didSet {
             guard oldValue != categoryMask else { return }
@@ -2011,7 +2020,8 @@ final class KeyboardSurface: UIInputView {
         let reading = composition.reading
         converter.convert(query, generation: generation, editStart: 0,
                           omission: englishComposition ? false : omissionSearch,
-                          english: englishComposition) { [weak self] response in
+                          english: englishComposition,
+                          kotowazaEnabled: kotowazaEnabled) { [weak self] response in
             guard let self else { return }
             self.beforeInput?()
             guard self.composition.accepts(generation) else { return }

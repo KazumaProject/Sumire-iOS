@@ -288,7 +288,8 @@ std::vector<std::string> category_names() {
 struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
-  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction;
+  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction,
+      kotowaza;
   std::unique_ptr<Dictionary> single_kanji, emoji, emoticon, symbol;
   bool auxiliary_dictionaries_available = false;
   std::unique_ptr<detail::StandaloneDictionary> standalone;
@@ -322,6 +323,13 @@ struct Engine::Impl {
       reading_correction = std::make_unique<Dictionary>(dir, "reading_correction");
       for (auto p : reading_correction->pos)
         require(p < connection.left.size(), "reading correction POS outside table");
+    }
+    // Kotowaza is an independent optional triple, not part of the four-file
+    // emoji/symbol auxiliary set. Android uses it for Japanese completion.
+    if (std::filesystem::exists(dir + "/kotowaza.sud")) {
+      kotowaza = std::make_unique<Dictionary>(dir, "kotowaza");
+      for (auto p : kotowaza->pos)
+        require(p < connection.left.size(), "kotowaza POS outside table");
     }
     auto valid = category_names();
     std::unordered_set<std::string> used;
@@ -368,6 +376,7 @@ size_t Engine::mapped_bytes() const {
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
   if (impl->reading_correction) n += impl->reading_correction->file.size;
+  if (impl->kotowaza) n += impl->kotowaza->file.size;
   if (impl->single_kanji) n += impl->single_kanji->file.size;
   if (impl->emoji) n += impl->emoji->file.size;
   if (impl->emoticon) n += impl->emoticon->file.size;
@@ -613,6 +622,7 @@ struct Workspace::Impl {
   std::shared_ptr<int> personal_identity, learned_identity;
   size_t previous_count = 0, previous_limit = 0;
   bool previous_omission = false, previous_prefix = false, previous_prediction = false;
+  bool previous_kotowaza = true;
   detail::NgramScratch ngram_scratch;
   bool cache_valid = false;
   std::vector<Node> nodes;
@@ -745,7 +755,7 @@ static void rank_primary(std::vector<Candidate> &candidates,
 Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        bool omission,
                        const PersonalDictionary *personal,
-                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search) const {
+                       const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search, bool kotowaza_enabled) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
@@ -800,7 +810,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       work.personal_identity == personalIdentity && work.learned_identity == learnedIdentity &&
       work.previous_count == count && work.previous_limit == limit &&
       work.previous_omission == omission && work.previous_prefix == prefix_candidates &&
-      work.previous_prediction == japanese_prediction;
+      work.previous_prediction == japanese_prediction &&
+      work.previous_kotowaza == kotowaza_enabled;
   size_t common = 0;
   if (compatible)
     while (common < reading.size() && common < work.previous_reading.size() &&
@@ -1506,9 +1517,28 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     append_candidates(emoji_and_emoticon_candidates);
     append_candidates(symbol_candidates);
   } else {
+    // Android appends Kotowaza after English-reading candidates and before
+    // symbol/emoji providers. Bunsetsu search suppresses the general Japanese
+    // prediction route above, but Android still includes Kotowaza there when
+    // proverb prediction is enabled.
+    if (impl->kotowaza && kotowaza_enabled &&
+        (japanese_prediction || bunsetsu_search) && reading.size() >= 3 &&
+        reading.size() <= 16) {
+      const auto &d = *impl->kotowaza;
+      const bool complete = d.completion(
+          reading, 3, limit,
+          [&](size_t node, uint32_t token, size_t extra) {
+        const auto yomi = d.nodeReading(node);
+        const auto text = d.surface(token, yomi, 0, yomi.size(), node);
+        const auto score = int64_t(d.costs[token]) + int64_t(extra) * 8000;
+        result.candidates.push_back(
+            {text, score, {{text, d.name, 0, uint32_t(reading.size())}}});
+      });
+      result.complete = result.complete && complete;
+    }
     append_candidates(emoji_and_emoticon_candidates);
     // df1f383 getCandidatesOriginal (default hidden candidate tabs) places
-    // symbols before kana and yomiPartList for multi-unit input.
+    // symbols after emoji and before kana and yomiPartList for multi-unit input.
     append_candidates(symbol_candidates);
     if (include_kana) {
       auto katakana = hiragana_to_katakana(reading);
@@ -1559,7 +1589,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   work.personal_identity = personalIdentity; work.learned_identity = learnedIdentity;
   work.previous_count = count; work.previous_limit = limit;
   work.previous_omission = omission; work.previous_prefix = prefix_candidates;
-  work.previous_prediction = japanese_prediction; work.cache_valid = true;
+  work.previous_prediction = japanese_prediction;
+  work.previous_kotowaza = kotowaza_enabled; work.cache_valid = true;
   work.finish();
   cleanup.active = false;
   result.elapsed_ms = std::chrono::duration<double, std::milli>(
