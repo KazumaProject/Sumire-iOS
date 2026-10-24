@@ -16,6 +16,8 @@ struct ConversionCandidate {
     let textMacroID: String?
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
+    let leftID: Int16?
+    let rightID: Int16?
     var displayAnnotation: String? {
         let badge: String
         if let correctedReading, !correctedReading.isEmpty { badge = "[読] " + correctedReading }
@@ -87,7 +89,8 @@ struct ConversionCandidate {
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
-                presentationKind: first.presentationKind, classifiedCategories: categories)
+                presentationKind: first.presentationKind, classifiedCategories: categories,
+                leftID: first.leftID, rightID: first.rightID)
         }
         return merged
     }
@@ -99,7 +102,8 @@ struct ConversionCandidate {
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
-         presentationKind: PresentationKind = .none, classifiedCategories: [String] = []) {
+         presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
+         leftID: Int16? = nil, rightID: Int16? = nil) {
         self.id = id
         self.text = text
         self.score = score
@@ -112,6 +116,8 @@ struct ConversionCandidate {
         self.textMacroID = textMacroID
         self.presentationKind = presentationKind
         self.classifiedCategories = classifiedCategories
+        self.leftID = leftID
+        self.rightID = rightID
     }
 }
 struct ConversionResponse {
@@ -270,9 +276,19 @@ final class ConversionService {
                           let consumedRange = Range(range, in: reading) else { continue }
                     var dictionaries: [String] = []
                     var tokens: [BunsetsuToken] = []
+                    var firstLeftID: Int16?
+                    var lastRightID: Int16?
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
+                        var leftID: UInt16 = 0
+                        var rightID: UInt16 = 0
+                        guard sumire_result_segment_context_ids(result, index, segmentIndex,
+                                                                &leftID, &rightID) == 0 else {
+                            throw NativeError("候補の接続情報を取得できませんでした")
+                        }
+                        if segmentIndex == 0 { firstLeftID = Int16(bitPattern: leftID) }
+                        lastRightID = Int16(bitPattern: rightID)
                         if includeBunsetsu || bunsetsuSearch {
                             tokens.append(BunsetsuToken(
                                 readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
@@ -316,7 +332,8 @@ final class ConversionService {
                                                           correctedReading: correctedReading.isEmpty ? nil : correctedReading,
                                                           isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0,
                                                           presentationKind: presentationKind,
-                                                          classifiedCategories: classifiedCategories))
+                                                          classifiedCategories: classifiedCategories,
+                                                          leftID: firstLeftID, rightID: lastRightID))
                 }
                 candidates = ConversionCandidate.mergedForDisplay(candidates)
                 state.lastReading = reading
@@ -347,7 +364,9 @@ final class ConversionService {
                 reading: String(state.lastReading[range]),
                 output: selected.text,
                 candidateScore: Int32(clamping: selected.score),
-                candidateIndex: Int32(clamping: candidateIndex)
+                candidateIndex: Int32(clamping: candidateIndex),
+                leftID: selected.leftID,
+                rightID: selected.rightID
             ))
             let completedReading = selected.range.location == 0 &&
                 selected.range.length == state.lastReading.utf16.count
@@ -446,13 +465,18 @@ final class ConversionService {
             let status = bytes.withUnsafeBufferPointer { buffer in
                 let records = entries.enumerated().map { index, entry in
                     let range = offsets[index]
-                    return sumire_personal_entry(
+                    return sumire_learning_entry(
                         reading: sumire_string(data: buffer.baseAddress?.advanced(by: range.0), size: range.1),
                         text: sumire_string(data: buffer.baseAddress?.advanced(by: range.2), size: range.3),
-                        context_id: 0, score: entry.score, kind: 2)
+                        // Android GraphBuilder uses noun context 1851 for each
+                        // missing learned-entry endpoint independently.
+                        left_id: UInt16(bitPattern: entry.leftID ?? 1851),
+                        right_id: UInt16(bitPattern: entry.rightID ?? 1851),
+                        score: entry.score)
                 }
                 return records.withUnsafeBufferPointer {
-                    sumire_session_set_learning(session, $0.baseAddress, $0.count, &error, error.count)
+                    sumire_session_set_learning_entries(session, $0.baseAddress, $0.count,
+                                                        &error, error.count)
                 }
             }
             guard status == 0 else { throw NativeError(String(cString: error)) }

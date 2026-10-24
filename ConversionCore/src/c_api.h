@@ -51,6 +51,13 @@ typedef struct {
   uint32_t length_utf16;
 } sumire_segment;
 typedef struct {
+  sumire_string reading;
+  sumire_string text;
+  uint16_t left_id;
+  uint16_t right_id;
+  int32_t score;
+} sumire_learning_entry;
+typedef struct {
   uint64_t generation;
   double conversion_ms;
   size_t lattice_nodes;
@@ -80,6 +87,11 @@ uint16_t sumire_context_id_for_pos(int32_t pos_index);
 int sumire_session_set_learning(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);
+/* Context-aware learned overlay. The legacy personal-entry layout remains
+ * unchanged; Android left/right connection IDs affect graph costs. */
+int sumire_session_set_learning_entries(sumire_session *session,
+                                        const sumire_learning_entry *entries,
+                                        size_t count, char *error, size_t error_size);
 int sumire_session_set_personal(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);
@@ -142,6 +154,11 @@ int sumire_result_reading_correction(const sumire_result *result, size_t index,
                                      sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
+/* Returns the Android connection IDs for a candidate-path segment. */
+int sumire_result_segment_context_ids(const sumire_result *result,
+                                      size_t candidate_index,
+                                      size_t segment_index,
+                                      uint16_t *left_id, uint16_t *right_id);
 /* Interior UTF-16 reading offsets from this candidate's own path. No
  * boundaries for single-word / prediction candidates. Additive ABI v1 API;
  * existing structs are unchanged. Invalid result/candidate returns count 0.

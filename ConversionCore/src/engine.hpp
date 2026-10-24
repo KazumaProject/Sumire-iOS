@@ -10,6 +10,7 @@ enum class CandidatePresentationKind : uint32_t {
 struct Segment {
   std::string text, dictionary;
   uint32_t start, length;
+  uint16_t left_context_id = 0, right_context_id = 0;
 };
 struct Candidate {
   std::string text;
@@ -57,6 +58,9 @@ struct PersonalEntry {
   int32_t score;
   bool exact_only = false; // Templates match the complete input only.
   bool learned = false;
+  // Learning rows retain Android's independent connection IDs. Ordinary
+  // personal entries use context_id for both sides.
+  uint16_t left_context_id = 0, right_context_id = 0;
 };
 class PersonalDictionary {
   friend class Engine;

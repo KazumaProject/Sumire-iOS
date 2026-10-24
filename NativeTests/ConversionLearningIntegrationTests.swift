@@ -42,13 +42,18 @@ final class ConversionLearningIntegrationTests: XCTestCase {
             candidateScore: Int32(clamping: selected.element.score),
             candidateIndex: Int32(clamping: selected.offset)
         ))
+        XCTAssertEqual(entry.leftID, selected.element.leftID ?? 1851)
+        XCTAssertEqual(entry.rightID, selected.element.rightID ?? 1851)
         XCTAssertEqual(entry.count, 1)
         XCTAssertEqual(entry.usageCount, 1)
 
         let next = try convert(service, reading: reading, generation: 2)
-        XCTAssertTrue(next.candidates.contains {
-            $0.text == selected.element.text && $0.dictionaries.contains("learning")
-        })
+        let selectedSummary = "\(selected.element.text):score=\(selected.element.score):index=\(selected.offset):left=\(entry.leftID.map(String.init) ?? "nil"):right=\(entry.rightID.map(String.init) ?? "nil"):stored=\(entry.score)"
+        let returnedSummary = next.candidates.map {
+            "\($0.text):score=\($0.score):sources=\($0.dictionaries.joined(separator: ","))"
+        }.joined(separator: " | ")
+        XCTAssertTrue(next.candidates.contains { $0.text == selected.element.text },
+                      "Selected surface disappeared. Selected {\(selectedSummary)}; returned {\(returnedSummary)}")
     }
 
     func testLearnedReadingPrefixCanParticipateAsSegmentInLongerConversion() throws {
@@ -70,6 +75,34 @@ final class ConversionLearningIntegrationTests: XCTestCase {
             $0.text == "詩ろ" && $0.range == NSRange(location: 0, length: reading.utf16.count) &&
             $0.dictionaries.contains("learning")
         })
+    }
+
+    func testMissingLearnedEndpointIDsFallBackIndependently() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let store = try LearningStore(url: database)
+        try store.upsertLearningEntries([
+            .init(input: "しろ", output: "左側学習", score: 1_000, leftID: nil, rightID: 12,
+                  lastUsedAt: 1, isPhrase: false),
+            .init(input: "しろ", output: "右側学習", score: 1_000, leftID: 11, rightID: nil,
+                  lastUsedAt: 2, isPhrase: false),
+        ])
+
+        let service = ConversionService()
+        service.setLearning(url: database)
+        let response = try convert(service, reading: "しろ", generation: 1)
+        let leftFallback = try XCTUnwrap(response.candidates.first {
+            $0.text == "左側学習" && $0.dictionaries.contains("learning")
+        })
+        let rightFallback = try XCTUnwrap(response.candidates.first {
+            $0.text == "右側学習" && $0.dictionaries.contains("learning")
+        })
+
+        XCTAssertEqual(leftFallback.leftID, Int16(1851))
+        XCTAssertEqual(leftFallback.rightID, Int16(12))
+        XCTAssertEqual(rightFallback.leftID, Int16(11))
+        XCTAssertEqual(rightFallback.rightID, Int16(1851))
     }
 
     func testTopCandidateIsNotStoredWithoutLearnFirstPreference() throws {
