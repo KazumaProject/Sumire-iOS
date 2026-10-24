@@ -23,6 +23,35 @@ final class LearningStoreTests: XCTestCase {
         try restored.clear()
         XCTAssertEqual(try restored.count, 0)
     }
+    func testCandidateLimitKeepsLowestScoredRowsBeforeFrequencyAndRecency() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LearningStore(url: directory.appendingPathComponent("learning.sqlite"))
+        let entries = (0..<25).map { index in
+            LearningSessionEntry(
+                input: "おなじ",
+                output: "候補\(index)",
+                score: Int32(1_000 + index),
+                leftID: nil,
+                rightID: nil,
+                usageCount: 1,
+                lastUsedAt: Int64(index + 1),
+                isPhrase: false
+            )
+        }
+
+        // Candidate0 has the best score but was inserted first (oldest). It
+        // must survive the default fetch limit even when more than 20 rows
+        // share one reading.
+        try store.upsertLearningEntries(entries)
+
+        let candidates = try store.candidates(reading: "おなじ")
+        XCTAssertEqual(candidates.count, 25)
+        XCTAssertEqual(candidates.first?.text, "候補0")
+        XCTAssertEqual(candidates.first?.score, 1_000)
+        XCTAssertEqual(try store.candidates(reading: "おなじ", limit: 5).map(\.text),
+                       ["候補0", "候補1", "候補2", "候補3", "候補4"])
+    }
     func testSnapshotRestoresFrequencyRecencyAndRejectsInvalidReplacement() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -172,9 +172,12 @@ public final class LearningStore {
             try pruneToBudgets()
         }
     }
-    public func candidates(reading: String, limit: Int = 20) throws -> [Entry] {
+    /// Returns the best-scored exact-reading rows before the native overlay's
+    /// 100-entry limit is applied. Frequency and recency must not evict a
+    /// lower-cost learned row before the engine can compare it.
+    public func candidates(reading: String, limit: Int = 100) throws -> [Entry] {
         guard (1...100).contains(limit), !reading.contains("\0") else { throw PersonalDataError("学習検索条件が不正です") }
-        let statement = try prepare("SELECT text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned WHERE reading=? ORDER BY frequency DESC,last_used DESC LIMIT ?")
+        let statement = try prepare("SELECT text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned WHERE reading=? ORDER BY score ASC,frequency DESC,last_used DESC LIMIT ?")
         defer { sqlite3_finalize(statement) }
         try bind(reading, to: statement, at: 1)
         sqlite3_bind_int(statement, 2, Int32(limit))
