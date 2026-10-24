@@ -87,8 +87,9 @@ uint16_t sumire_context_id_for_pos(int32_t pos_index);
 int sumire_session_set_learning(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);
-/* Context-aware learned overlay. The legacy personal-entry layout remains
- * unchanged; Android left/right connection IDs affect graph costs. */
+/* Context-aware learned overlay; at most 10000 entries and 16 MiB UTF-8 text.
+ * The legacy personal-entry layout remains unchanged; Android left/right
+ * connection IDs affect graph costs. */
 int sumire_session_set_learning_entries(sumire_session *session,
                                         const sumire_learning_entry *entries,
                                         size_t count, char *error, size_t error_size);

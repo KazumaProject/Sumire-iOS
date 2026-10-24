@@ -493,6 +493,50 @@ int main(int argc, char **argv) {
                               sizeof error) == 0);
   CHECK(sumire_session_set_learning_entries(session, NULL, 0, error,
                                              sizeof error) == 0);
+  sumire_result_destroy(personal);
+  personal = NULL;
+  sumire_learning_entry suffix_learned = {
+      {"いあ", strlen("いあ")}, {"MIDDLE", 6}, 1, 2, -50000};
+  CHECK(sumire_session_set_learning_entries(session, &suffix_learned, 1,
+                                             error, sizeof error) == 0);
+  req.generation = 9;
+  CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) ==
+        0);
+  int found_suffix_learning = 0;
+  for (size_t i = 0; i < sumire_result_count(personal); ++i) {
+    CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    int contains_surface = 0;
+    for (size_t j = 0; j + 6 <= candidate.text.size; ++j)
+      if (memcmp(candidate.text.data + j, "MIDDLE", 6) == 0)
+        contains_surface = 1;
+    if (!contains_surface) continue;
+    for (size_t j = 0; j < candidate.segment_count; ++j) {
+      CHECK(sumire_result_segment(personal, i, j, &segment) == 0);
+      if (segment.dictionary.size == 8 &&
+          memcmp(segment.dictionary.data, "learning", 8) == 0 &&
+          segment.start_utf16 == 1 && segment.length_utf16 == 2)
+        found_suffix_learning = 1;
+    }
+  }
+  CHECK(found_suffix_learning);
+
+  char bulk_text[101][16];
+  sumire_learning_entry bulk_learning[101];
+  for (size_t i = 0; i < 101; ++i) {
+    int length = snprintf(bulk_text[i], sizeof bulk_text[i], "BULK_%03zu", i);
+    CHECK(length == 8);
+    bulk_learning[i] = (sumire_learning_entry){
+        {"あいあ", strlen("あいあ")}, {bulk_text[i], (size_t)length},
+        1, 2, -60000 + (int32_t)i};
+  }
+  CHECK(sumire_session_set_learning_entries(session, bulk_learning, 101,
+                                             error, sizeof error) == 0);
+  CHECK(sumire_session_set_learning_entries(session, bulk_learning, 10001,
+                                             error, sizeof error) < 0);
+  CHECK(sumire_session_set_learning_entries(session, NULL, 0, error,
+                                             sizeof error) == 0);
+  sumire_result_destroy(personal);
+  personal = NULL;
   size_t retained = sumire_session_cache_bytes(session);
   CHECK(retained > 0 && retained <= 4 * 1024 * 1024);
   sumire_session_purge_cache(session);
@@ -500,7 +544,7 @@ int main(int argc, char **argv) {
   CHECK(sumire_result_candidate(first, 0, &candidate) == 0);
   CHECK(candidate.text.data == saved && candidate.text.size == saved_size);
   sumire_result_destroy(personal);
-  req.generation = 9;
+  req.generation = 10;
   CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
   CHECK(sumire_session_cache_bytes(session) > 0);
   sumire_result_destroy(personal);

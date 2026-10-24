@@ -53,6 +53,44 @@ final class LearningStoreTests: XCTestCase {
         XCTAssertFalse(candidates.contains { $0.text == "候補100" })
         XCTAssertEqual(try store.candidates(reading: "おなじ", limit: 5).map(\.text),
                        ["候補0", "候補1", "候補2", "候補3", "候補4"])
+        XCTAssertEqual(try store.entriesForConversion(reading: "おなじ").count, 125)
+    }
+
+    func testConversionEntriesLoadEveryInputCharacterBucket() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LearningStore(url: directory.appendingPathComponent("learning.sqlite"))
+        try store.upsertLearningEntries([
+            .init(input: "あ", output: "亜", score: 1_000, leftID: nil, rightID: nil, lastUsedAt: 1, isPhrase: false),
+            .init(input: "あい", output: "愛", score: 1_100, leftID: nil, rightID: nil, lastUsedAt: 2, isPhrase: false),
+            .init(input: "あいう", output: "愛憂", score: 1_200, leftID: nil, rightID: nil, lastUsedAt: 3, isPhrase: false),
+            .init(input: "い", output: "伊", score: 1_300, leftID: nil, rightID: nil, lastUsedAt: 4, isPhrase: false),
+            .init(input: "いお", output: "伊緒", score: 1_400, leftID: nil, rightID: nil, lastUsedAt: 5, isPhrase: false),
+            .init(input: "お", output: "尾", score: 1_500, leftID: nil, rightID: nil, lastUsedAt: 6, isPhrase: false),
+            .init(input: "え", output: "絵", score: 1_600, leftID: nil, rightID: nil, lastUsedAt: 7, isPhrase: false),
+        ])
+
+        let entries = try store.entriesForConversion(reading: "あいお")
+        XCTAssertEqual(Set(entries.map(\.reading)), Set(["あ", "あい", "あいう", "い", "いお", "お"]))
+        XCTAssertFalse(entries.contains { $0.reading == "え" })
+    }
+
+    func testConversionBucketCacheRefreshesAfterLocalAndExternalWrites() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let url = directory.appendingPathComponent("learning.sqlite")
+        let reader = try LearningStore(url: url)
+        let writer = try LearningStore(url: url)
+
+        XCTAssertTrue(try reader.entriesForConversion(reading: "あい").isEmpty)
+        try writer.record(reading: "い", text: "伊")
+        XCTAssertEqual(Set(try reader.entriesForConversion(reading: "あい").map(\.text)), ["伊"])
+
+        try reader.record(reading: "あ", text: "亜")
+        XCTAssertEqual(Set(try reader.entriesForConversion(reading: "あい").map(\.text)), ["亜", "伊"])
+
+        try writer.clear()
+        XCTAssertTrue(try reader.entriesForConversion(reading: "あい").isEmpty)
     }
     func testSnapshotRestoresFrequencyRecencyAndRejectsInvalidReplacement() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

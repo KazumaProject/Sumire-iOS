@@ -4,6 +4,9 @@ import SQLite3
 /// Synchronous SQLite storage; call from the conversion queue, not the UI thread.
 /// No input is stored unless the caller explicitly records a committed candidate.
 public final class LearningStore {
+    public static let maximumEntryCount = 10_000
+    public static let maximumTextBytes = 16 * 1024 * 1024
+
     public struct Entry: Codable, Equatable {
         public let reading: String
         public let text: String
@@ -72,6 +75,8 @@ public final class LearningStore {
     }
     private var db: OpaquePointer?
     private let transient = unsafeBitCast(-1, to: sqlite3_destructor_type.self)
+    private var conversionBuckets: [UInt32: [Entry]] = [:]
+    private var conversionDataVersion: Int64?
     public init(url: URL) throws {
         try FileManager.default.createDirectory(at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         guard sqlite3_open_v2(url.path, &db, SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX, nil) == SQLITE_OK else {
@@ -120,6 +125,7 @@ public final class LearningStore {
             try stepDone(statement)
             try pruneToBudgets()
         }
+        invalidateConversionBuckets()
     }
 
     /// Stores a completed Android-compatible fragment/phrase batch atomically.
@@ -142,7 +148,7 @@ public final class LearningStore {
             try PersonalWord(word: entry.output, reading: entry.input).validate()
             guard entry.usageCount > 0 else { throw PersonalDataError("学習データの使用回数が不正です") }
             bytes += entry.input.utf8.count + entry.output.utf8.count
-            guard bytes <= 16_777_216 else { throw PersonalDataError("学習データが大きすぎます") }
+            guard bytes <= Self.maximumTextBytes else { throw PersonalDataError("学習データが大きすぎます") }
             validatedEntries.append(entry)
         }
         guard !validatedEntries.isEmpty else { return }
@@ -171,6 +177,7 @@ public final class LearningStore {
             }
             try pruneToBudgets()
         }
+        invalidateConversionBuckets()
     }
     /// Returns the best-scored reading-prefix rows before the native overlay's
     /// 100-entry limit is applied. Frequency and recency must not evict a
@@ -220,6 +227,80 @@ public final class LearningStore {
         }
         return rows.prefix(limit).map(\.entry)
     }
+    /// Loads the Android conversion buckets for the distinct first scalars in
+    /// the current reading. The native lattice matches each row against every
+    /// remaining-input position, as Android's GraphBuilder does.
+    public func entriesForConversion(reading: String) throws -> [Entry] {
+        guard !reading.contains("\0") else { throw PersonalDataError("学習検索条件が不正です") }
+        guard !reading.isEmpty else { return [] }
+
+        let dataVersion = try scalar("PRAGMA data_version")
+        if conversionDataVersion != dataVersion {
+            conversionBuckets.removeAll(keepingCapacity: false)
+            conversionDataVersion = dataVersion
+        }
+        let firstScalars = Set(reading.unicodeScalars.map(\.value)).sorted()
+        let activeScalars = Set(firstScalars)
+        conversionBuckets = conversionBuckets.filter { activeScalars.contains($0.key) }
+        let missingScalars = firstScalars.filter { conversionBuckets[$0] == nil }
+
+        if !missingScalars.isEmpty {
+            let select = "SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase,last_used FROM learned WHERE reading>=?"
+            let bounded = try prepare(select + " AND reading<? ORDER BY length(reading) DESC,reading ASC,text ASC")
+            defer { sqlite3_finalize(bounded) }
+            let unbounded = try prepare(select + " ORDER BY length(reading) DESC,reading ASC,text ASC")
+            defer { sqlite3_finalize(unbounded) }
+
+            func string(_ column: Int32, from statement: OpaquePointer) throws -> String {
+                guard let bytes = sqlite3_column_text(statement, column),
+                      let value = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8) else {
+                    throw PersonalDataError("学習データの文字コードが不正です")
+                }
+                return value
+            }
+
+            for scalarValue in missingScalars {
+                guard let scalar = Unicode.Scalar(scalarValue) else { throw PersonalDataError("学習検索条件が不正です") }
+                let prefix = String(scalar)
+                let upperBound = Self.nextUnicodeScalar(after: scalar).map(String.init)
+                let statement = upperBound == nil ? unbounded : bounded
+                guard sqlite3_reset(statement) == SQLITE_OK,
+                      sqlite3_clear_bindings(statement) == SQLITE_OK else { throw failure() }
+                try bind(prefix, to: statement, at: 1)
+                if let upperBound { try bind(upperBound, to: statement, at: 2) }
+
+                var bucket: [Entry] = []
+                while true {
+                    let status = sqlite3_step(statement)
+                    if status == SQLITE_DONE { break }
+                    guard status == SQLITE_ROW else { throw failure() }
+                    let storedReading = try string(0, from: statement)
+                    let text = try string(1, from: statement)
+                    try PersonalWord(word: text, reading: storedReading).validate()
+                    bucket.append(try decodeEntry(reading: storedReading, text: text, statement: statement,
+                                                  countColumn: 2, metadataColumn: 3))
+                    guard bucket.count <= Self.maximumEntryCount else {
+                        throw PersonalDataError("学習データが多すぎます")
+                    }
+                }
+                conversionBuckets[scalarValue] = bucket
+            }
+        }
+
+        let entries = firstScalars.flatMap { conversionBuckets[$0] ?? [] }
+        let totalBytes = entries.reduce(0) { $0 + $1.reading.utf8.count + $1.text.utf8.count }
+        guard entries.count <= Self.maximumEntryCount, totalBytes <= Self.maximumTextBytes else {
+            throw PersonalDataError("学習データが大きすぎます")
+        }
+        return entries
+    }
+
+    private static func nextUnicodeScalar(after scalar: Unicode.Scalar) -> Unicode.Scalar? {
+        var value = scalar.value + 1
+        if value == 0xD800 { value = 0xE000 }
+        return Unicode.Scalar(value)
+    }
+
     /// Entries are oldest first, retaining recency for equal-frequency candidates.
     public func snapshot() throws -> [Entry] {
         let statement = try prepare("SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned ORDER BY last_used ASC,rowid ASC")
@@ -231,7 +312,7 @@ public final class LearningStore {
             if status == SQLITE_DONE { break }
             guard status == SQLITE_ROW else { throw failure() }
             totalBytes += Int(sqlite3_column_bytes(statement, 0)) + Int(sqlite3_column_bytes(statement, 1))
-            guard totalBytes <= 16777216 else { throw PersonalDataError("学習データが大きすぎます") }
+            guard totalBytes <= Self.maximumTextBytes else { throw PersonalDataError("学習データが大きすぎます") }
             func string(_ column: Int32) throws -> String {
                 guard let bytes = sqlite3_column_text(statement, column),
                       let value = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8) else {
@@ -240,13 +321,13 @@ public final class LearningStore {
                 return value
             }
             entries.append(try decodeEntry(reading: string(0), text: string(1), statement: statement, countColumn: 2, metadataColumn: 3))
-            guard entries.count <= 10000 else { throw PersonalDataError("学習データが多すぎます") }
+            guard entries.count <= Self.maximumEntryCount else { throw PersonalDataError("学習データが多すぎます") }
         }
         try Self.validateSnapshot(entries)
         return entries
     }
     public static func validateSnapshot(_ entries: [Entry]) throws {
-        guard entries.count <= 10000 else { throw PersonalDataError("学習データが多すぎます") }
+        guard entries.count <= maximumEntryCount else { throw PersonalDataError("学習データが多すぎます") }
         var keys = Set<Data>(), bytes = 0
         for entry in entries {
             try PersonalWord(word: entry.text, reading: entry.reading).validate()
@@ -256,7 +337,7 @@ public final class LearningStore {
                 throw PersonalDataError("学習データの頻度または重複が不正です")
             }
             bytes += entry.reading.utf8.count + entry.text.utf8.count
-            guard bytes <= 16777216 else { throw PersonalDataError("学習データが大きすぎます") }
+            guard bytes <= maximumTextBytes else { throw PersonalDataError("学習データが大きすぎます") }
         }
     }
     /// Validation completes before the SQLite transaction replaces any rows.
@@ -283,19 +364,26 @@ public final class LearningStore {
             }
             try execute("UPDATE learning_state SET sequence=\(entries.count) WHERE id=1")
         }
+        invalidateConversionBuckets()
     }
     public func remove(reading: String, text: String) throws {
         let statement = try prepare("DELETE FROM learned WHERE reading=? AND text=?")
         defer { sqlite3_finalize(statement) }
         try bind(reading, to: statement, at: 1); try bind(text, to: statement, at: 2)
         try stepDone(statement)
+        invalidateConversionBuckets()
     }
     public func clear() throws {
         try transaction { try execute("DELETE FROM learned"); try execute("UPDATE learning_state SET sequence=0 WHERE id=1") }
+        invalidateConversionBuckets()
         // Erase obsolete journal pages as well as logical rows when no other reader holds them.
         try execute("PRAGMA wal_checkpoint(TRUNCATE)")
     }
     public var count: Int { get throws { Int(try scalar("SELECT count(*) FROM learned")) } }
+    private func invalidateConversionBuckets() {
+        conversionBuckets.removeAll(keepingCapacity: false)
+        conversionDataVersion = nil
+    }
     private func failure() -> PersonalDataError {
         PersonalDataError("学習データ: " + (db.map { String(cString: sqlite3_errmsg($0)) } ?? "データベースを開けません"))
     }
@@ -361,7 +449,7 @@ public final class LearningStore {
         catch { try? execute("ROLLBACK"); throw error }
     }
     private func pruneToBudgets() throws {
-        try execute("DELETE FROM learned WHERE rowid IN (SELECT rid FROM (SELECT rowid AS rid,row_number() OVER(ORDER BY last_used DESC) AS position,sum(byte_count) OVER(ORDER BY last_used DESC) AS bytes FROM learned) WHERE position>10000 OR bytes>16777216)")
+        try execute("DELETE FROM learned WHERE rowid IN (SELECT rid FROM (SELECT rowid AS rid,row_number() OVER(ORDER BY last_used DESC) AS position,sum(byte_count) OVER(ORDER BY last_used DESC) AS bytes FROM learned) WHERE position>\(Self.maximumEntryCount) OR bytes>\(Self.maximumTextBytes))")
     }
     private static func binaryKey(reading: String, text: String) -> Data {
         var key = Data()

@@ -122,7 +122,7 @@ int sumire_session_set_learning_entries(sumire_session *session,
                                         size_t count, char *error, size_t size) {
   return guarded(error, size, [&] {
     check(session && (entries || count == 0), "null learning dictionary argument");
-    check(count <= 100, "too many learning entries");
+    check(count <= 10000, "too many learning entries");
     std::vector<sumire::PersonalEntry> words;
     size_t total = 0;
     for (size_t i = 0; i < count; ++i) {

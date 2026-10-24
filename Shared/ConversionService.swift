@@ -203,6 +203,7 @@ final class ConversionService {
         queue.async {
             state.learningSession.cancel()
             state.learning = nil; state.learningURL = nil; state.learningFailure = nil
+            state.activeLearningEntries = nil
             do {
                 try localReset?.apply()
                 state.learningURL = url
@@ -381,6 +382,7 @@ final class ConversionService {
                     entries,
                     allowJapaneseWithSymbolsAndNumbers: learnMixedSymbolsAndNumbers
                 )
+                state.activeLearningEntries = nil
                 DispatchQueue.main.async { onNotice("学習しました") }
             }
             catch { let message = error.localizedDescription; DispatchQueue.main.async { onNotice(message) } }
@@ -437,6 +439,7 @@ final class ConversionService {
         var learning: LearningStore?
         var learningSession = ConversionLearningSession()
         var learningFailure: String?
+        var activeLearningEntries: [LearningStore.Entry]?
         var standaloneAvailable = false
         var lastReading = ""
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
@@ -451,10 +454,13 @@ final class ConversionService {
             if includeCandidates, let url = learningURL, learningFailure == nil {
                 do {
                     if learning == nil { learning = try LearningStore(url: url) }
-                    entries = try learning!.candidates(reading: reading)
+                    entries = try learning!.entriesForConversion(reading: reading)
                 } catch { learningFailure = error.localizedDescription }
             }
             if !includeCandidates { learningSession.cancel() }
+            guard activeLearningEntries != entries else {
+                return includeCandidates ? learningFailure : nil
+            }
             var bytes: [CChar] = []
             var offsets: [(Int, Int, Int, Int)] = []
             for entry in entries {
@@ -483,6 +489,7 @@ final class ConversionService {
                 }
             }
             guard status == 0 else { throw NativeError(String(cString: error)) }
+            activeLearningEntries = entries
             return includeCandidates ? learningFailure : nil
         }
         private var englishLoaded = false
@@ -544,6 +551,7 @@ final class ConversionService {
             learningSession.cancel()
             sumire_session_destroy(session)
             session = nil
+            activeLearningEntries = nil
             lastReading = ""
             lastCandidates.removeAll(keepingCapacity: false)
             standaloneAvailable = false
