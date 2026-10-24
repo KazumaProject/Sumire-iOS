@@ -107,7 +107,7 @@ int sumire_session_set_learning(sumire_session *session,
       check(total <= 16 * 1024 * 1024, "personal text budget exceeded");
       words.push_back({std::string(e.reading.data, e.reading.size),
                        std::string(e.text.data, e.text.size),
-                       uint16_t(e.context_id), e.score, true, true});
+                       uint16_t(e.context_id), e.score, false, true});
     }
     auto replacement = session->engine->personal_dictionary(std::move(words));
     if (!session->learned || !session->learned->equivalent(*replacement))

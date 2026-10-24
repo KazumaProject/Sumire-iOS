@@ -190,6 +190,7 @@ final class LearningStoreTests: XCTestCase {
             .init(reading: decomposed, text: "我", count: 1)
         ])
         XCTAssertEqual(try store.count, 2)
+        XCTAssertEqual(try store.candidates(reading: composed + "ん").map(\.reading), [composed])
     }
     func testRestoreRollsBackWhenDatabaseRejectsInsert() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)

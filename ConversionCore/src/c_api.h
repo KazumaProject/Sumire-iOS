@@ -72,9 +72,11 @@ uint16_t sumire_context_id_for_pos(int32_t pos_index);
  * results. Maximum 100000 entries, 16 MiB UTF-8 text total; no silent
  * truncation.
  */
-/* Independent exact-input learned overlay; at most 100 entries, kind=2,
- * context_id=0. Copies input, atomically replaces only learned entries and
- * invalidates latest commit IDs on success; errors preserve previous state. */
+/* Independent learned overlay; at most 100 entries, kind=2, context_id=0.
+ * Japanese conversion can use learned reading prefixes as graph segments;
+ * English prediction keeps learned rows exact-input-only. Copies input,
+ * atomically replaces only learned entries and invalidates latest commit IDs
+ * on success; errors preserve previous state. */
 int sumire_session_set_learning(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);

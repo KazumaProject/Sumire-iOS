@@ -172,26 +172,53 @@ public final class LearningStore {
             try pruneToBudgets()
         }
     }
-    /// Returns the best-scored exact-reading rows before the native overlay's
+    /// Returns the best-scored reading-prefix rows before the native overlay's
     /// 100-entry limit is applied. Frequency and recency must not evict a
     /// lower-cost learned row before the engine can compare it.
     public func candidates(reading: String, limit: Int = 100) throws -> [Entry] {
         guard (1...100).contains(limit), !reading.contains("\0") else { throw PersonalDataError("学習検索条件が不正です") }
-        let statement = try prepare("SELECT text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned WHERE reading=? ORDER BY score ASC,frequency DESC,last_used DESC LIMIT ?")
+        guard !reading.isEmpty else { return [] }
+        let statement = try prepare("SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase,last_used FROM learned WHERE reading=? ORDER BY score ASC,frequency DESC,last_used DESC")
         defer { sqlite3_finalize(statement) }
-        try bind(reading, to: statement, at: 1)
-        sqlite3_bind_int(statement, 2, Int32(limit))
-        var entries: [Entry] = []
-        while true {
-            let status = sqlite3_step(statement)
-            if status == SQLITE_DONE { return entries }
-            guard status == SQLITE_ROW, let bytes = sqlite3_column_text(statement, 0) else { throw failure() }
-            guard let text = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, 0))), encoding: .utf8) else {
+        var prefixes = String.UnicodeScalarView()
+        var rows: [(entry: Entry, sequence: Int64)] = []
+        func string(_ column: Int32) throws -> String {
+            guard let bytes = sqlite3_column_text(statement, column),
+                  let value = String(bytes: UnsafeBufferPointer(start: bytes, count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8) else {
                 throw PersonalDataError("学習データの文字コードが不正です")
             }
-            try PersonalWord(word: text, reading: reading).validate()
-            entries.append(try decodeEntry(reading: reading, text: text, statement: statement, countColumn: 1, metadataColumn: 2))
+            return value
         }
+        for scalar in reading.unicodeScalars {
+            prefixes.append(scalar)
+            let prefix = String(prefixes)
+            guard sqlite3_reset(statement) == SQLITE_OK,
+                  sqlite3_clear_bindings(statement) == SQLITE_OK else { throw failure() }
+            try bind(prefix, to: statement, at: 1)
+            while true {
+                let status = sqlite3_step(statement)
+                if status == SQLITE_DONE { break }
+                guard status == SQLITE_ROW else { throw failure() }
+                let storedReading = try string(0)
+                let text = try string(1)
+                try PersonalWord(word: text, reading: storedReading).validate()
+                let entry = try decodeEntry(reading: storedReading, text: text, statement: statement,
+                                            countColumn: 2, metadataColumn: 3)
+                rows.append((entry, sqlite3_column_int64(statement, 9)))
+            }
+        }
+        rows.sort { lhs, rhs in
+            if lhs.entry.score != rhs.entry.score { return lhs.entry.score < rhs.entry.score }
+            let lhsLength = lhs.entry.reading.utf16.count, rhsLength = rhs.entry.reading.utf16.count
+            if lhsLength != rhsLength { return lhsLength > rhsLength }
+            if lhs.entry.count != rhs.entry.count { return lhs.entry.count > rhs.entry.count }
+            if lhs.sequence != rhs.sequence { return lhs.sequence > rhs.sequence }
+            if !lhs.entry.reading.utf8.elementsEqual(rhs.entry.reading.utf8) {
+                return lhs.entry.reading.utf8.lexicographicallyPrecedes(rhs.entry.reading.utf8)
+            }
+            return lhs.entry.text.utf8.lexicographicallyPrecedes(rhs.entry.text.utf8)
+        }
+        return rows.prefix(limit).map(\.entry)
     }
     /// Entries are oldest first, retaining recency for equal-frequency candidates.
     public func snapshot() throws -> [Entry] {

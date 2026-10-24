@@ -224,7 +224,7 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
-                let warnings = [try state.prepareLearning(reading: reading),
+                let warnings = [try state.prepareLearning(reading: reading, includeCandidates: !english),
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
                 var error = [CChar](repeating: 0, count: 1024)
@@ -321,6 +321,7 @@ final class ConversionService {
                 candidates = ConversionCandidate.mergedForDisplay(candidates)
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+                state.lastConversionWasEnglish = english
                 response = .success(ConversionResponse(generation: metrics.generation, candidates: candidates,
                                                        elapsedMilliseconds: metrics.conversion_ms, complete: metrics.complete != 0, warning: warning))
             } catch { response = .failure(error) }
@@ -334,7 +335,7 @@ final class ConversionService {
         queue.async {
             var error = [CChar](repeating: 0, count: 1024)
             guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0 else { return }
-            guard learningAllowed, !state.learningPaused, state.learningURL != nil,
+            guard learningAllowed, !state.lastConversionWasEnglish, !state.learningPaused, state.learningURL != nil,
                   let store = state.learning,
                   let selected = state.lastCandidates[candidate],
                   let range = Range(selected.range, in: state.lastReading) else {
@@ -410,6 +411,7 @@ final class ConversionService {
         var personal = PersonalLexicon()
         var learningURL: URL?
         var learningPaused = false
+        var lastConversionWasEnglish = false
         var learning: LearningStore?
         var learningSession = ConversionLearningSession()
         var learningFailure: String?
@@ -422,14 +424,15 @@ final class ConversionService {
         private var rejectedDirectories = Set<URL>()
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
-        func prepareLearning(reading: String) throws -> String? {
+        func prepareLearning(reading: String, includeCandidates: Bool) throws -> String? {
             var entries: [LearningStore.Entry] = []
-            if let url = learningURL, learningFailure == nil {
+            if includeCandidates, let url = learningURL, learningFailure == nil {
                 do {
                     if learning == nil { learning = try LearningStore(url: url) }
                     entries = try learning!.candidates(reading: reading)
                 } catch { learningFailure = error.localizedDescription }
             }
+            if !includeCandidates { learningSession.cancel() }
             var bytes: [CChar] = []
             var offsets: [(Int, Int, Int, Int)] = []
             for entry in entries {
@@ -453,7 +456,7 @@ final class ConversionService {
                 }
             }
             guard status == 0 else { throw NativeError(String(cString: error)) }
-            return learningFailure
+            return includeCandidates ? learningFailure : nil
         }
         private var englishLoaded = false
         func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool) throws {

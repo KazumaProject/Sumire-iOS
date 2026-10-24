@@ -51,6 +51,27 @@ final class ConversionLearningIntegrationTests: XCTestCase {
         })
     }
 
+    func testLearnedReadingPrefixCanParticipateAsSegmentInLongerConversion() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let store = try LearningStore(url: database)
+        try store.upsertLearningEntries([
+            .init(input: "し", output: "詩", score: 1_000, leftID: nil, rightID: nil,
+                  lastUsedAt: 1, isPhrase: false)
+        ])
+
+        let service = ConversionService()
+        service.setLearning(url: database)
+        let reading = "しろ"
+        let response = try convert(service, reading: reading, generation: 1)
+
+        XCTAssertTrue(response.candidates.contains {
+            $0.text == "詩ろ" && $0.range == NSRange(location: 0, length: reading.utf16.count) &&
+            $0.dictionaries.contains("learning")
+        })
+    }
+
     func testTopCandidateIsNotStoredWithoutLearnFirstPreference() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }
