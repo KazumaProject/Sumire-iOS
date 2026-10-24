@@ -75,6 +75,45 @@ final class LearningStoreTests: XCTestCase {
         XCTAssertFalse(entries.contains { $0.reading == "え" })
     }
 
+    func testPredictiveCandidatesMatchAndroidPrefixLimitAndOrdering() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = try LearningStore(url: directory.appendingPathComponent("learning.sqlite"))
+        try store.upsertLearningEntries([
+            .init(input: "あい", output: "完全一致", score: 3_000, leftID: 1, rightID: 2,
+                  lastUsedAt: 10, isPhrase: true),
+            .init(input: "あいう", output: "読みが長い", score: 1_000, leftID: 3, rightID: 4,
+                  lastUsedAt: 11, isPhrase: true),
+            .init(input: "あいえ", output: "同点で新しい", score: 1_000, leftID: 5, rightID: 6,
+                  lastUsedAt: 20, isPhrase: true),
+            .init(input: "あいお", output: "同点で古い", score: 1_000, leftID: 7, rightID: 8,
+                  lastUsedAt: 15, isPhrase: true),
+            .init(input: "あか", output: "別の読み", score: 0, leftID: 9, rightID: 10,
+                  lastUsedAt: 30, isPhrase: true),
+        ])
+
+        let candidates = try store.predictiveCandidates(readingPrefix: "あい", limit: 3)
+        XCTAssertEqual(candidates.map(\.text), ["完全一致", "同点で新しい", "同点で古い"])
+        XCTAssertEqual(candidates.map(\.reading), ["あい", "あいえ", "あいお"])
+        XCTAssertEqual(candidates.map(\.score), [3_000, 1_000, 1_000])
+        XCTAssertEqual(try store.predictiveCandidates(readingPrefix: "あい", limit: 8).count, 4)
+        XCTAssertTrue(try store.predictiveCandidates(readingPrefix: "", limit: 4).isEmpty)
+        XCTAssertThrowsError(try store.predictiveCandidates(readingPrefix: "あ", limit: 9))
+    }
+
+    func testLearnedPredictionSettingsUseAndroidDefaultsAndUTF16Threshold() {
+        let defaults = LearnedPredictionSettings()
+        XCTAssertFalse(defaults.enabled)
+        XCTAssertEqual(defaults.minimumInputLength, 4)
+        XCTAssertEqual(defaults.candidateLimit, 4)
+        XCTAssertFalse(defaults.allows(reading: "あいう"))
+
+        let enabled = LearnedPredictionSettings(enabled: true, minimumInputLength: 2, candidateLimit: 3)
+        XCTAssertFalse(enabled.allows(reading: "あ"))
+        XCTAssertTrue(enabled.allows(reading: "あい"))
+        XCTAssertFalse(LearnedPredictionSettings(enabled: true, minimumInputLength: 99, candidateLimit: 0).allows(reading: "あいうえおお"))
+    }
+
     func testConversionBucketCacheRefreshesAfterLocalAndExternalWrites() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

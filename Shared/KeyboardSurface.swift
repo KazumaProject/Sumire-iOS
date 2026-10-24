@@ -314,6 +314,7 @@ final class KeyboardSurface: UIInputView {
         stack.accessibilityElementsHidden = false
     }
     private var learningURL: URL?
+    private var learnedPredictionSettings = LearnedPredictionSettings()
     private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
     var learnMixedSymbolsAndNumbers = true
@@ -325,6 +326,12 @@ final class KeyboardSurface: UIInputView {
         learningURL = url
         bunsetsuLearningReading = nil
         converter.setLearning(url: url, localReset: localReset)
+        if hasComposition { composition.optionsChanged(); refreshConversion() }
+    }
+    func configureLearnedPrediction(settings: LearnedPredictionSettings) {
+        guard learnedPredictionSettings != settings else { return }
+        learnedPredictionSettings = settings
+        converter.setLearnedPredictionSettings(settings)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
     func toggleLearningPauseForSession() -> Bool {

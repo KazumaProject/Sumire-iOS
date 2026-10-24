@@ -16,6 +16,9 @@ struct HomeView: View {
     @AppStorage("learningEnabled", store: KeyboardSettings.appDefaults) private var learningEnabled = true
     @AppStorage("learnFirstCandidate", store: KeyboardSettings.appDefaults) private var learnFirstCandidate = false
     @AppStorage("learnMixedSymbolsAndNumbers", store: KeyboardSettings.appDefaults) private var learnMixedSymbolsAndNumbers = true
+    @AppStorage("learnedPredictionEnabled", store: KeyboardSettings.appDefaults) private var learnedPredictionEnabled = false
+    @AppStorage("learnedPredictionMinimumInputLength", store: KeyboardSettings.appDefaults) private var learnedPredictionMinimumInputLength = 4
+    @AppStorage("learnedPredictionCandidateLimit", store: KeyboardSettings.appDefaults) private var learnedPredictionCandidateLimit = 4
     @AppStorage(DeletionBoundary.settingsKey, store: KeyboardSettings.appDefaults) private var deleteBoundarySymbols = DeletionBoundary.defaultSymbols
     @AppStorage("theme.hue", store: KeyboardSettings.appDefaults) private var hue = 0.73
     @AppStorage("theme.mode", store: KeyboardSettings.appDefaults) private var colorMode = KeyboardColorMode.system.rawValue
@@ -61,7 +64,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, learnedPredictionEnabled: learnedPredictionEnabled, learnedPredictionMinimumInputLength: learnedPredictionMinimumInputLength, learnedPredictionCandidateLimit: learnedPredictionCandidateLimit, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -135,6 +138,18 @@ struct HomeView: View {
                     Toggle("数字・記号を含む語も学習", isOn: $learnMixedSymbolsAndNumbers).disabled(!learningEnabled)
                 } footer: { Text("ONでは「令和8年」のような候補も学習します。数字・記号だけの候補は学習しません。学習データは端末内に保存し、入力文字をネットワークへ送信しません。") }
                 Section {
+                    Toggle("学習辞書の予測候補", isOn: $learnedPredictionEnabled)
+                        .disabled(!learningEnabled)
+                    Stepper("表示開始: \(learnedPredictionMinimumInputLength)文字",
+                            value: $learnedPredictionMinimumInputLength, in: 1...8)
+                        .disabled(!learningEnabled || !learnedPredictionEnabled)
+                    Stepper("最大候補数: \(learnedPredictionCandidateLimit)件",
+                            value: $learnedPredictionCandidateLimit, in: 1...8)
+                        .disabled(!learningEnabled || !learnedPredictionEnabled)
+                } footer: {
+                    Text("入力の先頭に一致する学習辞書の候補を表示します。初期状態はOFFです。")
+                }
+                Section {
                     Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
                     if let learningNotice { Text(learningNotice).font(.footnote) }
                 }
@@ -207,6 +222,9 @@ struct InputHarness: UIViewRepresentable {
     let learningEnabled: Bool
     let learnFirstCandidate: Bool
     let learnMixedSymbolsAndNumbers: Bool
+    let learnedPredictionEnabled: Bool
+    let learnedPredictionMinimumInputLength: Int
+    let learnedPredictionCandidateLimit: Int
     let appearanceRevision: Int
     let hue: Double
     let saturation: Double
@@ -324,6 +342,10 @@ struct InputHarness: UIViewRepresentable {
         surface.reloadAppearance()
         surface.personalLexicon = personalLexicon
         surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: true) : nil)
+        surface.configureLearnedPrediction(settings: LearnedPredictionSettings(
+            enabled: learnedPredictionEnabled,
+            minimumInputLength: learnedPredictionMinimumInputLength,
+            candidateLimit: learnedPredictionCandidateLimit))
         surface.learnFirstCandidate = learnFirstCandidate
         surface.learnMixedSymbolsAndNumbers = learnMixedSymbolsAndNumbers
         let rows = min(3, max(1, candidateRowCount))

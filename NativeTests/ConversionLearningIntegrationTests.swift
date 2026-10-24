@@ -118,6 +118,48 @@ final class ConversionLearningIntegrationTests: XCTestCase {
         })
     }
 
+    func testLearnedDictionaryPredictionIsOptInAndCommitsTheStoredReading() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let store = try LearningStore(url: database)
+        try store.upsertLearningEntries([
+            .init(input: "あいう", output: "愛優", score: 1_000, leftID: 11, rightID: 12,
+                  usageCount: 1, lastUsedAt: 10, isPhrase: false),
+            .init(input: "あいえ", output: "愛絵", score: 2_000, leftID: 21, rightID: 22,
+                  usageCount: 1, lastUsedAt: 20, isPhrase: false),
+        ])
+
+        let service = ConversionService()
+        service.setLearning(url: database)
+
+        let disabled = try convert(service, reading: "あい", generation: 1)
+        XCTAssertFalse(disabled.candidates.contains { $0.learnedPredictionReading != nil })
+
+        service.setLearnedPredictionSettings(.init(enabled: true, minimumInputLength: 2, candidateLimit: 2))
+        let enabled = try convert(service, reading: "あい", generation: 2)
+        let selected = try XCTUnwrap(enabled.candidates.first { $0.learnedPredictionReading == "あいえ" })
+        XCTAssertEqual(selected.text, "愛絵")
+        XCTAssertEqual(selected.range, NSRange(location: 0, length: 2))
+        XCTAssertEqual(selected.dictionaries, ["learning"])
+        let selectedIndex = try XCTUnwrap(enabled.candidates.firstIndex { $0.id == selected.id })
+        XCTAssertGreaterThan(selectedIndex, 0, "The non-first suggestion exercises the normal learning eligibility policy")
+
+        let committed = expectation(description: "Predicted learned entry committed")
+        service.commit(generation: enabled.generation, candidate: selected.id, candidateIndex: selectedIndex,
+                       learningAllowed: true, learnFirstCandidate: false, learnMixedSymbolsAndNumbers: true) { message in
+            XCTAssertEqual(message, "学習しました")
+            committed.fulfill()
+        }
+        wait(for: [committed], timeout: 10)
+
+        let entry = try XCTUnwrap(LearningStore(url: database).snapshot().first {
+            $0.reading == "あいえ" && $0.text == "愛絵"
+        })
+        XCTAssertEqual(entry.usageCount, 2)
+        XCTAssertEqual(entry.score, 0)
+    }
+
     func testMissingLearnedEndpointIDsFallBackIndependently() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

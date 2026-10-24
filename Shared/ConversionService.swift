@@ -16,6 +16,9 @@ struct ConversionCandidate {
     let textMacroID: String?
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
+    /// Full stored reading for an Android-style learned-dictionary completion.
+    /// `range` still covers only the currently composed prefix.
+    let learnedPredictionReading: String?
     let leftID: Int16?
     let rightID: Int16?
     var displayAnnotation: String? {
@@ -90,6 +93,7 @@ struct ConversionCandidate {
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
                 presentationKind: first.presentationKind, classifiedCategories: categories,
+                learnedPredictionReading: first.learnedPredictionReading,
                 leftID: first.leftID, rightID: first.rightID)
         }
         return merged
@@ -103,6 +107,7 @@ struct ConversionCandidate {
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
+         learnedPredictionReading: String? = nil,
          leftID: Int16? = nil, rightID: Int16? = nil) {
         self.id = id
         self.text = text
@@ -116,6 +121,7 @@ struct ConversionCandidate {
         self.textMacroID = textMacroID
         self.presentationKind = presentationKind
         self.classifiedCategories = classifiedCategories
+        self.learnedPredictionReading = learnedPredictionReading
         self.leftID = leftID
         self.rightID = rightID
     }
@@ -141,6 +147,7 @@ final class ConversionService {
     private var categoryMask: UInt32
     private var personal = PersonalLexicon()
     private var learningURL: URL?
+    private var learnedPredictionSettings = LearnedPredictionSettings()
 
     init(categoryMask: UInt32 = 0) {
         self.directoryOverride = nil
@@ -204,10 +211,25 @@ final class ConversionService {
             state.learningSession.cancel()
             state.learning = nil; state.learningURL = nil; state.learningFailure = nil
             state.activeLearningEntries = nil
+            state.activeLearnedPredictionEntries = []
+            state.lastGeneration = nil
+            state.lastCandidates.removeAll(keepingCapacity: false)
             do {
                 try localReset?.apply()
                 state.learningURL = url
             } catch { state.learningFailure = "学習データの削除を再試行します: " + error.localizedDescription }
+        }
+    }
+    func setLearnedPredictionSettings(_ settings: LearnedPredictionSettings) {
+        guard learnedPredictionSettings != settings else { return }
+        learnedPredictionSettings = settings
+        _ = pending.advance()
+        let state = state
+        queue.async {
+            state.learnedPredictionSettings = settings
+            state.activeLearnedPredictionEntries = []
+            state.lastGeneration = nil
+            state.lastCandidates.removeAll(keepingCapacity: false)
         }
     }
     func setLearningPaused(_ paused: Bool) {
@@ -231,7 +253,8 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
-                let warnings = [try state.prepareLearning(reading: reading, includeCandidates: !english),
+                let warnings = [try state.prepareLearning(reading: reading, includeCandidates: !english,
+                                                          includePredictions: !english && !bunsetsuSearch),
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
                 var error = [CChar](repeating: 0, count: 1024)
@@ -336,9 +359,26 @@ final class ConversionService {
                                                           classifiedCategories: classifiedCategories,
                                                           leftID: firstLeftID, rightID: lastRightID))
                 }
-                candidates = ConversionCandidate.mergedForDisplay(candidates)
+                let predictionCandidates = state.activeLearnedPredictionEntries
+                    .enumerated()
+                    .sorted { lhs, rhs in
+                        if lhs.element.score != rhs.element.score { return lhs.element.score < rhs.element.score }
+                        return lhs.offset < rhs.offset
+                    }
+                    .enumerated()
+                    .map { index, item in
+                        let entry = item.element
+                        return ConversionCandidate(
+                            id: UInt64.max - UInt64(index), text: entry.text,
+                            score: Int64(entry.score),
+                            range: NSRange(location: 0, length: reading.utf16.count),
+                            dictionaries: ["learning"], learnedPredictionReading: entry.reading,
+                            leftID: entry.leftID, rightID: entry.rightID)
+                    }
+                candidates = ConversionCandidate.mergedForDisplay(predictionCandidates + candidates)
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
+                state.lastGeneration = metrics.generation
                 state.lastConversionWasEnglish = english
                 response = .success(ConversionResponse(generation: metrics.generation, candidates: candidates,
                                                        elapsedMilliseconds: metrics.conversion_ms, complete: metrics.complete != 0, warning: warning))
@@ -353,18 +393,28 @@ final class ConversionService {
                 onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {
+            guard state.lastGeneration == generation,
+                  let selected = state.lastCandidates[candidate] else { return }
             var error = [CChar](repeating: 0, count: 1024)
-            guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0 else { return }
+            if selected.learnedPredictionReading != nil {
+                // Synthetic prediction IDs are not owned by the native result.
+                // Reset the snapshot after validating the Swift-owned pair.
+                sumire_session_reset(state.session)
+            } else {
+                guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0 else { return }
+            }
+            state.lastGeneration = nil
+            state.lastCandidates.removeAll(keepingCapacity: false)
             guard learningAllowed, !state.lastConversionWasEnglish, !state.learningPaused, state.learningURL != nil,
                   let store = state.learning,
-                  let selected = state.lastCandidates[candidate],
                   let range = Range(selected.range, in: state.lastReading) else {
                 state.learningSession.cancel()
                 return
             }
-            state.learningSession.beginIfNeeded(reading: learningSessionReading ?? state.lastReading)
+            let learningReading = selected.learnedPredictionReading ?? learningSessionReading ?? state.lastReading
+            state.learningSession.beginIfNeeded(reading: learningReading)
             state.learningSession.record(LearningFragment(
-                reading: String(state.lastReading[range]),
+                reading: selected.learnedPredictionReading ?? String(state.lastReading[range]),
                 output: selected.text,
                 candidateScore: Int32(clamping: selected.score),
                 candidateIndex: Int32(clamping: candidateIndex),
@@ -400,6 +450,7 @@ final class ConversionService {
         queue.async {
             sumire_session_reset(state.session)
             state.lastReading = ""
+            state.lastGeneration = nil
             state.lastCandidates.removeAll(keepingCapacity: false)
         }
     }
@@ -442,8 +493,11 @@ final class ConversionService {
         var learningSession = ConversionLearningSession()
         var learningFailure: String?
         var activeLearningEntries: [LearningStore.Entry]?
+        var activeLearnedPredictionEntries: [LearningStore.Entry] = []
+        var learnedPredictionSettings = LearnedPredictionSettings()
         var standaloneAvailable = false
         var lastReading = ""
+        var lastGeneration: UInt64?
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         private var openedDirectory: URL?
         // Generations are immutable. Once a native open rejects one, skip it for
@@ -451,14 +505,21 @@ final class ConversionService {
         private var rejectedDirectories = Set<URL>()
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
-        func prepareLearning(reading: String, includeCandidates: Bool) throws -> String? {
+        func prepareLearning(reading: String, includeCandidates: Bool,
+                             includePredictions: Bool) throws -> String? {
             var entries: [LearningStore.Entry] = []
+            var predictions: [LearningStore.Entry] = []
             if includeCandidates, let url = learningURL, learningFailure == nil {
                 do {
                     if learning == nil { learning = try LearningStore(url: url) }
                     entries = try learning!.entriesForConversion(reading: reading)
+                    if includePredictions, learnedPredictionSettings.allows(reading: reading) {
+                        predictions = try learning!.predictiveCandidates(
+                            readingPrefix: reading, limit: learnedPredictionSettings.candidateLimit)
+                    }
                 } catch { learningFailure = error.localizedDescription }
             }
+            activeLearnedPredictionEntries = predictions
             if !includeCandidates { learningSession.cancel() }
             guard activeLearningEntries != entries else {
                 return includeCandidates ? learningFailure : nil
@@ -555,7 +616,9 @@ final class ConversionService {
             session = nil
             activeLearningEntries = nil
             lastReading = ""
+            lastGeneration = nil
             lastCandidates.removeAll(keepingCapacity: false)
+            activeLearnedPredictionEntries = []
             standaloneAvailable = false
             englishLoaded = false
             openedDirectory = nil

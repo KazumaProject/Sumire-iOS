@@ -26,9 +26,11 @@ final class EnglishServiceTests: XCTestCase {
 
         let service = ConversionService()
         service.setLearning(url: database)
+        service.setLearnedPredictionSettings(.init(enabled: true, minimumInputLength: 1, candidateLimit: 4))
         let response = try convert(service, "iph", generation: 1)
         let phoneIndex = try XCTUnwrap(response.candidates.firstIndex { $0.text == "iPhone" })
         XCTAssertFalse(response.candidates[phoneIndex].dictionaries.contains("learning"))
+        XCTAssertFalse(response.candidates.contains { $0.learnedPredictionReading != nil })
 
         service.commit(generation: 1, candidate: response.candidates[phoneIndex].id,
                        candidateIndex: phoneIndex, learningAllowed: true,
