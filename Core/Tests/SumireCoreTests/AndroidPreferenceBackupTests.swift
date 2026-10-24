@@ -9,6 +9,8 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("conversion_bunsetsu_separation_preference", "boolean", true),
             entry("learn_dictionary_preference", "boolean", false),
             entry("learn_first_candidate_dictionary_preference", "boolean", true),
+            entry("prediction_lookahead_preference", "int", 5),
+            entry("prediction_aggressiveness_preference", "string", "aggressive"),
             entry("clipboard_history_preference", "boolean", true),
             entry("clipboard_delete_unpinned_after_hours_preference", "boolean", true),
             entry("clipboard_unpinned_retention_hours_preference", "int", 24),
@@ -21,13 +23,15 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 14)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
         XCTAssertEqual(backup.settings.values["bunsetsuSeparation"], .boolean(true))
         XCTAssertEqual(backup.settings.values["learningEnabled"], .boolean(false))
         XCTAssertEqual(backup.settings.values["learnFirstCandidate"], .boolean(true))
+        XCTAssertEqual(backup.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(5))
+        XCTAssertEqual(backup.settings.values[JapanesePredictionSettings.aggressivenessStorageKey], .text("aggressive"))
         XCTAssertEqual(backup.settings.values[ClipboardHistorySettings.enabledKey], .boolean(true))
         XCTAssertEqual(backup.settings.values["clipboard.expirationEnabled"], .boolean(true))
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(24))
@@ -79,6 +83,9 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertEqual(importedFlickStyle.hierarchicalModeAngleMargin, 34)
         XCTAssertTrue(defaults.bool(forKey: "englishReadingEnabled"))
         XCTAssertEqual(defaults.integer(forKey: "candidateRowCount"), 3)
+        XCTAssertEqual(defaults.integer(forKey: JapanesePredictionSettings.lookaheadStorageKey), 5)
+        XCTAssertEqual(defaults.string(forKey: JapanesePredictionSettings.aggressivenessStorageKey),
+                       JapanesePredictionAggressiveness.aggressive.rawValue)
         XCTAssertNil(defaults.object(forKey: "clipboardAutomaticPreview"))
     }
 
@@ -119,7 +126,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 14)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +145,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 14)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,7 +162,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 14)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
@@ -175,6 +182,9 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(true, forKey: "liveConversion")
         defaults.set(false, forKey: "learningEnabled")
+        defaults.set(6, forKey: JapanesePredictionSettings.lookaheadStorageKey)
+        defaults.set(JapanesePredictionAggressiveness.aggressive.rawValue,
+                     forKey: JapanesePredictionSettings.aggressivenessStorageKey)
         defaults.set(true, forKey: "englishReadingEnabled")
         defaults.set(3, forKey: "candidateRowCount")
         defaults.set(false, forKey: "clipboardAutomaticPreview")
@@ -195,6 +205,32 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertFalse(defaults.bool(forKey: "clipboardAutomaticPreview"))
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).threeStepInput, .all)
         XCTAssertEqual(FlickStyleSettings.load(defaults: defaults).rotation, .clockwise)
+        XCTAssertEqual(defaults.integer(forKey: JapanesePredictionSettings.lookaheadStorageKey),
+                       JapanesePredictionSettings.defaultLookaheadCharacterCount)
+        XCTAssertEqual(defaults.string(forKey: JapanesePredictionSettings.aggressivenessStorageKey),
+                       JapanesePredictionAggressiveness.standard.rawValue)
+    }
+
+    func testPredictionSettingsImportNormalizesLegacyValuesAndDefaultsUnknownValues() throws {
+        let legacy = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "string", "long"),
+            entry("prediction_aggressiveness_preference", "string", "unknown")
+        ]))
+        XCTAssertEqual(legacy.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(6))
+        XCTAssertEqual(legacy.settings.values[JapanesePredictionSettings.aggressivenessStorageKey], .text("standard"))
+
+        let numeric = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "int", 99),
+            entry("prediction_aggressiveness_preference", "string", "conservative")
+        ]))
+        XCTAssertEqual(numeric.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(6))
+        XCTAssertEqual(numeric.settings.values[JapanesePredictionSettings.aggressivenessStorageKey], .text("conservative"))
+
+        let unknown = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "string", "not-a-number"),
+            entry("prediction_aggressiveness_preference", "string", "standard")
+        ]))
+        XCTAssertEqual(unknown.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(3))
     }
 
     func testClipboardExpiryWarningCoversNewDeletionRiskWithoutOverwarning() throws {

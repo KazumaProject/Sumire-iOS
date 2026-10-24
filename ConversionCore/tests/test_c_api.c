@@ -113,6 +113,43 @@ static void test_candidate_origin_flags(const char *directory) {
   CHECK(sumire_result_candidate_flags(result,0,NULL) == -1);
   sumire_result_destroy(result);
 }
+static int64_t score_for_text(sumire_result *result, const char *text) {
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (candidate.text.size == strlen(text) && memcmp(candidate.text.data, text, candidate.text.size) == 0)
+      return candidate.score;
+  }
+  CHECK(0 && "candidate not found");
+  return 0;
+}
+static void test_bunsetsu_prediction(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  sumire_result *result = NULL;
+  CHECK(sumire_engine_open(directory, 1u << 9, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  CHECK(sumire_session_set_prediction_config(session, 2,
+      SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) == 0);
+  sumire_request request = {1, "あいう", strlen("あいう"), 0, 20, 200000, 24};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(score_for_text(result, "SYSTEM-PREDICT") == 16100);
+  int found_without_bunsetsu_segments = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (candidate.text.size == strlen("SYSTEM-PREDICT") &&
+        memcmp(candidate.text.data, "SYSTEM-PREDICT", candidate.text.size) == 0) {
+      CHECK(sumire_result_bunsetsu_count(result, i) == 0);
+      found_without_bunsetsu_segments = 1;
+    }
+  }
+  CHECK(found_without_bunsetsu_segments);
+  sumire_result_destroy(result);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
+}
 static void test_category_prediction(const char *directory) {
   char error[256];
   sumire_engine *engine = NULL;
@@ -122,15 +159,15 @@ static void test_category_prediction(const char *directory) {
   CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
   sumire_request request = {1, "かきく", strlen("かきく"), 0, 1, 200000, 8};
   CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
-  sumire_session_destroy(session);
-  sumire_engine_close(engine);
   int found = 0;
+  uint64_t category_candidate_id = 0;
   for (size_t i = 0; i < sumire_result_count(result); ++i) {
     sumire_candidate candidate;
     CHECK(sumire_result_candidate(result, i, &candidate) == 0);
     if (candidate.text.size != strlen("CategoryABI") ||
         memcmp(candidate.text.data, "CategoryABI", candidate.text.size) != 0) continue;
     CHECK(candidate.score == 1600 && candidate.length_utf16 == 3);
+    category_candidate_id = candidate.candidate_id;
     CHECK(sumire_result_category_count(result, i) == 1);
     sumire_string category;
     CHECK(sumire_result_category(result, i, 0, &category) == 0);
@@ -155,10 +192,38 @@ static void test_category_prediction(const char *directory) {
     correction_found = 1;
   }
   CHECK(correction_found);
+  CHECK(sumire_session_set_prediction_config(session, 0,
+      SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 7,
+      SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 3, 3, error, sizeof error) < 0);
+
+  // A live option change invalidates the previous selection but keeps owned
+  // result snapshots readable. Lookahead 1 retains one-unit completions.
+  CHECK(sumire_session_set_prediction_config(session, 1,
+      SUMIRE_PREDICTION_AGGRESSIVENESS_AGGRESSIVE, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 1, category_candidate_id, error, sizeof error) < 0);
+  CHECK(score_for_text(result, "CategoryABI") == 1600);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 2;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(score_for_text(result, "CategoryABI") == 850);
+  CHECK(score_for_text(result, "訂正") == 4200);
+  sumire_result_destroy(result); result = NULL;
+
+  CHECK(sumire_session_set_prediction_config(session, 1,
+      SUMIRE_PREDICTION_AGGRESSIVENESS_CONSERVATIVE, error, sizeof error) == 0);
+  request.generation = 3;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(score_for_text(result, "CategoryABI") == 2350);
+  CHECK(score_for_text(result, "訂正") == 12200);
+
   sumire_string unused;
   CHECK(sumire_result_reading_correction(NULL,0,&unused,&unused) == -1);
   CHECK(sumire_result_reading_correction(result,sumire_result_count(result),&unused,&unused) == -1);
   sumire_result_destroy(result);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
 }
 static void test_generated_ascii_fullwidth_ranges(const char *directory) {
   char error[256];
@@ -324,6 +389,10 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2],"--aux-completion") == 0) {
     test_auxiliary_completion_ranges(argv[1]);
+    return 0;
+  }
+  if (argc == 3 && strcmp(argv[2],"--bunsetsu-prediction") == 0) {
+    test_bunsetsu_prediction(argv[1]);
     return 0;
   }
   CHECK(argc == 2);
