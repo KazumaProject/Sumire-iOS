@@ -56,6 +56,47 @@ final class ConversionLearningIntegrationTests: XCTestCase {
                       "Selected surface disappeared. Selected {\(selectedSummary)}; returned {\(returnedSummary)}")
     }
 
+    func testBunsetsuSegmentsPersistAsOneOriginalPhrase() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("learning.sqlite")
+        let service = ConversionService()
+        service.setLearning(url: database)
+
+        let originalReading = "わたしはあるく"
+        let firstReading = "わたしは"
+        let firstResponse = try convert(service, reading: firstReading, generation: 1)
+        let first = try XCTUnwrap(firstResponse.candidates.enumerated().first {
+            $0.element.text == "私は" && $0.element.range == NSRange(location: 0, length: firstReading.utf16.count)
+        })
+        service.commit(generation: firstResponse.generation, candidate: first.element.id,
+                       candidateIndex: first.offset, learningAllowed: true,
+                       learnFirstCandidate: true, learnMixedSymbolsAndNumbers: true,
+                       learningSessionReading: originalReading, learningSessionContinues: true) { _ in
+            XCTFail("An incomplete bunsetsu session must not be persisted yet")
+        }
+        service.reset()
+
+        let remainderReading = "あるく"
+        let remainderResponse = try convert(service, reading: remainderReading, generation: 2)
+        let remainder = try XCTUnwrap(remainderResponse.candidates.enumerated().first {
+            $0.element.text == "歩く" && $0.element.range == NSRange(location: 0, length: remainderReading.utf16.count)
+        })
+        let persisted = expectation(description: "Completed bunsetsu learning session persisted")
+        service.commit(generation: remainderResponse.generation, candidate: remainder.element.id,
+                       candidateIndex: remainder.offset, learningAllowed: true,
+                       learnFirstCandidate: true, learnMixedSymbolsAndNumbers: true,
+                       learningSessionReading: originalReading, learningSessionContinues: false) { message in
+            XCTAssertEqual(message, "学習しました")
+            persisted.fulfill()
+        }
+        wait(for: [persisted], timeout: 10)
+
+        XCTAssertTrue(try LearningStore(url: database).snapshot().contains {
+            $0.reading == originalReading && $0.text == "私は歩く" && $0.isPhrase
+        })
+    }
+
     func testLearnedReadingPrefixCanParticipateAsSegmentInLongerConversion() throws {
         let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
         defer { try? FileManager.default.removeItem(at: directory) }

@@ -323,11 +323,13 @@ final class KeyboardSurface: UIInputView {
     func configureLearning(url: URL?, localReset: LocalDataReset? = nil) {
         guard learningURL != url || localReset != nil else { return }
         learningURL = url
+        bunsetsuLearningReading = nil
         converter.setLearning(url: url, localReset: localReset)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
     func toggleLearningPauseForSession() -> Bool {
         learningPausedForSession.toggle()
+        if learningPausedForSession { bunsetsuLearningReading = nil }
         converter.setLearningPaused(learningPausedForSession)
         return learningPausedForSession
     }
@@ -335,6 +337,7 @@ final class KeyboardSurface: UIInputView {
     private var converted: [ConversionCandidate] = []
     private var presentedCandidates: [ConversionCandidate] = []
     private var bunsetsuActionHandled = false
+    private var bunsetsuLearningReading: String?
     private var resultGeneration: UInt64?
     private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
     var hasComposition: Bool { !composition.reading.isEmpty }
@@ -1842,6 +1845,7 @@ final class KeyboardSurface: UIInputView {
         presentedCandidates = []
         resultGeneration = nil
         bunsetsuActionHandled = false
+        bunsetsuLearningReading = nil
         selectedCandidate = nil
         candidateBar.candidates = []
         candidateBar.isUpdating = false
@@ -1938,7 +1942,7 @@ final class KeyboardSurface: UIInputView {
         if composition.generation != generation { refreshConversion() }
         return true
     }
-    private func refreshConversion() {
+    private func refreshConversion(preservingBunsetsuLearning: Bool = false) {
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
         selectedCandidate = nil
@@ -1946,6 +1950,10 @@ final class KeyboardSurface: UIInputView {
         presentedCandidates = []
         resultGeneration = nil
         bunsetsuActionHandled = false
+        if bunsetsuLearningReading != nil && !preservingBunsetsuLearning {
+            bunsetsuLearningReading = nil
+            converter.cancelLearningSession()
+        }
         let reading = composition.reading
         // Preserve the last accepted frame instead of submitting an empty list
         // between keystrokes. Pending candidates cannot be selected or expanded.
@@ -1971,6 +1979,7 @@ final class KeyboardSurface: UIInputView {
         }
         let reading = composition.reading
         guard !reading.isEmpty else { return }
+        if bunsetsuLearningReading == nil { bunsetsuLearningReading = reading }
         closeExpandedCandidates()
         converted = []
         presentedCandidates = []
@@ -2073,6 +2082,8 @@ final class KeyboardSurface: UIInputView {
               presentedCandidates.indices.contains(index) else { return }
         if let macroID = presentedCandidates[index].textMacroID {
             selectedCandidate = nil
+            bunsetsuLearningReading = nil
+            converter.cancelLearningSession()
             executeTextMacro?(macroID, nil)
             return
         }
@@ -2096,6 +2107,7 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = nil
         candidateBar.isUpdating = false
         candidateBar.candidates = []
+        bunsetsuLearningReading = nil
         converter.cancelLearningSession()
         converter.reset()
         commitRawTextAndSpace(parts.left, parts.tail)
@@ -2122,21 +2134,28 @@ final class KeyboardSurface: UIInputView {
             text = composition.commitPrefix(candidate.text, readingUTF16Length: candidate.range.length)
         } else {
             converter.cancelLearningSession()
+            bunsetsuLearningReading = nil
             text = composition.commit()
         }
         guard let text else { return }
+        // Bunsetsu conversion queries one segment at a time. Keep learning
+        // against the full reading until the selected segment consumes the tail.
+        let learningSessionContinues = bunsetsuLearningReading != nil && hasComposition
         if let candidate, let candidateIndex, let candidateGeneration {
             converter.commit(
                 generation: candidateGeneration,
                 candidate: candidate.id,
                 candidateIndex: candidateIndex,
-                learningAllowed: !englishComposition && !bunsetsuActionHandled,
+                learningAllowed: !englishComposition,
                 learnFirstCandidate: learnFirstCandidate,
-                learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers
+                learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers,
+                learningSessionReading: bunsetsuLearningReading,
+                learningSessionContinues: learningSessionContinues
             ) { [weak self] message in
                 if self?.hasComposition == false { self?.showDataNotice(message) }
             }
         }
+        if !learningSessionContinues { bunsetsuLearningReading = nil }
         containsRomaji = false
         if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
         converted = []
@@ -2149,7 +2168,9 @@ final class KeyboardSurface: UIInputView {
         englishComposition = false
         updateSumireKeys()
         converter.reset()
-        if !composition.reading.isEmpty { refreshConversion() }
+        if !composition.reading.isEmpty {
+            refreshConversion(preservingBunsetsuLearning: learningSessionContinues)
+        }
     }
     private var keyboardChoices: [(title: String, mode: InputMode, customID: String?)] {
         let builtins: [(KeyboardKind, InputMode, String)] = [

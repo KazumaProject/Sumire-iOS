@@ -348,6 +348,8 @@ final class ConversionService {
     }
     func commit(generation: UInt64, candidate: UInt64, candidateIndex: Int,
                 learningAllowed: Bool, learnFirstCandidate: Bool, learnMixedSymbolsAndNumbers: Bool,
+                // Segment queries can be narrower than Android's original learning input.
+                learningSessionReading: String? = nil, learningSessionContinues: Bool = false,
                 onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {
@@ -360,7 +362,7 @@ final class ConversionService {
                 state.learningSession.cancel()
                 return
             }
-            state.learningSession.beginIfNeeded(reading: state.lastReading)
+            state.learningSession.beginIfNeeded(reading: learningSessionReading ?? state.lastReading)
             state.learningSession.record(LearningFragment(
                 reading: String(state.lastReading[range]),
                 output: selected.text,
@@ -369,7 +371,7 @@ final class ConversionService {
                 leftID: selected.leftID,
                 rightID: selected.rightID
             ))
-            let completedReading = selected.range.location == 0 &&
+            let completedReading = !learningSessionContinues && selected.range.location == 0 &&
                 selected.range.length == state.lastReading.utf16.count
             guard completedReading else { return }
             let entries = state.learningSession.finish(
