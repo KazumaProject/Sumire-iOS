@@ -51,8 +51,9 @@ final class KeyboardViewController: UIInputViewController {
             // That does not mean marked text is unsupported. Keep the reading in
             // the surface as well, so hosts ignoring marked text can still commit.
             let proxy = self.textDocumentProxy
+            guard self.resolveSuspendedMark(for: proxy) else { return }
             let before = self.context(for: proxy)
-            guard before.document != nil else { self.markedOwnership.discard(); return }
+            guard before.document != nil else { return }
             self.changing = true
             proxy.setMarkedText(text, selectedRange: selection)
             if text.isEmpty { proxy.unmarkText() }
@@ -93,7 +94,7 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillAppear(_ animated: Bool) {
         super.viewWillAppear(animated)
-        markedOwnership.discard()
+        _ = resolveSuspendedMark(for: textDocumentProxy, onAppearance: true)
         expectedContext = context()
         let access = KeyboardSettings.extensionAccess(hasFullAccess: hasFullAccess)
         settingsAccess = access
@@ -138,16 +139,53 @@ final class KeyboardViewController: UIInputViewController {
                 after: proxy.documentContextAfterInput,
                 selected: proxy.selectedText)
     }
+
+    /// A temporarily disconnected proxy cannot prove that the current host is
+    /// still the document that owns our last marked range. Keep the token only
+    /// until the proxy reconnects, then unmark solely on an exact context match.
+    /// A changed or different document is left untouched.
+    @discardableResult
+    private func resolveSuspendedMark(for proxy: UITextDocumentProxy, onAppearance: Bool = false) -> Bool {
+        let current = context(for: proxy)
+        let resolution = onAppearance
+            ? markedOwnership.resolveOnAppearance(current)
+            : markedOwnership.resolveCurrentContext(current)
+        switch resolution {
+        case .none:
+            return true
+        case .unmarkOwnedText:
+            changing = true
+            proxy.unmarkText()
+            expectedContext = context(for: proxy)
+            changing = false
+            surface.invalidateComposition()
+            return true
+        case .waitForDocument:
+            expectedContext = context(for: proxy)
+            surface.invalidateComposition()
+            return false
+        case .discardOwnership:
+            expectedContext = context(for: proxy)
+            surface.invalidateComposition()
+            return true
+        }
+    }
+
     private func perform(_ operation: (UITextDocumentProxy) -> Void) {
+        let proxy = textDocumentProxy
+        guard resolveSuspendedMark(for: proxy) else { return }
         markedOwnership.discard()
         changing = true
-        operation(textDocumentProxy)
-        expectedContext = context()
+        operation(proxy)
+        expectedContext = context(for: proxy)
         changing = false
     }
+
     private func validateContext() {
         guard !changing else { return }
-        let current = context()
+        let proxy = textDocumentProxy
+        guard resolveSuspendedMark(for: proxy) else { return }
+        let current = context(for: proxy)
         if current.document == nil || expectedContext.map({ current != $0 }) == true {
             markedOwnership.discard()
             surface.invalidateComposition()
@@ -228,7 +266,9 @@ final class KeyboardViewController: UIInputViewController {
 
     override func viewWillDisappear(_ animated: Bool) {
         let proxy = textDocumentProxy
-        if markedOwnership.consumeIfMatching(context(for: proxy)) {
+        let current = context(for: proxy)
+        let resolution = markedOwnership.resolveOnHide(current)
+        if resolution == .unmarkOwnedText {
             changing = true
             proxy.unmarkText()
             changing = false
