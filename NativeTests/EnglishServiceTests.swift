@@ -4,10 +4,11 @@ import SumireCore
 /// Compiles the same ConversionService source used by the app and extension.
 /// This covers Swift/C ABI/storage integration, not keyboard UI or App Groups.
 final class EnglishServiceTests: XCTestCase {
-    private func convert(_ service: ConversionService, _ reading: String, generation: UInt64) throws -> ConversionResponse {
+    private func convert(_ service: ConversionService, _ reading: String,
+                         generation: UInt64, english: Bool = true) throws -> ConversionResponse {
         let completed = expectation(description: "English conversion")
         var response: Result<ConversionResponse, Error>?
-        service.convert(reading, generation: generation, editStart: 0, english: true) {
+        service.convert(reading, generation: generation, editStart: 0, english: english) {
             response = $0
             completed.fulfill()
         }
@@ -31,7 +32,7 @@ final class EnglishServiceTests: XCTestCase {
 
         service.commit(generation: 1, candidate: response.candidates[phoneIndex].id,
                        candidateIndex: phoneIndex, learningAllowed: true,
-                       learnFirstCandidate: true) { _ in
+                       learnFirstCandidate: true, learnMixedSymbolsAndNumbers: true) { _ in
             XCTFail("English predictions must not write learning rows")
         }
         _ = try convert(service, "iph", generation: 2) // Serial queue barrier for commit.
@@ -43,38 +44,40 @@ final class EnglishServiceTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: directory) }
         let database = directory.appendingPathComponent("learning.sqlite")
         let seed = try LearningStore(url: database)
-        try seed.record(reading: "iph", text: "iPhone")
+        try seed.record(reading: "しろ", text: "白")
 
         let service = ConversionService()
         service.setLearning(url: database)
-        let first = try convert(service, "iph", generation: 1)
-        let phone = try XCTUnwrap(first.candidates.first { $0.text == "iPhone" })
-        XCTAssertTrue(phone.dictionaries.contains("learning"))
+        let first = try convert(service, "しろ", generation: 1, english: false)
+        let learned = try XCTUnwrap(first.candidates.first { $0.text == "白" })
+        XCTAssertTrue(learned.dictionaries.contains("learning"))
 
         service.setLearningPaused(true)
-        let phoneIndex = try XCTUnwrap(first.candidates.firstIndex { $0.id == phone.id })
-        service.commit(generation: 1, candidate: phone.id, candidateIndex: phoneIndex,
-                       learningAllowed: true, learnFirstCandidate: true) { _ in
+        let learnedIndex = try XCTUnwrap(first.candidates.firstIndex { $0.id == learned.id })
+        service.commit(generation: 1, candidate: learned.id, candidateIndex: learnedIndex,
+                       learningAllowed: true, learnFirstCandidate: true,
+                       learnMixedSymbolsAndNumbers: true) { _ in
             XCTFail("Paused learning must not report a saved record")
         }
-        let whilePaused = try convert(service, "iph", generation: 2)
+        let whilePaused = try convert(service, "しろ", generation: 2, english: false)
         XCTAssertTrue(whilePaused.candidates.contains {
-            $0.text == "iPhone" && $0.dictionaries.contains("learning")
+            $0.text == "白" && $0.dictionaries.contains("learning")
         })
         XCTAssertEqual(try LearningStore(url: database).snapshot().first?.count, 1)
 
         service.setLearningPaused(false)
-        let afterResume = try convert(service, "iph", generation: 3)
-        let resumedPhone = try XCTUnwrap(afterResume.candidates.first { $0.text == "iPhone" })
+        let afterResume = try convert(service, "しろ", generation: 3, english: false)
+        let resumedCandidate = try XCTUnwrap(afterResume.candidates.first { $0.text == "白" })
         let committed = expectation(description: "Learning resumes")
-        let resumedIndex = try XCTUnwrap(afterResume.candidates.firstIndex { $0.id == resumedPhone.id })
-        service.commit(generation: 3, candidate: resumedPhone.id, candidateIndex: resumedIndex,
-                       learningAllowed: true, learnFirstCandidate: true) { message in
+        let resumedIndex = try XCTUnwrap(afterResume.candidates.firstIndex { $0.id == resumedCandidate.id })
+        service.commit(generation: 3, candidate: resumedCandidate.id, candidateIndex: resumedIndex,
+                       learningAllowed: true, learnFirstCandidate: true,
+                       learnMixedSymbolsAndNumbers: true) { message in
             XCTAssertEqual(message, "学習しました")
             committed.fulfill()
         }
         wait(for: [committed], timeout: 10)
-        _ = try convert(service, "iph", generation: 4)
+        _ = try convert(service, "しろ", generation: 4, english: false)
         XCTAssertEqual(try LearningStore(url: database).snapshot().first?.count, 2)
     }
 

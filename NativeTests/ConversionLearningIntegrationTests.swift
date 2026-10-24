@@ -30,7 +30,7 @@ final class ConversionLearningIntegrationTests: XCTestCase {
         let stored = expectation(description: "Committed candidate persisted")
         service.commit(generation: first.generation, candidate: selected.element.id,
                        candidateIndex: selected.offset, learningAllowed: true,
-                       learnFirstCandidate: false) { message in
+                       learnFirstCandidate: false, learnMixedSymbolsAndNumbers: true) { message in
             XCTAssertEqual(message, "学習しました")
             stored.fulfill()
         }
@@ -121,7 +121,8 @@ final class ConversionLearningIntegrationTests: XCTestCase {
         let firstCandidate = response.candidates[firstIndex]
         let finished = expectation(description: "Top candidate session finished without storage")
         service.commit(generation: response.generation, candidate: firstCandidate.id, candidateIndex: firstIndex,
-                       learningAllowed: true, learnFirstCandidate: false) { message in
+                       learningAllowed: true, learnFirstCandidate: false,
+                       learnMixedSymbolsAndNumbers: true) { message in
             XCTFail("No learning notice expected, got: \(message)")
         }
         // A following conversion is serialized behind commit and therefore acts

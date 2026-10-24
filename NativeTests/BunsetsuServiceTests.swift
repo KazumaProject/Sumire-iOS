@@ -129,14 +129,17 @@ final class BunsetsuServiceTests: XCTestCase {
         let committed = expectation(description: "Prediction learned under typed prefix")
         let candidateIndex = try XCTUnwrap(response.candidates.firstIndex { $0.id == candidate.id })
         service.commit(generation: 1, candidate: candidate.id, candidateIndex: candidateIndex,
-                       learningAllowed: true, learnFirstCandidate: true) {
+                       learningAllowed: true, learnFirstCandidate: true,
+                       learnMixedSymbolsAndNumbers: true) {
             XCTAssertEqual($0, "学習しました")
             committed.fulfill()
         }
         wait(for: [committed], timeout: 10)
         let store = try LearningStore(url: database)
         XCTAssertTrue(try store.candidates(reading: "こんに").contains { $0.text == "こんにちは" })
-        XCTAssertFalse(try store.candidates(reading: "こんにちは").contains { $0.text == "こんにちは" })
+        XCTAssertFalse(try store.snapshot().contains {
+            $0.reading == "こんにちは" && $0.text == "こんにちは"
+        })
     }
 
     func testEnglishCompletionIsOneSegmentConsumingTypedInput() throws {
