@@ -1206,7 +1206,11 @@ final class KeyboardSurface: UIInputView {
                 repeating.onCommittedPress = { isTap in
                     if isTap {
                         tapController.committedTap(keyIdentity: placement.id, action: normalAction, binding: doubleTap)
-                    } else if normalAction != .command(.deleteAfterCursor) {
+                    } else if normalAction == .command(.deleteAfterCursor) {
+                        // The long press is consumed without an action, but it still
+                        // separates any pending double-tap sequence from later taps.
+                        tapController.interrupt()
+                    } else {
                         tapController.committedGesture(normalAction)
                     }
                 }
@@ -1217,9 +1221,13 @@ final class KeyboardSurface: UIInputView {
                 flick.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 flick.configureGuides(visible: appearance.guidesVisible,
                                       fontSize: appearance.guideFontSize, color: palette.foreground)
-                flick.onCommit = { [weak self] event in
-                    guard let self else { return }
-                    guard let action = Self.customAction(for: event, runtime: runtime, targets: targets) else { return }
+                flick.onCommit = { event in
+                    var suppressesPendingTap = false
+                    guard let action = Self.customAction(for: event, runtime: runtime, targets: targets,
+                                                         suppressesPendingTap: &suppressesPendingTap) else {
+                        if suppressesPendingTap { tapController.interrupt() }
+                        return
+                    }
                     if event.isPureTap {
                         let binding = CustomDoubleTapBinding.effective(definition: definition, normalAction: action, targets: targets)
                         tapController.committedTap(keyIdentity: placement.id, action: action, binding: binding)
@@ -1244,9 +1252,11 @@ final class KeyboardSurface: UIInputView {
 
     private static func customAction(for event: MultiStageFlickKey.CommitEvent,
                                      runtime: CustomMultiStageFlick.RuntimeDefinition,
-                                     targets: CustomLayoutTargets) -> CustomKeyAction? {
+                                     targets: CustomLayoutTargets,
+                                     suppressesPendingTap: inout Bool) -> CustomKeyAction? {
         func tapOnly(_ action: CustomKeyAction?) -> CustomKeyAction? {
             guard event.isLongPress, action == .command(.deleteAfterCursor) else { return action }
+            suppressesPendingTap = true
             return nil
         }
         if event.circularSlot != nil {
