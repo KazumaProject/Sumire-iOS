@@ -195,6 +195,7 @@ final class ConversionService {
         _ = pending.advance()
         let state = state
         queue.async {
+            state.learningSession.cancel()
             state.learning = nil; state.learningURL = nil; state.learningFailure = nil
             do {
                 try localReset?.apply()
@@ -204,7 +205,10 @@ final class ConversionService {
     }
     func setLearningPaused(_ paused: Bool) {
         let state = state
-        queue.async { state.learningPaused = paused }
+        queue.async {
+            state.learningPaused = paused
+            if paused { state.learningSession.cancel() }
+        }
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
@@ -323,20 +327,45 @@ final class ConversionService {
             DispatchQueue.main.async { completion(response) }
         }
     }
-    func commit(generation: UInt64, candidate: UInt64, learn: Bool, onNotice: @escaping (String) -> Void) {
+    func commit(generation: UInt64, candidate: UInt64, candidateIndex: Int,
+                learningAllowed: Bool, learnFirstCandidate: Bool,
+                onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {
             var error = [CChar](repeating: 0, count: 1024)
-            guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0,
-                  learn, !state.learningPaused, state.learningURL != nil, let store = state.learning,
+            guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0 else { return }
+            guard learningAllowed, !state.learningPaused, state.learningURL != nil,
+                  let store = state.learning,
                   let selected = state.lastCandidates[candidate],
-                  let range = Range(selected.range, in: state.lastReading) else { return }
+                  let range = Range(selected.range, in: state.lastReading) else {
+                state.learningSession.cancel()
+                return
+            }
+            state.learningSession.beginIfNeeded(reading: state.lastReading)
+            state.learningSession.record(LearningFragment(
+                reading: String(state.lastReading[range]),
+                output: selected.text,
+                candidateScore: Int32(clamping: selected.score),
+                candidateIndex: Int32(clamping: candidateIndex)
+            ))
+            let completedReading = selected.range.location == 0 &&
+                selected.range.length == state.lastReading.utf16.count
+            guard completedReading else { return }
+            let entries = state.learningSession.finish(
+                learnFirstCandidate: learnFirstCandidate,
+                timestamp: Int64(Date().timeIntervalSince1970 * 1_000)
+            )
+            guard !entries.isEmpty else { return }
             do {
-                try store.record(reading: String(state.lastReading[range]), text: selected.text)
+                try store.upsertLearningEntries(entries)
                 DispatchQueue.main.async { onNotice("学習しました") }
             }
             catch { let message = error.localizedDescription; DispatchQueue.main.async { onNotice(message) } }
         }
+    }
+    func cancelLearningSession() {
+        let state = state
+        queue.async { state.learningSession.cancel() }
     }
     func reset() {
         _ = pending.advance()
@@ -382,6 +411,7 @@ final class ConversionService {
         var learningURL: URL?
         var learningPaused = false
         var learning: LearningStore?
+        var learningSession = ConversionLearningSession()
         var learningFailure: String?
         var standaloneAvailable = false
         var lastReading = ""
@@ -416,7 +446,7 @@ final class ConversionService {
                     return sumire_personal_entry(
                         reading: sumire_string(data: buffer.baseAddress?.advanced(by: range.0), size: range.1),
                         text: sumire_string(data: buffer.baseAddress?.advanced(by: range.2), size: range.3),
-                        context_id: 0, score: -20000 - Int32(min(100, entry.count)) * 100, kind: 2)
+                        context_id: 0, score: entry.score, kind: 2)
                 }
                 return records.withUnsafeBufferPointer {
                     sumire_session_set_learning(session, $0.baseAddress, $0.count, &error, error.count)
@@ -479,6 +509,9 @@ final class ConversionService {
             guard status == 0 else { throw NativeError(String(cString: error)) }
         }
         func close() {
+            // A native session/configuration change ends the input transaction;
+            // fragments from the old engine must not leak into the next one.
+            learningSession.cancel()
             sumire_session_destroy(session)
             session = nil
             lastReading = ""

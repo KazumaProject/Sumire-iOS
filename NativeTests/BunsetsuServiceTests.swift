@@ -127,7 +127,9 @@ final class BunsetsuServiceTests: XCTestCase {
         XCTAssertEqual(candidate.bunsetsu.map(\.reading), ["こんに"])
         XCTAssertEqual(candidate.bunsetsu.first?.readingRange, NSRange(location: 0, length: 3))
         let committed = expectation(description: "Prediction learned under typed prefix")
-        service.commit(generation: 1, candidate: candidate.id, learn: true) {
+        let candidateIndex = try XCTUnwrap(response.candidates.firstIndex { $0.id == candidate.id })
+        service.commit(generation: 1, candidate: candidate.id, candidateIndex: candidateIndex,
+                       learningAllowed: true, learnFirstCandidate: true) {
             XCTAssertEqual($0, "学習しました")
             committed.fulfill()
         }

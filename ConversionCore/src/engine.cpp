@@ -524,6 +524,19 @@ Result Engine::predict_english(const std::string &input, size_t count, bool case
   r.lattice_nodes = r.candidates.size();
   if (r.candidates.size() > count) r.candidates.resize(count);
   // Overlay readings and surfaces are user-authored and remain case-sensitive.
+  // Android presents learned prefix results as a score-ordered block before the
+  // ordinary English prediction results. Keep that source priority here rather
+  // than comparing the persisted learning score with the English lexicon cost:
+  // those are distinct candidate sources, even though both are stored as scores.
+  const auto isLearnedCandidate = [](const Candidate &candidate) {
+    return std::any_of(candidate.segments.begin(), candidate.segments.end(),
+        [](const Segment &segment) { return segment.dictionary == "learning"; });
+  };
+  const auto englishOrder = [&](const Candidate &a, const Candidate &b) {
+    const bool aLearned = isLearnedCandidate(a), bLearned = isLearnedCandidate(b);
+    if (aLearned != bLearned) return aLearned;
+    return a.score < b.score;
+  };
   // Keep only the requested top count while merging, even for large dictionaries.
   const auto originalReading = utf16(input);
   for (const auto *overlay : {personal, learned}) {
@@ -537,13 +550,26 @@ Result Engine::predict_english(const std::string &input, size_t count, bool case
       ++r.lattice_nodes;
       auto existing = std::find_if(r.candidates.begin(), r.candidates.end(),
           [&](const auto &candidate) { return candidate.text == word.text; });
-      if (existing != r.candidates.end() && existing->score <= word.score) continue;
-      if (existing == r.candidates.end() && r.candidates.size() == count && r.candidates.back().score <= word.score) continue;
+      const bool learnedCandidate = word.learned;
+      if (existing != r.candidates.end()) {
+        const bool existingIsLearned = isLearnedCandidate(*existing);
+        if (learnedCandidate) {
+          if (existingIsLearned && existing->score <= word.score) continue;
+          // The Android candidate merger keeps the learned row when the same
+          // surface is also produced by the ordinary English dictionary.
+        } else if (existing->score <= word.score) {
+          continue;
+        }
+      }
+      if (!learnedCandidate && existing == r.candidates.end() && r.candidates.size() == count) {
+        const auto &last = r.candidates.back();
+        if (isLearnedCandidate(last) || last.score <= word.score) continue;
+      }
       std::erase_if(r.candidates, [&](const auto &candidate) { return candidate.text == word.text; });
       const auto source = word.learned ? "learning" : word.exact_only ? "template" : "user";
       r.candidates.push_back({word.text, word.score, {{word.text, source, 0, uint32_t(inputLength)}}});
       std::stable_sort(r.candidates.begin(), r.candidates.end(),
-          [](const auto &left, const auto &right) { return left.score < right.score; });
+          englishOrder);
       if (r.candidates.size() > count) r.candidates.resize(count);
     }
   }

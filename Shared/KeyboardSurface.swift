@@ -1831,6 +1831,7 @@ final class KeyboardSurface: UIInputView {
     }
     func invalidateComposition() {
         customTapController?.cancel()
+        converter.cancelLearningSession()
         closeSymbolKeyboard()
         katakanaCycle.reset()
         closeExpandedCandidates()
@@ -1952,7 +1953,12 @@ final class KeyboardSurface: UIInputView {
         updateSumireKeys()
         markReading()
         status.text = reading.isEmpty ? "Sumire · C++変換" : reading
-        guard !reading.isEmpty else { englishComposition = false; converter.reset(); return }
+        guard !reading.isEmpty else {
+            englishComposition = false
+            converter.cancelLearningSession()
+            converter.reset()
+            return
+        }
         let generation = composition.generation
         let query = containsRomaji ? (romaji?.flush(reading) ?? reading) : reading
         requestConversion(query: query, generation: generation)
@@ -2089,6 +2095,7 @@ final class KeyboardSurface: UIInputView {
         selectedCandidate = nil
         candidateBar.isUpdating = false
         candidateBar.candidates = []
+        converter.cancelLearningSession()
         converter.reset()
         commitRawTextAndSpace(parts.left, parts.tail)
         status.text = "Sumire · C++変換"
@@ -2100,20 +2107,34 @@ final class KeyboardSurface: UIInputView {
             _ = composition.flushRomaji(using: romaji)
         }
         var candidate: ConversionCandidate?
+        var candidateIndex: Int?
+        var candidateGeneration: UInt64?
         if let generation = resultGeneration, composition.accepts(generation),
            let index = selectedCandidate, converted.indices.contains(index) {
             candidate = converted[index]
-            converter.commit(generation: generation, candidate: converted[index].id,
-                             learn: index > 0 || learnFirstCandidate) { [weak self] message in
-                if self?.hasComposition == false { self?.showDataNotice(message) }
-            }
+            candidateIndex = index
+            candidateGeneration = generation
         }
         let text: String?
         if let candidate {
             guard candidate.range.location == 0 else { return }
             text = composition.commitPrefix(candidate.text, readingUTF16Length: candidate.range.length)
-        } else { text = composition.commit() }
+        } else {
+            converter.cancelLearningSession()
+            text = composition.commit()
+        }
         guard let text else { return }
+        if let candidate, let candidateIndex, let candidateGeneration {
+            converter.commit(
+                generation: candidateGeneration,
+                candidate: candidate.id,
+                candidateIndex: candidateIndex,
+                learningAllowed: !englishComposition && !bunsetsuActionHandled,
+                learnFirstCandidate: learnFirstCandidate
+            ) { [weak self] message in
+                if self?.hasComposition == false { self?.showDataNotice(message) }
+            }
+        }
         containsRomaji = false
         if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
         converted = []

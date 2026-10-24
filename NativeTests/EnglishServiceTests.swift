@@ -24,7 +24,9 @@ final class EnglishServiceTests: XCTestCase {
         let first = try convert(service!, "iph", generation: 1)
         let phone = try XCTUnwrap(first.candidates.first { $0.text == "iPhone" })
         let committed = expectation(description: "English learning committed")
-        service!.commit(generation: 1, candidate: phone.id, learn: true) {
+        let phoneIndex = try XCTUnwrap(first.candidates.firstIndex { $0.id == phone.id })
+        service!.commit(generation: 1, candidate: phone.id, candidateIndex: phoneIndex,
+                        learningAllowed: true, learnFirstCandidate: true) {
             XCTAssertEqual($0, "学習しました")
             committed.fulfill()
         }
@@ -69,7 +71,9 @@ final class EnglishServiceTests: XCTestCase {
         XCTAssertTrue(phone.dictionaries.contains("learning"))
 
         service.setLearningPaused(true)
-        service.commit(generation: 1, candidate: phone.id, learn: true) { _ in
+        let phoneIndex = try XCTUnwrap(first.candidates.firstIndex { $0.id == phone.id })
+        service.commit(generation: 1, candidate: phone.id, candidateIndex: phoneIndex,
+                       learningAllowed: true, learnFirstCandidate: true) { _ in
             XCTFail("Paused learning must not report a saved record")
         }
         let whilePaused = try convert(service, "iph", generation: 2)
@@ -82,7 +86,9 @@ final class EnglishServiceTests: XCTestCase {
         let afterResume = try convert(service, "iph", generation: 3)
         let resumedPhone = try XCTUnwrap(afterResume.candidates.first { $0.text == "iPhone" })
         let committed = expectation(description: "Learning resumes")
-        service.commit(generation: 3, candidate: resumedPhone.id, learn: true) { message in
+        let resumedIndex = try XCTUnwrap(afterResume.candidates.firstIndex { $0.id == resumedPhone.id })
+        service.commit(generation: 3, candidate: resumedPhone.id, candidateIndex: resumedIndex,
+                       learningAllowed: true, learnFirstCandidate: true) { message in
             XCTAssertEqual(message, "学習しました")
             committed.fulfill()
         }
