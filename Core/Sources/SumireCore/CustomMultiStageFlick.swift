@@ -185,6 +185,7 @@ public enum CustomMultiStageFlick {
             switch command {
             case .doNothing: return ""
             case .delete, .backspace: return "⌫"
+            case .deleteAfterCursor: return "後削除"
             case .space, .halfSpace, .fullSpace, .commitAndSpace: return "空白"
             case .enter, .newLine, .forceNewLine: return "改行"
             case .confirm: return "確定"

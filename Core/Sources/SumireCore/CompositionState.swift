@@ -70,6 +70,16 @@ public struct CompositionState {
         phase = reading.isEmpty ? .idle : .editing
         return true
     }
+    /// Delete one extended grapheme after the composing caret.
+    @discardableResult public mutating func deleteForward() -> Bool {
+        guard !reading.isEmpty, cursor < reading.count else { return false }
+        let start = reading.index(reading.startIndex, offsetBy: cursor)
+        let end = reading.index(after: start)
+        reading.removeSubrange(start..<end)
+        generation += 1
+        phase = reading.isEmpty ? .idle : .editing
+        return true
+    }
     /// Cursor keys edit inside marked text; they do not commit the composition.
     @discardableResult public mutating func moveCursor(by offset: Int) -> Bool {
         guard !reading.isEmpty else { return false }

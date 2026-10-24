@@ -17,6 +17,7 @@ final class CustomInputTextActionTests: XCTestCase {
         var inserted = ""
         var selection = NSRange(location: 0, length: 0)
         var rawParts: [(left: String, tail: String)] = []
+        var deleteForwardCalls = 0
         init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false) throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
@@ -42,6 +43,7 @@ final class CustomInputTextActionTests: XCTestCase {
             surface.updateMarkedText = { [weak self] in self?.reading = $0 }
             surface.updateMarkedSelection = { [weak self] text, selection in self?.reading = text; self?.selection = selection }
             surface.insert = { [weak self] in self?.inserted += $0 }
+            surface.deleteForward = { [weak self] in self?.deleteForwardCalls += 1 }
             surface.commitMarkedText = { [weak self] text in
                 self?.inserted += text
                 self?.reading = ""
@@ -102,6 +104,23 @@ final class CustomInputTextActionTests: XCTestCase {
             XCTAssertEqual(fixture.reading, "あ👩‍💻aい")
             XCTAssertEqual(fixture.inserted, "")
         }
+    }
+
+    func testCustomDeleteAfterCursorUsesComposingTailAndHostForwardDelete() throws {
+        let fixture = try Fixture(actions: [
+            ("text", "Text:a👩‍💻い"),
+            ("left", "MoveCursorLeft"),
+            ("forward", "DeleteAfterCursor")
+        ])
+        try fixture.tap("text")
+        try fixture.tap("left")
+        try fixture.tap("forward")
+        XCTAssertEqual(fixture.reading, "a👩‍💻")
+        XCTAssertEqual(fixture.deleteForwardCalls, 0)
+
+        let committedTextFixture = try Fixture(actions: [("forward", "DeleteAfterCursor")])
+        try committedTextFixture.tap("forward")
+        XCTAssertEqual(committedTextFixture.deleteForwardCalls, 1)
     }
 
     func testCustomShiftConsumesTextButNotCommandsOrInputTextWithoutRebuilding() throws {

@@ -6,6 +6,7 @@ import SumireCore
 final class KeyboardSurface: UIInputView {
     var insert: ((String) -> Void)?
     var delete: (() -> Void)?
+    var deleteForward: (() -> Void)?
     var deleteUntilBoundary: (() -> Void)?
     var nextKeyboard: (() -> Void)?
     private var specialKeySettings = SumireSpecialKeySettings()
@@ -1309,6 +1310,10 @@ final class KeyboardSurface: UIInputView {
             case .shift: customShift.tapShift(); refreshCustomShiftDisplay()
             case .capsLock: customShift.tapCapsLock(); refreshCustomShiftDisplay()
             case .delete, .backspace: pressed("⌫")
+            case .deleteAfterCursor:
+                if hasComposition {
+                    if composition.deleteForward() { tapCycle.reset(); refreshConversion() }
+                } else { deleteForward?() }
             case .space, .convert:
                 if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { pressed("空白") }
             case .enter, .newLine, .confirm:
