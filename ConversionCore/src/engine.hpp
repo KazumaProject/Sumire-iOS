@@ -98,7 +98,8 @@ public:
                  const PersonalDictionary *personal = nullptr,
                  const PersonalDictionary *learned = nullptr,
                  Workspace *workspace = nullptr, bool prefix_candidates = false,
-                 bool japanese_prediction = false, bool bunsetsu_search = false) const;
+                 bool japanese_prediction = false, bool bunsetsu_search = false,
+                 bool kotowaza_enabled = true) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;

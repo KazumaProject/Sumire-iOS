@@ -28,6 +28,31 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertEqual(store.loadCurrent()?.generation, generation.generation)
     }
 
+    func testKotowazaArchiveOutputIsPublishedAndChecksummed() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let base = root.appendingPathComponent("base", isDirectory: true)
+        let incoming = root.appendingPathComponent("incoming", isDirectory: true)
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("shared/Sumire/Dictionaries", isDirectory: true))
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: incoming, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        try Data("base system".utf8).write(to: base.appendingPathComponent("system.sud"))
+        try Data("base connection".utf8).write(to: base.appendingPathComponent("connection.sud"))
+        let imported = incoming.appendingPathComponent("kotowaza.sud")
+        try Data("converted kotowaza".utf8).write(to: imported)
+
+        let generation = try store.publish(importedFiles: ["kotowaza.sud": imported], from: base)
+        let published = try Data(contentsOf: generation.directory.appendingPathComponent("kotowaza.sud"))
+        XCTAssertEqual(published, Data("converted kotowaza".utf8))
+        let manifestData = try Data(contentsOf: generation.directory.appendingPathComponent("manifest.json"))
+        let manifest = try XCTUnwrap(JSONSerialization.jsonObject(with: manifestData) as? [String: Any])
+        XCTAssertEqual(manifest["imported_files"] as? [String], ["kotowaza.sud"])
+        let hashes = try XCTUnwrap(manifest["output_sha256"] as? [String: String])
+        XCTAssertEqual(hashes["kotowaza.sud"], SHA256.hash(data: published).map { String(format: "%02x", $0) }.joined())
+        XCTAssertEqual(store.loadCurrent()?.generation, generation.generation)
+    }
+
     func testAuxiliaryArchiveOutputsCanReplaceBundledSupportInGeneration() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         let base = root.appendingPathComponent("base", isDirectory: true)

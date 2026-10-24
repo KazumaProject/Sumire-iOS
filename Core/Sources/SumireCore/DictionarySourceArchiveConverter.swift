@@ -87,6 +87,7 @@ public enum DictionarySourceArchiveConverter {
             case .english: name = "english"
             case .englishReading: name = "english_reading"
             case .readingCorrection: name = "reading_correction"
+            case .proverb: name = "kotowaza"
             case .common: continue
             }
             let entries = Dictionary(uniqueKeysWithValues: group.entries.map { ($0.key.role, $0) })

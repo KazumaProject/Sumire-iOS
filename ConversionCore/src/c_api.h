@@ -32,7 +32,7 @@ typedef struct {
    * Also includes kana forms and optional reading-correction completions
    * (3..16 input units, lookahead 3, no four-candidate cap). All consume only
    * the typed input. Correction metadata is queried separately below. */
-  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
+  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 3: Japanese completion; bit 4: bunsetsu n-gram candidate ranking; bit 5: disable optional Kotowaza completion. */
 } sumire_request;
 typedef struct {
   uint64_t candidate_id;

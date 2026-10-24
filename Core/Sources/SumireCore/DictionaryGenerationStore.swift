@@ -43,7 +43,7 @@ public struct DictionaryGenerationStore {
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
     private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + [
         "system", "english", "english_reading", "connection", "reading_correction",
-        "single_kanji", "emoji", "emoticon", "symbol"
+        "single_kanji", "emoji", "emoticon", "symbol", "kotowaza"
     ]).map { $0 + ".sud" })
     // Support assets survive publication independently of archive replacements.
     private static let supportGroups = [

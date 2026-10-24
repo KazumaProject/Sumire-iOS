@@ -59,6 +59,34 @@ final class DictionaryArchivePlanTests: XCTestCase {
             guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
     }
+    func testAndroidKotowazaDictionaryMapsItsThreeRawRoles() throws {
+        let names = ["kotowaza/tango_kotowaza.dat", "kotowaza/yomi_kotowaza.dat",
+                     "kotowaza/token_kotowaza.dat"]
+        let plan = try DictionaryArchivePlan(entryNames: names)
+        let group = try XCTUnwrap(plan.groups.first)
+        XCTAssertEqual(plan.groups.count, 1)
+        XCTAssertEqual(group.group, .proverb)
+        XCTAssertEqual(group.group.id, "kotowaza")
+        XCTAssertEqual(Set(group.entries.map(\.key.role)), Set([.tango, .yomi, .token]))
+        XCTAssertTrue(group.canValidate)
+        XCTAssertTrue(group.entries.allSatisfy { $0.container == .rawData })
+
+        let flat = try DictionaryArchivePlan(entryNames: ["tango_kotowaza.dat", "yomi_kotowaza.dat",
+                                                          "token_kotowaza.dat"])
+        XCTAssertEqual(flat.validationCandidates.map(\.group), [.proverb])
+        guard case .mapped(let legacySystemAlias) = DictionaryArchivePlan.resolve("kotowaza/tango.dat") else {
+            return XCTFail("Android's generic tango.dat fallback was not preserved")
+        }
+        XCTAssertEqual(legacySystemAlias.key.group, .system)
+        for name in ["kotowaza/readme.txt", "kotowaza/tango_kotowaza.dat.zip"] {
+            guard case .unknown = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
+        }
+        for name in ["kotowaza/nested/yomi_kotowaza.dat", "backup/export/kotowaza/token_kotowaza.dat",
+                     "unrelated/prefix/tango_kotowaza.dat"] {
+            guard case .mapped(let entry) = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
+            XCTAssertEqual(entry.key.group, .proverb)
+        }
+    }
     func testLegacyAliasesCommonPairAndCase() throws {
         let plan = try DictionaryArchivePlan(entryNames: ["backup/TANGO.dat", "YOMI.DAT", "Token.dat.zip",
                                                          "backup/system/connectionId.dat.zip", "system/pos_table.dat"])
@@ -98,8 +126,7 @@ final class DictionaryArchivePlanTests: XCTestCase {
         for name in ["__MACOSX/yomi.dat", "backup/__MACOSX/system/yomi.dat", "folder/.DS_Store", "folder/._yomi.dat", "folder/"] {
             guard case .ignored = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
-        for name in ["token_kotowaza.dat",
-                     "id.def", "english/qwerty_glide_index.dat"] {
+        for name in ["id.def", "english/qwerty_glide_index.dat"] {
             guard case .unsupported(let reason) = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
             XCTAssertFalse(reason.isEmpty)
         }

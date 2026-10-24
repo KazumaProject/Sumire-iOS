@@ -545,9 +545,13 @@ int main(int argc, char **argv) {
   req = (sumire_request){8, "かきく", strlen("かきく"), 0, 1, 200000, 8};
   CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
   int found_prediction = 0;
+  int found_kotowaza = 0;
   uint64_t prediction_id = 0;
   for (size_t i = 0; i < sumire_result_count(personal); ++i) {
     CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    if (candidate.text.size == strlen("KotowazaAPI") &&
+        memcmp(candidate.text.data, "KotowazaAPI", candidate.text.size) == 0)
+      found_kotowaza = 1;
     if (candidate.text.size == strlen("PredictionABI") &&
         memcmp(candidate.text.data, "PredictionABI", candidate.text.size) == 0) {
       CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == 3);
@@ -559,13 +563,48 @@ int main(int argc, char **argv) {
       found_prediction = 1;
     }
   }
-  CHECK(found_prediction);
+  CHECK(found_prediction && found_kotowaza);
   CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) == 0);
   CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) < 0);
   sumire_result_destroy(personal);
   req.generation = 9;
+  req.flags = 40; /* Keep Japanese prediction; disable optional Kotowaza completion. */
   CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
+  int found_disabled_kotowaza = 0;
+  int found_system_prediction = 0;
+  for (size_t i = 0; i < sumire_result_count(personal); ++i) {
+    CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    if (candidate.text.size == strlen("KotowazaAPI") &&
+        memcmp(candidate.text.data, "KotowazaAPI", candidate.text.size) == 0)
+      found_disabled_kotowaza = 1;
+    if (candidate.text.size == strlen("PredictionABI") &&
+        memcmp(candidate.text.data, "PredictionABI", candidate.text.size) == 0)
+      found_system_prediction = 1;
+  }
+  CHECK(!found_disabled_kotowaza && found_system_prediction);
   CHECK(sumire_session_commit(session, 8, prediction_id, error, sizeof error) < 0);
+  sumire_result_destroy(personal);
+
+  req = (sumire_request){10, "かきく", strlen("かきく"), 0, 1, 200000, 16};
+  CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
+  int found_bunsetsu_kotowaza = 0;
+  for (size_t i = 0; i < sumire_result_count(personal); ++i) {
+    CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    if (candidate.text.size == strlen("KotowazaAPI") &&
+        memcmp(candidate.text.data, "KotowazaAPI", candidate.text.size) == 0)
+      found_bunsetsu_kotowaza = 1;
+  }
+  CHECK(found_bunsetsu_kotowaza);
+  sumire_result_destroy(personal);
+
+  req.generation = 11;
+  req.flags = 48; /* Bunsetsu route with the optional Kotowaza source disabled. */
+  CHECK(sumire_session_update(session, &req, &personal, error, sizeof error) == 0);
+  for (size_t i = 0; i < sumire_result_count(personal); ++i) {
+    CHECK(sumire_result_candidate(personal, i, &candidate) == 0);
+    CHECK(!(candidate.text.size == strlen("KotowazaAPI") &&
+            memcmp(candidate.text.data, "KotowazaAPI", candidate.text.size) == 0));
+  }
   sumire_result_destroy(personal);
   sumire_session_destroy(session);
   CHECK(sumire_result_candidate(first, 0, &candidate) == 0 && candidate.text.size == 5);

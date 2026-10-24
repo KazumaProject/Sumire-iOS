@@ -58,8 +58,8 @@ void usage() {
                "--max-states N bounds N-best states (default 200000); "
                "complete=false reports exhaustion.\n"
                "--predict-japanese adds up to 4 system and 4 per enabled category completions (3..16 UTF-16 input, lookahead 3).\n"
-               "It also adds kana forms and optional reading-correction completions; correction raw_text/corrected_reading are metadata, while text is safe display/commit text.\n"
-               "--bunsetsu enables the pinned Android bunsetsu route and disables Japanese completion; combine with --english-reading to append kana-to-English candidates.\n"
+               "It also adds kana forms and optional reading-correction and Kotowaza completions; --no-kotowaza disables only the proverb dictionary. Correction metadata is not part of display/commit text.\n"
+               "--bunsetsu enables the pinned Android bunsetsu route and disables generic Japanese completion; optional Kotowaza completion remains enabled unless --no-kotowaza is passed. Combine with --english-reading to append kana-to-English candidates.\n"
                "--prefix-candidates appends system reading-prefix matches with consumed UTF-16 ranges and word costs.\n"
                "--no-standalone-priority disables the optional standalone.sud table.\n"
                "--omission enables directional kana modifier omission (default "
@@ -87,6 +87,7 @@ int main(int argc, char **argv) {
     bool prefix_candidates = false;
     bool japanese_prediction = false;
     bool bunsetsu_search = false;
+    bool kotowaza_enabled = true;
     bool standalone_priority = true;
     bool stream = false, list = false, lookup = false, omission = false, english = false, english_words = false, predict_english = false, english_candidates = false, include_english_reading = false;
     size_t count = 10, limit = 200000;
@@ -130,6 +131,8 @@ int main(int argc, char **argv) {
         limit = number(value());
       else if (a == "--predict-japanese")
         japanese_prediction = true;
+      else if (a == "--no-kotowaza")
+        kotowaza_enabled = false;
       else if (a == "--bunsetsu")
         bunsetsu_search = true;
       else if (a == "--no-standalone-priority")
@@ -208,7 +211,7 @@ int main(int argc, char **argv) {
     auto run = [&](const std::string &reading) {
       try {
         auto r = (predict_english || english_candidates) ? engine.predict_english(reading, count, english_candidates, personal.get()) : english_words ? engine.lookup_english(reading, count) : english ? engine.lookup_english_reading(reading, count) : lookup ? engine.lookup(reading, count)
-                        : engine.convert(reading, count, limit, omission, personal.get(), nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search);
+                        : engine.convert(reading, count, limit, omission, personal.get(), nullptr, &workspace, prefix_candidates, japanese_prediction, bunsetsu_search, kotowaza_enabled);
         std::cout << "{\"reading\":" << json(reading)
                   << ",\"mode\":" << json(bunsetsu_search ? "bunsetsu" : english_candidates ? "english" : predict_english ? "english-predict" : english_words ? "english-lookup" : english ? "english-reading-lookup" : lookup ? "lookup" : "convert")
                   << ",\"complete\":" << (r.complete ? "true" : "false")

@@ -138,6 +138,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .symbols: return "絵文字 顔文字 記号 肌色 履歴 clipboard"
         case .setup: return "フルアクセス App Groups 有効化 設定共有"
         case .backup: return "インポート エクスポート 保存 復元"
+        case .dictionaries: return "分類 英語読み ことわざ 諺 kotowaza"
         default: return ""
         }
     }

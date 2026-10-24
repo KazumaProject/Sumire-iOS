@@ -246,6 +246,42 @@ final class DictionarySourceValidationTests: XCTestCase {
         ))
     }
 
+    func testPinnedKotowazaSourceSetWhenConfigured() throws {
+        guard let path = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_KOTOWAZA_ASSETS"] else {
+            throw XCTSkip("Set SUMIRE_REFERENCE_KOTOWAZA_ASSETS to the pinned Android kotowaza and POS assets")
+        }
+        let base = URL(fileURLWithPath: path, isDirectory: true)
+        let pinnedURL = try XCTUnwrap(Bundle.module.url(forResource: "PinnedAndroidDictionaryAssets", withExtension: "json"))
+        let pinned = try JSONDecoder().decode(PinnedAndroidAssets.self, from: Data(contentsOf: pinnedURL))
+        XCTAssertEqual(pinned.sourceRevision, pinnedAndroidRevision)
+        let paths = ["pos_table.dat", "kotowaza/tango_kotowaza.dat", "kotowaza/yomi_kotowaza.dat",
+                     "kotowaza/token_kotowaza.dat"]
+        let hashes = try Dictionary(uniqueKeysWithValues: paths.map { path in
+            (path, try XCTUnwrap(pinned.assetSHA256[path], "Missing pinned hash for \(path)"))
+        })
+        try verifyPinnedAssets(hashes, under: base)
+
+        func read(_ path: String, kinds: [DictionaryPrimitiveKind]) throws -> [DictionaryPrimitiveArray] {
+            try DictionaryJavaArrays.read(
+                Data(contentsOf: base.appendingPathComponent(path), options: .mappedIfSafe), kinds: kinds
+            )
+        }
+        let posTable = try read("pos_table.dat", kinds: [.shorts, .shorts])
+        XCTAssertEqual(posTable[0].count, posTable[1].count)
+        let proverb = try DictionarySourceValidation.validate(
+            reading: read("kotowaza/yomi_kotowaza.dat", kinds: [.longs, .longs, .characters, .ints]),
+            surface: read("kotowaza/tango_kotowaza.dat", kinds: [.longs, .longs, .characters]),
+            tokens: read("kotowaza/token_kotowaza.dat", kinds: [.shorts, .shorts, .ints, .longs]),
+            posTableCount: posTable[0].count
+        )
+        XCTAssertGreaterThan(proverb.tokenCount, 0)
+
+        let output = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: output) }
+        try SumireDictionarySourceConverter.write(proverb, to: output)
+        XCTAssertEqual(String(data: try Data(contentsOf: output).prefix(8), encoding: .ascii), "SUMIRE01")
+    }
+
     func testRepeatedSiblingLabelsRemainRepresentable() throws {
         let reading = try trie()
         let tokens = try japaneseTokens(nodes: [2])
@@ -386,7 +422,7 @@ final class DictionarySourceValidationTests: XCTestCase {
         let pinned = try JSONDecoder().decode(PinnedAndroidAssets.self, from: Data(contentsOf: pinnedURL))
         XCTAssertEqual(pinned.sourceRevision, pinnedAndroidRevision)
         try validatePinnedRevision(sourceRevision(containing: base), expected: pinned.sourceRevision)
-        XCTAssertEqual(pinned.assetSHA256.count, 101)
+        XCTAssertEqual(pinned.assetSHA256.count, 104)
         try verifyPinnedAssets(pinned.assetSHA256, under: base)
         let referenceDirectory = ProcessInfo.processInfo.environment["SUMIRE_REFERENCE_NATIVE_DICTIONARIES"]
             .map { URL(fileURLWithPath: $0, isDirectory: true) }
@@ -398,7 +434,10 @@ final class DictionarySourceValidationTests: XCTestCase {
             // The current app generation also carries the pinned auxiliary,
             // correction, GNKG, and Mozc assets; compare every source asset in the pinned
             // system/category/English fixture without rejecting those extras.
-            for (path, expectedHash) in pinned.assetSHA256 {
+            // The current native runtime manifest does not yet include the
+            // proverb source group. Its exact pinned Android bytes are still
+            // checked above, and this test validates/serializes them below.
+            for (path, expectedHash) in pinned.assetSHA256 where !path.hasPrefix("kotowaza/") {
                 XCTAssertEqual(manifest.assetSHA256[path], expectedHash, path)
             }
             referenceManifest = manifest
@@ -412,7 +451,7 @@ final class DictionarySourceValidationTests: XCTestCase {
             .filter { (try? $0.resourceValues(forKeys: [.isDirectoryKey]).isDirectory) == false }
         let entryNames = assetFiles.map { String($0.path.dropFirst(base.path.count + 1)) }
         let archivePlan = try DictionaryArchivePlan(entryNames: entryNames)
-        XCTAssertEqual(archivePlan.validationCandidates.count, 39)
+        XCTAssertEqual(archivePlan.validationCandidates.count, 40)
 
         func payload(at relativePath: String) throws -> Data {
             let url = base.appendingPathComponent(relativePath)
@@ -466,6 +505,20 @@ final class DictionarySourceValidationTests: XCTestCase {
             validatedSets += 1
         }
 
+        let proverbReading = try decode("kotowaza/yomi_kotowaza.dat", kinds: [.longs, .longs, .characters, .ints])
+        let proverbSurface = try decode("kotowaza/tango_kotowaza.dat", kinds: [.longs, .longs, .characters])
+        let proverbTokens = try decode("kotowaza/token_kotowaza.dat", kinds: [.shorts, .shorts, .ints, .longs])
+        let proverb = try DictionarySourceValidation.validate(
+            reading: proverbReading, surface: proverbSurface, tokens: proverbTokens, posTableCount: posCount
+        )
+        XCTAssertGreaterThan(proverb.tokenCount, 0)
+        let proverbOutput = staging.appendingPathComponent("kotowaza.sud")
+        try SumireDictionarySourceConverter.write(proverb, to: proverbOutput)
+        XCTAssertEqual(
+            String(data: try Data(contentsOf: proverbOutput).prefix(8), encoding: .ascii),
+            "SUMIRE01"
+        )
+
         let englishReading = try decode("english/reading.dat.zip", kinds: [.longs, .longs, .characters, .ints])
         let englishSurface = try decode("english/word.dat", kinds: [.longs, .longs, .characters])
         let englishTokens = try decode("english/token.dat.zip", kinds: [.shorts, .ints, .longs])
@@ -489,6 +542,6 @@ final class DictionarySourceValidationTests: XCTestCase {
         if referenceManifest != nil {
             print("Converted all 33 dictionary groups and the connection matrix byte-for-byte to the pinned native binaries")
         }
-        print("Validated \(validatedSets) trie/token source sets at Android Git revision \(pinned.sourceRevision), with pinned asset hashes")
+        print("Validated \(validatedSets) native trie/token sets plus kotowaza source at Android Git revision \(pinned.sourceRevision), with pinned asset hashes")
     }
 }

@@ -576,6 +576,27 @@ final class KeyboardHarnessTests: XCTestCase {
         if !original { toggle().tap() }
         app.buttons["完了"].tap()
     }
+    func testKotowazaSettingPersistsAcrossContainingAppLaunches() {
+        let app = XCUIApplication()
+        launchInputPreview(app)
+        func settings() { settingsButton("分類辞書・英語辞書", in: app).tap() }
+        func toggle() -> XCUIElement { app.switches["諺を候補に表示"].switches.firstMatch }
+
+        settings()
+        XCTAssertTrue(toggle().waitForExistence(timeout: 5))
+        let wasEnabled = toggle().value as? String == "1"
+        toggle().tap()
+        XCTAssertEqual(toggle().value as? String, wasEnabled ? "0" : "1")
+        app.buttons["完了"].tap()
+
+        app.terminate()
+        launchInputPreview(app)
+        settings()
+        XCTAssertEqual(toggle().value as? String, wasEnabled ? "0" : "1")
+        toggle().tap()
+        XCTAssertEqual(toggle().value as? String, wasEnabled ? "1" : "0")
+        app.buttons["完了"].tap()
+    }
     func testKanaEnglishReadingCandidateCanBeSelected() {
         let app = XCUIApplication(); app.launchArguments = ["-englishReadingEnabled", "YES"]
         launchInputPreview(app)
