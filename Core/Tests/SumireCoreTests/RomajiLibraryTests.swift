@@ -12,16 +12,20 @@ final class RomajiLibraryTests: XCTestCase {
         try original.save(defaults: defaults)
         let data = Data(#"[{"name":"valid","mapData":{"a":{"first":"あ","second":1}}},{"name":"invalid","mapData":{"a":{"first":"あ","second":0}}},null,{"name":"missing"}]"#.utf8)
         let preview = try RomajiImportPreview.parse(data)
-        XCTAssertEqual(preview.profiles.map(\.name), ["valid"])
-        XCTAssertEqual(preview.errors.count, 3)
-        XCTAssertTrue(preview.errors[0].hasPrefix("2件目:"))
+        XCTAssertEqual(preview.profiles.map(\.name), ["valid", "invalid"])
+        XCTAssertEqual(preview.profiles[1].rules["a"], RomajiRule("あ", 1))
+        XCTAssertEqual(preview.errors.count, 1)
+        XCTAssertTrue(preview.errors[0].hasPrefix("4件目:"))
+        XCTAssertEqual(try RomajiLibrary.importAndroid(data).map(\.name), ["valid", "invalid"])
         XCTAssertEqual(try RomajiLibrary.load(defaults: defaults), original)
         var next = original; next.profiles += preview.profiles
         try next.save(defaults: defaults)
         XCTAssertEqual(try RomajiLibrary.load(defaults: defaults), next)
         XCTAssertEqual(next.activeID, original.activeID)
         XCTAssertThrowsError(try RomajiImportPreview.parse(Data("{broken".utf8)))
-        XCTAssertThrowsError(try RomajiImportPreview.parse(Data("{}".utf8)))
+        let singleObjectPreview = try RomajiImportPreview.parse(Data("{}".utf8))
+        XCTAssertTrue(singleObjectPreview.profiles.isEmpty)
+        XCTAssertEqual(singleObjectPreview.errors.count, 1)
     }
 
     func testAndroidImportSelectionPersistenceAndInvalidSavePreservesRules() throws {
@@ -49,9 +53,89 @@ final class RomajiLibraryTests: XCTestCase {
     func testDefaultRulesCanBeCopiedAndImportRejectsBadConsumption() throws {
         XCTAssertThrowsError(try RomajiProfile(name: "split", rules: ["😀": .init("x", 1)]).validate())
         try RomajiProfile(name: "copy", rules: RomajiConverter.standard().rules).validate()
-        for n in [0, -1, 3] {
-            let data = Data("[{\"name\":\"bad\",\"mapData\":{\"a\":{\"first\":\"あ\",\"second\":\(n)}}}]".utf8)
-            XCTAssertThrowsError(try RomajiLibrary.importAndroid(data))
+        for n in [0, -1] {
+            let data = Data("[{\"name\":\"normalized\",\"mapData\":{\"a\":{\"first\":\"あ\",\"second\":\(n)}}}]".utf8)
+            XCTAssertEqual(try RomajiLibrary.importAndroid(data).first?.rules["a"], RomajiRule("あ", 1))
         }
+        let overconsuming = Data(#"[{"name":"legacy","mapData":{"a":{"first":"あ","second":3}}}]"#.utf8)
+        let profile = try XCTUnwrap(RomajiLibrary.importAndroid(overconsuming).first)
+        XCTAssertEqual(profile.rules["a"], RomajiRule("あ", 3))
+        XCTAssertEqual(profile.converter.convert("abcd"), "あd")
+    }
+
+    func testAndroidImportAcceptsBomObjectWrappersAliasesAndEncodedMaps() throws {
+        let wrapperKeys = ["maps", "romajiMaps", "romaji_maps", "items", "list"]
+        for wrapperKey in wrapperKeys {
+            let json = """
+            {"\(wrapperKey)":[{"mapName":"\(wrapperKey)","data":"{\\"ka\\":{\\"kana\\":\\"か\\",\\"consume\\":2}}","autoSokuon":"false","autoN":true}]}
+            """
+            let preview = try RomajiImportPreview.parse(Data(([0xEF, 0xBB, 0xBF] + Array(json.utf8))))
+            XCTAssertEqual(preview.errors, [], wrapperKey)
+            XCTAssertEqual(preview.profiles.count, 1, wrapperKey)
+            XCTAssertEqual(preview.profiles[0].name, wrapperKey)
+            XCTAssertEqual(preview.profiles[0].rules["ka"], RomajiRule("か", 2))
+            XCTAssertFalse(preview.profiles[0].autoSokuon)
+            XCTAssertTrue(preview.profiles[0].autoN)
+        }
+
+        let singleObject = Data(#"{"title":"single","map":{"a":{"first":"あ","second":1}}}"#.utf8)
+        let profile = try RomajiLibrary.importAndroid(singleObject).first
+        XCTAssertEqual(profile?.name, "single")
+        XCTAssertEqual(profile?.rules["a"], RomajiRule("あ", 1))
+        XCTAssertEqual(profile?.autoSokuon, true)
+        XCTAssertEqual(profile?.autoN, true)
+
+        let mapJSON = #"{"ka":{"kana":"か","consume":2}}"#
+        let encodedMapJSON = String(decoding: try JSONEncoder().encode(mapJSON), as: UTF8.self)
+        for dataKey in ["mapData", "map", "data"] {
+            for payload in [mapJSON, encodedMapJSON] {
+                let item = "{\"name\":\"\(dataKey)\",\"\(dataKey)\":\(payload)}"
+                let decoded = try RomajiImportPreview.parse(Data(item.utf8))
+                XCTAssertEqual(decoded.errors, [], item)
+                XCTAssertEqual(decoded.profiles.first?.rules["ka"], RomajiRule("か", 2), item)
+            }
+        }
+
+        let fallback = Data(#"{"name":"fallback","mapData":"not JSON","map":{"x":{"kana":"え","consume":1}}}"#.utf8)
+        XCTAssertEqual(try RomajiLibrary.importAndroid(fallback).first?.rules["x"], RomajiRule("え", 1))
+        XCTAssertThrowsError(try RomajiImportPreview.parse(Data("[01]".utf8)))
+        XCTAssertThrowsError(try RomajiImportPreview.parse(Data("[{} ,]".utf8)))
+    }
+
+    func testAndroidImportReadsCompactObfuscatedAndDefaultUtf16ConsumptionRules() throws {
+        let data = Data(#"[{"title":"legacy","autoSokuon":false,"map":{"pp":{"c":"っ","d":2},"ab":{"a":"ん","b":1},"obey":{"z":"を","a":"あ","count":4,"other":2},"no":{"first":"の"},"😀":{"kana":"絵"},"bad":{"first":7,"second":1}}}]"#.utf8)
+        let profile = try XCTUnwrap(RomajiLibrary.importAndroid(data).first)
+
+        XCTAssertEqual(profile.rules["pp"], RomajiRule("っ", 2))
+        XCTAssertEqual(profile.rules["ab"], RomajiRule("ん", 1))
+        XCTAssertEqual(profile.rules["obey"], RomajiRule("を", 4))
+        XCTAssertEqual(profile.rules["no"], RomajiRule("の", 2))
+        XCTAssertEqual(profile.rules["😀"], RomajiRule("絵", 2))
+        XCTAssertNil(profile.rules["bad"])
+        XCTAssertEqual(profile.converter.convert("ppabno😀"), "っんbの絵")
+    }
+
+    func testAndroidImportKeepsValidRulesAndRejectsInvalidUnicodeConsumption() throws {
+        let mixed = Data(#"[{"name":"mixed","mapData":{"a":{"first":"あ","second":1},"bad":{"first":3,"second":"oops"}}}]"#.utf8)
+        let mixedPreview = try RomajiImportPreview.parse(mixed)
+        XCTAssertEqual(mixedPreview.errors, [])
+        XCTAssertEqual(mixedPreview.profiles.first?.rules, ["a": RomajiRule("あ", 1), "bad": RomajiRule("oops", 3)])
+
+        let splitScalar = Data(#"[{"name":"split","mapData":{"😀":{"kana":"絵","consume":1}}}]"#.utf8)
+        let splitPreview = try RomajiImportPreview.parse(splitScalar)
+        XCTAssertTrue(splitPreview.profiles.isEmpty)
+        XCTAssertEqual(splitPreview.errors.count, 1)
+        XCTAssertTrue(splitPreview.errors[0].hasPrefix("1件目:"))
+    }
+
+    func testAndroidImportUsesInt32ConsumptionSemanticsAndBoundsJSONValues() throws {
+        let numeric = Data(#"[{"name":"numeric","mapData":{"abc":{"kana":"あ","consume":2147483648}}}]"#.utf8)
+        XCTAssertEqual(try RomajiLibrary.importAndroid(numeric).first?.rules["abc"], RomajiRule("あ", 1))
+
+        let outOfRangeString = Data(#"[{"name":"string","mapData":{"abc":{"kana":"あ","consume":"2147483648"}}}]"#.utf8)
+        XCTAssertEqual(try RomajiLibrary.importAndroid(outOfRangeString).first?.rules["abc"], RomajiRule("あ", 3))
+
+        let tooManyValues = "[" + Array(repeating: "0", count: 100_001).joined(separator: ",") + "]"
+        XCTAssertThrowsError(try RomajiImportPreview.parse(Data(tooManyValues.utf8)))
     }
 }
