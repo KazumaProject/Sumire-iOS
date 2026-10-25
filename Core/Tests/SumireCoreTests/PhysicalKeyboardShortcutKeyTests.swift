@@ -5,21 +5,25 @@ import XCTest
 final class PhysicalKeyboardShortcutKeyTests: XCTestCase {
   func testCatalogMatchesAndroidShortcutKeyOrderAndHasUniqueKeyCodes() {
     let keys = PhysicalKeyboardShortcutKey.allCases
-    let expectedKeyCodes =
-      Array(29...54) + Array(7...16) + Array(131...142) + [
-        62, 66, 67, 112, 111, 61, 21, 22, 19, 20, 214, 213, 211, 212, 215, 218,
-        69, 70, 71, 72, 73, 74, 75, 55, 56, 76, 68, 216, 217,
-      ]
-    let expectedLabels =
-      Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ").map(String.init)
-      + Array("0123456789").map(String.init)
-      + (1...12).map { "F\($0)" }
-      + [
-        "Space", "Enter", "Backspace", "Delete", "Escape", "Tab", "Left", "Right", "Up",
-        "Down", "Henkan", "Muhenkan", "Zenkaku/Hankaku", "Eisu", "Katakana/Hiragana",
-        "Kana", "Minus", "Equals", "Left bracket", "Right bracket", "Backslash", "Semicolon",
-        "Apostrophe", "Comma", "Period", "Slash", "Grave", "Yen", "Ro",
-      ]
+    let letterKeyCodes = Array(29...54)
+    let digitKeyCodes = Array(7...16)
+    let functionKeyCodes = Array(131...142)
+    let punctuationKeyCodes: [Int] = [
+      62, 66, 67, 112, 111, 61, 21, 22, 19, 20, 214, 213, 211, 212, 215, 218,
+      69, 70, 71, 72, 73, 74, 75, 55, 56, 76, 68, 216, 217,
+    ]
+    let expectedKeyCodes = letterKeyCodes + digitKeyCodes + functionKeyCodes + punctuationKeyCodes
+
+    let letterLabels: [String] = Array("ABCDEFGHIJKLMNOPQRSTUVWXYZ").map { String($0) }
+    let digitLabels: [String] = Array("0123456789").map { String($0) }
+    let functionKeyLabels: [String] = (1...12).map { "F\($0)" }
+    let punctuationLabels: [String] = [
+      "Space", "Enter", "Backspace", "Delete", "Escape", "Tab", "Left", "Right", "Up",
+      "Down", "Henkan", "Muhenkan", "Zenkaku/Hankaku", "Eisu", "Katakana/Hiragana",
+      "Kana", "Minus", "Equals", "Left bracket", "Right bracket", "Backslash", "Semicolon",
+      "Apostrophe", "Comma", "Period", "Slash", "Grave", "Yen", "Ro",
+    ]
+    let expectedLabels = letterLabels + digitLabels + functionKeyLabels + punctuationLabels
 
     XCTAssertEqual(keys.count, 77)
     XCTAssertEqual(keys.map(\.keyCode), expectedKeyCodes)
