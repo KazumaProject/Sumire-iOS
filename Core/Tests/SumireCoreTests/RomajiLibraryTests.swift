@@ -138,4 +138,39 @@ final class RomajiLibraryTests: XCTestCase {
         let tooManyValues = "[" + Array(repeating: "0", count: 100_001).joined(separator: ",") + "]"
         XCTAssertThrowsError(try RomajiImportPreview.parse(Data(tooManyValues.utf8)))
     }
+
+    func testAndroidImportPreservesNumericJSONLexemesWhenNarrowingToInt32() throws {
+        let cases: [(key: String, number: String, consume: Int, output: String)] = [
+            ("a", "9007199254740995", 3, "あd"),
+            ("a", "18446744073709551619", 3, "あd"),
+            ("a", "9007199254740995.9", 3, "あd"),
+            ("abc", "1e9999", 1, "あbcd"),
+            ("abc", "1e10000", 3, "あd")
+        ]
+
+        for fixture in cases {
+            let json = #"[{"name":"numeric","mapData":{"\#(fixture.key)":{"kana":"あ","consume":\#(fixture.number)}}}]"#
+            let preview = try RomajiImportPreview.parse(Data(json.utf8))
+            XCTAssertEqual(preview.errors, [], fixture.number)
+            let profile = try XCTUnwrap(preview.profiles.first, fixture.number)
+            XCTAssertEqual(profile.rules[fixture.key], RomajiRule("あ", fixture.consume), fixture.number)
+            XCTAssertEqual(profile.converter.convert("abcd"), fixture.output, fixture.number)
+        }
+    }
+
+    func testAndroidImportPreservesDeletionProtectionAndLegacyProfilesDefaultToDeletable() throws {
+        let data = Data(#"[{"name":"protected","isDeletable":false,"mapData":{"a":{"kana":"あ","consume":1}}},{"name":"custom","mapData":{"ka":{"kana":"か","consume":2}}}]"#.utf8)
+        let profiles = try RomajiLibrary.importAndroid(data)
+        XCTAssertEqual(profiles.map(\.name), ["protected", "custom"])
+        XCTAssertFalse(profiles[0].isDeletable)
+        XCTAssertTrue(profiles[1].isDeletable)
+
+        let encodedProtected = try JSONEncoder().encode(profiles[0])
+        XCTAssertFalse(try JSONDecoder().decode(RomajiProfile.self, from: encodedProtected).isDeletable)
+
+        var oldStoredProfile = try XCTUnwrap(JSONSerialization.jsonObject(with: JSONEncoder().encode(profiles[1])) as? [String: Any])
+        oldStoredProfile.removeValue(forKey: "isDeletable")
+        let oldStoredData = try JSONSerialization.data(withJSONObject: oldStoredProfile)
+        XCTAssertTrue(try JSONDecoder().decode(RomajiProfile.self, from: oldStoredData).isDeletable)
+    }
 }

@@ -4,10 +4,35 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
     public var id = UUID()
     public var name: String
     public var rules: [String: RomajiRule]
+    public var isDeletable: Bool
     public var autoSokuon: Bool
     public var autoN: Bool
-    public init(name: String, rules: [String: RomajiRule], autoSokuon: Bool = true, autoN: Bool = true) {
-        self.name = name; self.rules = rules; self.autoSokuon = autoSokuon; self.autoN = autoN
+    public init(
+        name: String,
+        rules: [String: RomajiRule],
+        isDeletable: Bool = true,
+        autoSokuon: Bool = true,
+        autoN: Bool = true
+    ) {
+        self.name = name
+        self.rules = rules
+        self.isDeletable = isDeletable
+        self.autoSokuon = autoSokuon
+        self.autoN = autoN
+    }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, rules, isDeletable, autoSokuon, autoN
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        rules = try container.decode([String: RomajiRule].self, forKey: .rules)
+        isDeletable = try container.decodeIfPresent(Bool.self, forKey: .isDeletable) ?? true
+        autoSokuon = try container.decodeIfPresent(Bool.self, forKey: .autoSokuon) ?? true
+        autoN = try container.decodeIfPresent(Bool.self, forKey: .autoN) ?? true
     }
     public var converter: RomajiConverter { RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN) }
     public func validate() throws {
@@ -131,6 +156,7 @@ public struct RomajiImportPreview {
                 let profile = RomajiProfile(
                     name: name,
                     rules: rules,
+                    isDeletable: readBoolean(in: fields, key: "isDeletable") ?? true,
                     autoSokuon: readBoolean(in: fields, key: "autoSokuon") ?? true,
                     autoN: readBoolean(in: fields, key: "autoN") ?? true
                 )
@@ -228,7 +254,7 @@ private indirect enum AndroidRomajiJSONValue {
     case object([(String, AndroidRomajiJSONValue)])
     case array([AndroidRomajiJSONValue])
     case string(String)
-    case number(Double)
+    case number(String)
     case boolean(Bool)
     case null
 
@@ -245,9 +271,7 @@ private indirect enum AndroidRomajiJSONValue {
     func androidIntegerValue(allowDecimalString: Bool) -> Int? {
         switch self {
         case .number(let value):
-            guard value.isFinite else { return nil }
-            let wrapped = value.rounded(.towardZero).truncatingRemainder(dividingBy: 4_294_967_296)
-            return Int(Int32(truncatingIfNeeded: Int64(wrapped)))
+            return Self.androidIntegerValue(forJSONNumber: value)
         case .string(let value):
             if let integer = Int32(value) { return Int(integer) }
             guard allowDecimalString, let number = Double(value), number.isFinite else { return nil }
@@ -257,6 +281,89 @@ private indirect enum AndroidRomajiJSONValue {
         default:
             return nil
         }
+    }
+
+    /// Gson's LazilyParsedNumber.intValue() narrows integer and BigDecimal values to 32 bits.
+    /// Keep the JSON number's decimal digits intact so values above Double's exact range do not
+    /// change before that narrowing step.
+    private static func androidIntegerValue(forJSONNumber value: String) -> Int? {
+        let bytes = Array(value.utf8)
+        // Gson 2.13.1's BigDecimal fallback rejects number strings longer than 10,000 chars.
+        guard !bytes.isEmpty, bytes.count <= 10_000 else { return nil }
+
+        var index = 0
+        let isNegative = bytes[index] == 0x2D
+        if isNegative { index += 1 }
+        guard index < bytes.count else { return nil }
+
+        var digits: [UInt8] = []
+        if bytes[index] == 0x30 {
+            digits.append(bytes[index])
+            index += 1
+            // JSON numbers cannot have leading zeroes.
+            if index < bytes.count, (0x30...0x39).contains(bytes[index]) { return nil }
+        } else {
+            guard (0x31...0x39).contains(bytes[index]) else { return nil }
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                digits.append(bytes[index])
+                index += 1
+            }
+        }
+
+        var fractionalDigitCount = 0
+        if index < bytes.count, bytes[index] == 0x2E {
+            index += 1
+            let fractionStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                digits.append(bytes[index])
+                index += 1
+            }
+            guard index > fractionStart else { return nil }
+            fractionalDigitCount = index - fractionStart
+        }
+
+        var exponent = 0
+        if index < bytes.count, (bytes[index] == 0x65 || bytes[index] == 0x45) {
+            index += 1
+            var exponentIsNegative = false
+            if index < bytes.count, (bytes[index] == 0x2B || bytes[index] == 0x2D) {
+                exponentIsNegative = bytes[index] == 0x2D
+                index += 1
+            }
+            let exponentStart = index
+            var magnitude = 0
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                magnitude = min(20_001, magnitude * 10 + Int(bytes[index] - 0x30))
+                index += 1
+            }
+            guard index > exponentStart, magnitude <= 20_000 else { return nil }
+            exponent = exponentIsNegative ? -magnitude : magnitude
+        }
+        guard index == bytes.count, !digits.isEmpty else { return nil }
+
+        // Gson's bounded BigDecimal fallback rejects absolute scales of 10,000 or more.
+        let scale = fractionalDigitCount - exponent
+        guard (-9_999...9_999).contains(scale) else { return nil }
+
+        // BigDecimal.intValue() truncates toward zero, then returns the low 32 bits.
+        let discardedDigits = max(scale, 0)
+        let retainedDigitCount = max(digits.count - discardedDigits, 0)
+        let modulus: UInt64 = 4_294_967_296
+        var remainder: UInt64 = 0
+        for byte in digits.prefix(retainedDigitCount) {
+            remainder = (remainder * 10 + UInt64(byte - 0x30)) % modulus
+        }
+        if scale < 0 {
+            var power = -scale
+            var factor: UInt64 = 10
+            while power > 0 {
+                if power & 1 == 1 { remainder = (remainder * factor) % modulus }
+                factor = (factor * factor) % modulus
+                power >>= 1
+            }
+        }
+        if isNegative, remainder != 0 { remainder = modulus - remainder }
+        return Int(Int32(bitPattern: UInt32(remainder)))
     }
 
 }
@@ -365,10 +472,35 @@ private struct AndroidRomajiJSONParser {
 
     private mutating func parseNumber() throws -> AndroidRomajiJSONValue {
         let start = index
-        while index < bytes.count && !isValueDelimiter(bytes[index]) { index += 1 }
-        guard start < index else { throw PersonalDataError("JSON形式が不正です") }
-        let token = Data(bytes[start..<index])
-        return .number(try decoder.decode(Double.self, from: token))
+        _ = consume(0x2D) // optional minus sign
+        guard index < bytes.count else { throw PersonalDataError("JSON形式が不正です") }
+
+        if consume(0x30) {
+            if index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                throw PersonalDataError("JSON形式が不正です")
+            }
+        } else {
+            guard (0x31...0x39).contains(bytes[index]) else { throw PersonalDataError("JSON形式が不正です") }
+            index += 1
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+        }
+
+        if consume(0x2E) {
+            let fractionStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+            guard index > fractionStart else { throw PersonalDataError("JSON形式が不正です") }
+        }
+
+        if index < bytes.count, (bytes[index] == 0x65 || bytes[index] == 0x45) {
+            index += 1
+            if index < bytes.count, (bytes[index] == 0x2B || bytes[index] == 0x2D) { index += 1 }
+            let exponentStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+            guard index > exponentStart else { throw PersonalDataError("JSON形式が不正です") }
+        }
+
+        let token = String(decoding: bytes[start..<index], as: UTF8.self)
+        return .number(token)
     }
 
     private mutating func consumeLiteral(_ literal: [UInt8]) throws {
@@ -394,10 +526,4 @@ private struct AndroidRomajiJSONParser {
         }
     }
 
-    private func isValueDelimiter(_ byte: UInt8) -> Bool {
-        switch byte {
-        case 0x20, 0x09, 0x0A, 0x0D, 0x2C, 0x5D, 0x7D: return true
-        default: return false
-        }
-    }
 }
