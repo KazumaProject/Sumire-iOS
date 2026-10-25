@@ -88,6 +88,7 @@ struct HomeView: View {
         case .customKeyboard: CustomKeyboardSettings()
         case .romaji: RomajiSettings()
         case .specialKeys: SpecialKeySettingsView()
+        case .physicalShortcuts: PhysicalKeyboardShortcutSettingsView()
         case .flickStyle: detail(title: item.title) { FlickStyleSettingsView() }
         case .touchFeedback: detail(title: item.title) { TouchFeedbackSettingsView() }
         case .appearance: KeyAppearanceSettings()

@@ -125,7 +125,7 @@ public enum PhysicalShortcutMatcher {
     shortcuts: [PhysicalKeyboardShortcutItem],
     currentContext: PhysicalKeyboardShortcutContext,
     keyCode: Int,
-    scanCode: Int,
+    scanCode: Int?,
     ctrl: Bool,
     shift: Bool,
     alt: Bool,
@@ -134,6 +134,8 @@ public enum PhysicalShortcutMatcher {
     let candidates = shortcuts.filter { item in
       item.enabled && item.keyCode == keyCode && item.ctrl == ctrl && item.shift == shift
         && item.alt == alt && item.meta == meta
+        // A platform that cannot observe a hardware scan code may still match
+        // Android's wildcard bindings, but must not guess at scan-specific ones.
         && (item.scanCode == nil || item.scanCode == scanCode)
     }
 
