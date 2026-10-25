@@ -71,6 +71,10 @@ public enum PhysicalKeyboardShortcutHIDKeyMap {
       return 214
     case 0x8B:  // International5 (Muhenkan)
       return 213
+    case 0x90:  // LANG1 (Kana switch on Japanese Apple keyboards)
+      return 218
+    case 0x91:  // LANG2 (Alphanumeric switch on Japanese Apple keyboards)
+      return 212
     case 0x94:  // Lang5 (Zenkaku/Hankaku)
       return 211
     default:

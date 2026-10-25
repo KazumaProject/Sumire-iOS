@@ -43,6 +43,8 @@ final class PhysicalKeyboardShortcutHIDKeyMapTests: XCTestCase {
       (0x89, 216),  // Yen
       (0x8A, 214),  // Henkan
       (0x8B, 213),  // Muhenkan
+      (0x90, 218),  // LANG1 / Kana switch
+      (0x91, 212),  // LANG2 / Alphanumeric switch (Eisu)
       (0x94, 211),  // Zenkaku/Hankaku
     ]
 
@@ -65,7 +67,7 @@ final class PhysicalKeyboardShortcutHIDKeyMapTests: XCTestCase {
   }
 
   func testDoesNotGuessForUnsupportedOrModifierUsages() {
-    for usage in [0, 0x32, 0x46, 0x65, 0x90, 0xE0, 0xE7, 0xFFFF] {
+    for usage in [0, 0x32, 0x46, 0x65, 0x92, 0x93, 0xE0, 0xE7, 0xFFFF] {
       XCTAssertNil(PhysicalKeyboardShortcutHIDKeyMap.androidKeyCode(for: usage))
     }
   }
