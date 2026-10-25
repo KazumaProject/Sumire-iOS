@@ -32,8 +32,8 @@ final class FlickStyleTouchAdapterTests: XCTestCase {
             feedback.save(defaults: defaults)
             surface = Sumire.KeyboardSurface()
             surface.settingsDefaults = defaults
-            surface.updateMarkedText = { [weak self] in self?.reading = $0 }
-            surface.updateMarkedSelection = { [weak self] text, _ in self?.reading = text }
+            surface.updateMarkedText = { [weak self] text, _ in self?.reading = text }
+            surface.updateMarkedSelection = { [weak self] text, _, _ in self?.reading = text }
             surface.reloadAppearance()
             container.addSubview(surface)
             NSLayoutConstraint.activate([surface.widthAnchor.constraint(equalToConstant: 390),

@@ -7,6 +7,11 @@ final class CustomKeyActionTests: XCTestCase {
         XCTAssertEqual(CustomKeyAction.tap("Text:Delete", targets: targets), .text("Delete"))
         XCTAssertEqual(CustomKeyAction.tap("InputText:🌸", targets: targets), .inputText("🌸"))
         XCTAssertEqual(CustomKeyAction.tap("Delete", targets: targets), .command(.delete))
+        XCTAssertEqual(CustomKeyAction.tap("DeleteAfterCursor", targets: targets), .command(.deleteAfterCursor))
+        XCTAssertEqual(CustomKeyAction.tap("DeleteAfterCursorUntilSymbol", targets: targets), .command(.deleteAfterCursorUntilBoundary))
+        XCTAssertEqual(CustomKeyAction.tap("UndoLastDelete", targets: targets), .command(.undoDelete))
+        XCTAssertEqual(CustomKeyAction.flick(type: "DELETE_AFTER_CURSOR", value: nil, targets: targets), .command(.deleteAfterCursor))
+        XCTAssertEqual(CustomKeyAction.flick(type: "DELETE_AFTER_CURSOR_UNTIL_SYMBOL", value: nil, targets: targets), .command(.deleteAfterCursorUntilBoundary))
         XCTAssertEqual(CustomKeyAction.flick(type: "DELETE", value: "表示名", targets: targets), .command(.delete))
         XCTAssertEqual(CustomKeyAction.tap("MoveCustomKeyboardTab", targets: targets), .command(.moveCustomKeyboardTab))
         XCTAssertEqual(CustomKeyAction.flick(type: "MoveCustomKeyboardTab", value: "⇄", targets: targets), .command(.moveCustomKeyboardTab))
@@ -18,6 +23,8 @@ final class CustomKeyActionTests: XCTestCase {
         let targets = CustomLayoutTargets(layouts: [])
         let cases: [(String, String, CustomKeyAction.Command)] = [
             ("MoveCursorRight", "MOVE_CURSOR_RIGHT", .cursorRight),
+            ("DeleteAfterCursorUntilSymbol", "DELETE_AFTER_CURSOR_UNTIL_SYMBOL", .deleteAfterCursorUntilBoundary),
+            ("UndoLastDelete", "UndoLastDelete", .undoDelete),
             ("DeleteUntilSymbol", "DELETE_UNTIL_SYMBOL", .deleteUntilBoundary),
             ("ShowEmojiKeyboard", "SHOW_EMOJI_KEYBOARD", .openSymbols),
             ("SwitchToKanaLayout", "SWITCH_TO_KANA_LAYOUT", .switchKana),

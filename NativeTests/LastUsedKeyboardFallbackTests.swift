@@ -18,8 +18,8 @@ final class LastUsedKeyboardFallbackTests: XCTestCase {
         var writes: [[String]] = []
         surface.onSettingsWritten = { writes.append($0) }
         var reading = ""
-        surface.updateMarkedText = { reading = $0 }
-        surface.updateMarkedSelection = { text, _ in reading = text }
+        surface.updateMarkedText = { text, _ in reading = text }
+        surface.updateMarkedSelection = { text, _, _ in reading = text }
         try KeyboardSelection(ids: ["builtin:gojuon"]).save(defaults: defaults)
         surface.reloadAppearance()
         XCTAssertEqual(defaults.string(forKey: "keyboard.lastUsed"), "builtin:gojuon")

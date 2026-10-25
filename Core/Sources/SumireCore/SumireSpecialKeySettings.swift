@@ -146,8 +146,6 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
         case .selectAll: return "iOS のキーボード拡張には、入力先の全文を選択する公開 API がありません"
         case .cursorUp, .cursorDown: return "iOS のキーボード拡張には、入力先の表示行を上下に移動する公開 API がありません。現在未対応です"
         case .copy, .cut: return "入力先の選択文字をコピー・切り取りする操作は現在未対応です"
-        case .undoDelete: return "直前の削除履歴から復元する操作は現在未対応です"
-        case .deleteAfterCursorUntilBoundary: return "カーソル後を区切りまで削除する操作は現在未対応です"
         case .keyboardMenu: return key == .keyboardSwitch && gesture == .longPress ? nil : "配列選択メニューはキーボード切替キーの長押しから開きます"
         default: return nil
         }

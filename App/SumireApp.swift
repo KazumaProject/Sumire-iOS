@@ -5,6 +5,43 @@ import SumireCore
 @main
 struct SumireApp: App {
     @StateObject private var personalLibrary = PersonalLibrary()
+
+    init() {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        let defaults = KeyboardSettings.appDefaults
+        if arguments.contains("--sumire-test-restore-keyboard-state") {
+            var status = "snapshot-missing"
+            if let data = defaults.data(forKey: KeyboardUITestSettingsSnapshot.storageKey),
+               let snapshot = try? JSONDecoder().decode(KeyboardUITestSettingsSnapshot.self, from: data) {
+                do {
+                    try snapshot.restore(defaults: defaults)
+                    status = "restored"
+                } catch {
+                    status = "restore-failed"
+                }
+            } else if defaults.data(forKey: KeyboardUITestSettingsSnapshot.storageKey) != nil {
+                status = "snapshot-invalid"
+            }
+            defaults.removeObject(forKey: KeyboardUITestSettingsSnapshot.storageKey)
+            defaults.set(status, forKey: KeyboardUITestSettingsSnapshot.restoreStatusKey)
+            _ = defaults.synchronize()
+        }
+        if arguments.contains("--sumire-test-capture-keyboard-state") {
+            defaults.removeObject(forKey: KeyboardUITestSettingsSnapshot.restoreStatusKey)
+            if let data = try? JSONEncoder().encode(KeyboardUITestSettingsSnapshot.capture(defaults: defaults)) {
+                defaults.set(data, forKey: KeyboardUITestSettingsSnapshot.storageKey)
+                _ = defaults.synchronize()
+            }
+        }
+        if let selection = arguments.first(where: { $0.hasPrefix("--sumire-test-last-used-keyboard=") }) {
+            let value = String(selection.dropFirst("--sumire-test-last-used-keyboard=".count))
+            defaults.set(value, forKey: "keyboard.lastUsed")
+            _ = defaults.synchronize()
+        }
+#endif
+    }
+
     var body: some Scene { WindowGroup { HomeView(personalLibrary: personalLibrary) } }
 }
 
@@ -248,13 +285,14 @@ struct InputHarness: UIViewRepresentable {
         }
         surface.reloadSizing()
         text.delegate = coordinator
-        surface.beforeInput = { [weak coordinator] in coordinator?.validateContext() }
+        surface.beforeInput = { [weak coordinator] in coordinator?.validateContext() ?? false }
         surface.insert = { [weak text, weak coordinator] value in
             coordinator?.perform { text?.insertText(value) }
         }
         surface.delete = { [weak text, weak coordinator] in
             coordinator?.perform { text?.deleteBackward() }
         }
+        Self.configureForwardDelete(surface: surface, text: text, coordinator: coordinator)
         surface.deleteUntilBoundary = { [weak text, weak coordinator] in
             coordinator?.perform {
                 guard let text else { return }
@@ -265,7 +303,7 @@ struct InputHarness: UIViewRepresentable {
                 for _ in 0..<count { text.deleteBackward() }
             }
         }
-        let mark: (String, NSRange) -> Void = { [weak text, weak coordinator] value, selection in
+        let mark: (String, NSRange, UInt64) -> Void = { [weak text, weak coordinator] value, selection, _ in
             coordinator?.perform {
                 guard let text else { return }
                 text.setMarkedText(value, selectedRange: selection)
@@ -273,7 +311,7 @@ struct InputHarness: UIViewRepresentable {
             }
         }
         surface.updateMarkedSelection = mark
-        surface.updateMarkedText = { mark($0, NSRange(location: $0.utf16.count, length: 0)) }
+        surface.updateMarkedText = { mark($0, NSRange(location: $0.utf16.count, length: 0), $1) }
         surface.commitMarkedText = { [weak text, weak coordinator] value in
             coordinator?.perform {
                 guard let text else { return }
@@ -393,8 +431,9 @@ struct InputHarness: UIViewRepresentable {
             changing = wasChanging
             updateSelectionTestState()
         }
-        func validateContext() {
-            guard !changing, let textView else { return }
+        @discardableResult
+        func validateContext() -> Bool {
+            guard !changing, let textView else { return false }
             let textUnchanged = expectedText.utf16.elementsEqual((textView.text ?? "").utf16)
             if !textUnchanged || expectedSelection != textView.selectedRange {
                 if textUnchanged, textView.selectedRange.length == 0,
@@ -411,7 +450,7 @@ struct InputHarness: UIViewRepresentable {
                             accepted = surface.synchronizeCompositionSelection(markedText: value,
                                 selection: NSRange(location: caret - start, length: 0))
                         }
-                        if accepted { return }
+                        if accepted { return true }
                     }
                 }
                 appearanceMarkedRange = nil; appearanceText = nil; appearanceSelection = nil
@@ -419,7 +458,9 @@ struct InputHarness: UIViewRepresentable {
                 expectedText = textView.text
                 expectedSelection = textView.selectedRange
                 updateSelectionTestState()
+                return false
             }
+            return true
         }
         func textViewDidChange(_ textView: UITextView) { validateContext() }
         func textViewDidChangeSelection(_ textView: UITextView) { validateContext() }
@@ -446,5 +487,33 @@ struct InputHarness: UIViewRepresentable {
             }
         }
         let surface = KeyboardSurface(frame: CGRect(x: 0, y: 0, width: 390, height: 464))
+    }
+
+    static func deleteForward(in text: UITextView?) {
+        guard let text else { return }
+        let selection = text.selectedRange
+        let contents = text.text as NSString
+        let selectedText = selection.length > 0 && NSMaxRange(selection) <= contents.length
+            ? contents.substring(with: selection) : nil
+        let contextAfterInput = selection.location <= contents.length
+            ? contents.substring(from: selection.location) : nil
+        switch ForwardDeletePlanner.plan(selectedText: selectedText, contextAfterInput: contextAfterInput) {
+        case .deleteSelection:
+            text.deleteBackward()
+        case .deleteAfterCursor(let offset):
+            guard let selectedRange = text.selectedTextRange,
+                  let destination = text.position(from: selectedRange.start, offset: offset),
+                  let collapsedRange = text.textRange(from: destination, to: destination) else { return }
+            text.selectedTextRange = collapsedRange
+            text.deleteBackward()
+        case .noOp:
+            return
+        }
+    }
+
+    static func configureForwardDelete(surface: KeyboardSurface, text: UITextView, coordinator: Coordinator) {
+        surface.deleteForward = { [weak text, weak coordinator] in
+            coordinator?.perform { deleteForward(in: text) }
+        }
     }
 }

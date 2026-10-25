@@ -54,6 +54,23 @@ final class CustomDoubleTapControllerTests: XCTestCase {
         controller.cancel()
     }
 
+    func testInterruptedTapCannotCompleteDoubleTapAcrossSuppressedGesture() {
+        let controller = CustomDoubleTapController()
+        var delivered: [CustomKeyAction] = []
+        controller.onAction = { delivered.append($0) }
+        let binding = CustomDoubleTapBinding(action: .text("double"))
+
+        controller.committedTap(keyIdentity: "key", action: .text("single"), binding: binding)
+        controller.interrupt() // A tap-only forward-delete hold consumes this gesture.
+        XCTAssertEqual(delivered, [.text("single")])
+
+        controller.committedTap(keyIdentity: "key", action: .text("single"), binding: binding)
+        controller.interrupt()
+        XCTAssertEqual(delivered, [.text("single"), .text("single")])
+        XCTAssertFalse(delivered.contains(.text("double")))
+        controller.cancel()
+    }
+
     func testReplacedGridCannotDeliverDelayedTap() {
         let controller = CustomDoubleTapController()
         let delivered = expectation(description: "cancelled tap")

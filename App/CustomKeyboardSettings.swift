@@ -1,6 +1,7 @@
 import SwiftUI
 import UIKit
 import UniformTypeIdentifiers
+import CryptoKit
 import SumireCore
 
 struct CustomKeyboardSettings: View {
@@ -11,15 +12,17 @@ struct CustomKeyboardSettings: View {
     @State private var layouts: [ImportedCustomLayout] = []
     @State private var baseline: Data?
     @State private var loaded = false
+#if DEBUG
+    @State private var keyboardUITestState = ""
+#endif
     @State private var importing = false
     @State private var editingJSON = false
     @State private var json = ""
-    @State private var preview: CustomLayoutImportPreview?
-    @State private var showingPreview = false
+    @State private var previewPresentation: ImportPreviewPresentation?
     @State private var error: String?
     private func stage(_ data: Data) {
-        do { preview = try CustomLayoutImportPreview.parse(data); showingPreview = true; error = nil }
-        catch { self.error = error.localizedDescription }
+        do { previewPresentation = ImportPreviewPresentation(preview: try CustomLayoutImportPreview.parse(data)); error = nil }
+        catch { previewPresentation = nil; self.error = error.localizedDescription }
     }
     @discardableResult private func save(_ next: CustomKeyboardLibrary) -> Bool {
         do {
@@ -35,9 +38,18 @@ struct CustomKeyboardSettings: View {
             return true
         } catch { self.error = error.localizedDescription; return false }
     }
+
     var body: some View {
         NavigationStack {
             List {
+#if DEBUG
+                if ProcessInfo.processInfo.arguments.contains("--sumire-test-export-keyboard-state") {
+                    Section {
+                        Text(loaded ? keyboardUITestState : "loading")
+                            .accessibilityIdentifier("sumire-test-keyboard-state")
+                    }
+                }
+#endif
                 if let error { Text(error).foregroundStyle(.red) }
                 Section {
                     NavigationLink("新しい配列を作成") {
@@ -84,6 +96,7 @@ struct CustomKeyboardSettings: View {
                                 }
                             }
                         }
+                        .accessibilityIdentifier("custom-layout-definition:" + layout.id)
                     }
                 }
             }
@@ -94,6 +107,13 @@ struct CustomKeyboardSettings: View {
                     library = try CustomKeyboardLibrary.load(defaults: KeyboardSettings.appDefaults)
                     layouts = try library.layouts()
                     baseline = KeyboardSettings.appDefaults.data(forKey: CustomKeyboardLibrary.storageKey)
+#if DEBUG
+                    let testDefaults = KeyboardSettings.appDefaults
+                    let restoreStatus = testDefaults.string(forKey: KeyboardUITestSettingsSnapshot.restoreStatusKey) ?? "none"
+                    keyboardUITestState = restoreStatus + "|" + KeyboardUITestSettingsSnapshot.capture(defaults: testDefaults).fingerprint
+                    testDefaults.removeObject(forKey: KeyboardUITestSettingsSnapshot.restoreStatusKey)
+                    _ = testDefaults.synchronize()
+#endif
                     loaded = true
                 } catch { self.error = error.localizedDescription }
             }
@@ -125,31 +145,93 @@ struct CustomKeyboardSettings: View {
                     stage(data)
                 } catch { self.error = error.localizedDescription }
             }
-            .sheet(isPresented: $showingPreview) {
+            .sheet(item: $previewPresentation) { presentation in
+                let preview = presentation.preview
                 NavigationStack {
                     List {
-                        if let preview {
-                            Text("有効：\(preview.layouts.count)件／不正：\(preview.errors.count)件")
-                            ForEach(preview.layouts) { layout in
-                                NavigationLink(layout.name) { CustomLayoutDetails(layout: layout, allLayouts: layouts + preview.layouts, remove: nil) }
-                            }
-                            ForEach(Array((preview.errors + preview.warnings).enumerated()), id: \.offset) { _, text in Text(text) }
-                            if let error { Text(error).foregroundStyle(.red) }
-                            Button("有効な配列を追加") {
-                                do {
-                                    var next = library; try next.append(preview.layouts)
-                                    if save(next) { showingPreview = false; self.preview = nil }
-                                } catch { self.error = error.localizedDescription }
-                            }.disabled(preview.layouts.isEmpty)
+                        Text("有効：\(preview.layouts.count)件／不正：\(preview.errors.count)件")
+                        ForEach(preview.layouts) { layout in
+                            NavigationLink(layout.name) { CustomLayoutDetails(layout: layout, allLayouts: layouts + preview.layouts, remove: nil) }
                         }
+                        ForEach(Array((preview.errors + preview.warnings).enumerated()), id: \.offset) { _, text in Text(text) }
+                        if let error { Text(error).foregroundStyle(.red) }
+                        Button("有効な配列を追加") {
+                            do {
+                                var next = library; try next.append(preview.layouts)
+                                if save(next) { previewPresentation = nil }
+                            } catch { self.error = error.localizedDescription }
+                        }.disabled(preview.layouts.isEmpty)
                     }
                     .navigationTitle("配列の取り込み確認")
-                    .toolbar { Button("キャンセル") { showingPreview = false; preview = nil } }
+                    .toolbar { Button("キャンセル") { previewPresentation = nil } }
                 }
             }
         }
     }
 }
+
+private struct ImportPreviewPresentation: Identifiable {
+    let id = UUID()
+    let preview: CustomLayoutImportPreview
+}
+
+#if DEBUG
+struct KeyboardUITestSettingsSnapshot: Codable {
+    static let storageKey = "sumire.test.keyboardSettingsSnapshot"
+    static let restoreStatusKey = "sumire.test.keyboardSettingsRestoreStatus"
+
+    let customKeyboardLibraryData: Data?
+    let lastUsedKeyboardID: String?
+    let keyboardSelectionExisted: Bool
+    let keyboardSelectionData: Data?
+
+    static func capture(defaults: UserDefaults) -> Self {
+        Self(
+            customKeyboardLibraryData: defaults.data(forKey: CustomKeyboardLibrary.storageKey),
+            lastUsedKeyboardID: defaults.string(forKey: "keyboard.lastUsed"),
+            keyboardSelectionExisted: defaults.object(forKey: KeyboardSelection.storageKey) != nil,
+            keyboardSelectionData: defaults.data(forKey: KeyboardSelection.storageKey)
+        )
+    }
+
+    var fingerprint: String {
+        "custom=\(Self.digest(customKeyboardLibraryData));last=\(Self.digest(lastUsedKeyboardID));selection=\(keyboardSelectionExisted ? "present" : "absent"),\(Self.digest(keyboardSelectionData))"
+    }
+
+    private static func digest(_ data: Data?) -> String {
+        guard let data else { return "none" }
+        return SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
+    }
+
+    private static func digest(_ value: String?) -> String {
+        guard let value else { return "none" }
+        return digest(Data(value.utf8))
+    }
+
+    func restore(defaults: UserDefaults) throws {
+        if let customKeyboardLibraryData {
+            defaults.set(customKeyboardLibraryData, forKey: CustomKeyboardLibrary.storageKey)
+        } else {
+            defaults.removeObject(forKey: CustomKeyboardLibrary.storageKey)
+        }
+
+        if keyboardSelectionExisted {
+            guard let keyboardSelectionData else {
+                throw PersonalDataError("キーボード選択状態を復元できません")
+            }
+            defaults.set(keyboardSelectionData, forKey: KeyboardSelection.storageKey)
+        } else {
+            defaults.removeObject(forKey: KeyboardSelection.storageKey)
+        }
+
+        if let lastUsedKeyboardID {
+            defaults.set(lastUsedKeyboardID, forKey: "keyboard.lastUsed")
+        } else {
+            defaults.removeObject(forKey: "keyboard.lastUsed")
+        }
+    }
+}
+#endif
 
 private struct CustomLayoutDetails: View {
     @Environment(\.dismiss) private var dismiss
