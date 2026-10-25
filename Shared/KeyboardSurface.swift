@@ -517,6 +517,34 @@ final class KeyboardSurface: UIInputView {
     private var touchFeedback = TouchFeedbackSettings()
     private let stack = UIStackView()
     private let status = UILabel()
+#if DEBUG
+    private let lifecycleDiagnosticLabel = UILabel()
+    private let lifecycleSwitchButton = UIButton(type: .system)
+    /// Debug-only accessibility channel for lifecycle diagnostics. It carries
+    /// fixed event names and booleans, never input text or document identifiers.
+    var lifecycleDiagnostics: String? {
+        didSet { lifecycleDiagnosticLabel.accessibilityLabel = lifecycleDiagnostics }
+    }
+
+    func exposeLifecycleSwitcherForDiagnostics(action: @escaping () -> Void) {
+        lifecycleSwitchButton.translatesAutoresizingMaskIntoConstraints = false
+        lifecycleSwitchButton.alpha = 1
+        lifecycleSwitchButton.accessibilityIdentifier = "sumire-debug-advance-ime"
+        lifecycleSwitchButton.accessibilityLabel = "Debug keyboard lifecycle switch"
+        lifecycleSwitchButton.isUserInteractionEnabled = true
+        lifecycleSwitchButton.setTitle("IME", for: .normal)
+        lifecycleSwitchButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        lifecycleSwitchButton.backgroundColor = .systemOrange
+        lifecycleSwitchButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(lifecycleSwitchButton)
+        NSLayoutConstraint.activate([
+            lifecycleSwitchButton.topAnchor.constraint(equalTo: topAnchor),
+            lifecycleSwitchButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            lifecycleSwitchButton.widthAnchor.constraint(equalToConstant: 44),
+            lifecycleSwitchButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+#endif
     private var expandedCandidates: UIView?
     var textMacroContextAllowed = false
     var textMacroSelectionAvailable = false
@@ -535,6 +563,15 @@ final class KeyboardSurface: UIInputView {
         stack.spacing = geometry.rowSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+#if DEBUG
+        lifecycleDiagnosticLabel.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        lifecycleDiagnosticLabel.alpha = 1
+        lifecycleDiagnosticLabel.isUserInteractionEnabled = false
+        lifecycleDiagnosticLabel.isAccessibilityElement = true
+        lifecycleDiagnosticLabel.accessibilityIdentifier = "sumire-lifecycle-diagnostic"
+        lifecycleDiagnosticLabel.accessibilityLabel = "diagnostic-pending"
+        addSubview(lifecycleDiagnosticLabel)
+#endif
         stackLeading = stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: geometry.horizontalInset)
         stackTrailing = stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -geometry.horizontalInset)
         NSLayoutConstraint.activate([
