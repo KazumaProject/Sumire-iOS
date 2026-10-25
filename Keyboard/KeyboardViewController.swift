@@ -30,14 +30,27 @@ final class KeyboardViewController: UIInputViewController {
     private var isPreparingAppearance = false
     private var hasReachedViewDidAppear = false
     private var appearanceContextValidated = false
+    private var hostWillResignActiveObserver: NSObjectProtocol?
 #if DEBUG
     private let compositionLogger = Logger(subsystem: "com.kazumaproject.sumire.ios", category: "CompositionLease")
     private var compositionTraceControllerIdentifier: UInt64 = 0
 #endif
     private var keyboardHeight: NSLayoutConstraint!
     private var settingsAccess: KeyboardSettingsAccess?
+    deinit {
+        if let hostWillResignActiveObserver {
+            NotificationCenter.default.removeObserver(hostWillResignActiveObserver)
+        }
+    }
     override func viewDidLoad() {
         super.viewDidLoad()
+        hostWillResignActiveObserver = NotificationCenter.default.addObserver(
+            forName: .NSExtensionHostWillResignActive,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            self?.finalizeCompositionBeforeHostDeactivation()
+        }
         ProcessMemory.record("extension.loaded")
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
 #if DEBUG
@@ -489,6 +502,25 @@ final class KeyboardViewController: UIInputViewController {
         expectedContext = current
         appearanceContextValidated = hasReachedViewDidAppear && current.document != nil
     }
+
+    private func finalizeCompositionBeforeHostDeactivation() {
+        guard surface.hasComposition else { return }
+        let proxy = textDocumentProxy
+        let current = context(for: proxy)
+        guard hasReachedViewDidAppear, appearanceContextValidated, !changing,
+              !session.needsCompositionRefresh, expectedContext == current,
+              markedOwnership.canFinalizeMark(in: current) else { return }
+
+        var didFinalize = false
+        perform { proxy in
+            self.traceCompositionEvent("lifecycle.host-will-resign-active", proxy: proxy)
+            proxy.unmarkText()
+            didFinalize = true
+        }
+        guard didFinalize else { return }
+        surface.invalidateComposition()
+    }
+
     override func textWillChange(_ textInput: UITextInput?) {
         traceCompositionEvent("callback.text-will-change", inputAvailable: textInput != nil)
         // A proxy can still report the old document identifier while UIKit is

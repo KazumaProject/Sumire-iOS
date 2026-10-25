@@ -173,7 +173,8 @@ schemes:
         SumireExternalInputHost: all
         SumireExternalInputTests: [test]
     test:
+      config: Debug
       environmentVariables:
-        SUMIRE_REQUIRE_EXTENSION: "$(SUMIRE_REQUIRE_EXTENSION)"
+        SUMIRE_REQUIRE_EXTENSION: "1"
       targets:
         - SumireExternalInputTests

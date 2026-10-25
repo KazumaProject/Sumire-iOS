@@ -552,6 +552,7 @@ final class KeyboardSurface: UIInputView {
     private let status = UILabel()
 #if DEBUG
     private let lifecycleDiagnosticLabel = UILabel()
+    private let compositionTraceDiagnosticLabel = UILabel()
     private let lifecycleSwitchButton = UIButton(type: .system)
     /// Debug-only accessibility channel for lifecycle diagnostics. It carries
     /// fixed event names and booleans, never input text or document identifiers.
@@ -608,6 +609,14 @@ final class KeyboardSurface: UIInputView {
         lifecycleDiagnosticLabel.accessibilityIdentifier = "sumire-lifecycle-diagnostic"
         lifecycleDiagnosticLabel.accessibilityLabel = "diagnostic-pending"
         addSubview(lifecycleDiagnosticLabel)
+
+        compositionTraceDiagnosticLabel.frame = CGRect(x: 0, y: 1, width: 1, height: 1)
+        compositionTraceDiagnosticLabel.alpha = 1
+        compositionTraceDiagnosticLabel.isUserInteractionEnabled = false
+        compositionTraceDiagnosticLabel.isAccessibilityElement = true
+        compositionTraceDiagnosticLabel.accessibilityIdentifier = "sumire-debug-composition-trace"
+        compositionTraceDiagnosticLabel.accessibilityLabel = "trace-pending"
+        addSubview(compositionTraceDiagnosticLabel)
 #endif
         stackLeading = stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: geometry.horizontalInset)
         stackTrailing = stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -geometry.horizontalInset)
@@ -2000,7 +2009,7 @@ final class KeyboardSurface: UIInputView {
     }
 #if DEBUG
     func setDebugCompositionTrace(_ value: String) {
-        status.accessibilityValue = value
+        compositionTraceDiagnosticLabel.accessibilityLabel = String(value.suffix(4_096))
     }
 #endif
     private func closeExpandedCandidates() {

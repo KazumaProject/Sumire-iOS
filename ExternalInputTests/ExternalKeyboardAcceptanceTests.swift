@@ -46,6 +46,10 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         identifiers.map { app.buttons[$0] }.first { $0.exists && $0.isHittable }
     }
 
+    private func compositionTraceLabel() -> String {
+        app.staticTexts["sumire-debug-composition-trace"].label
+    }
+
     private func compositionTraceEvents(in trace: String) -> [CompositionTraceEvent] {
         trace.split(separator: "|", omittingEmptySubsequences: true).compactMap { rawEvent in
             var fields: [String: String] = [:]
@@ -629,8 +633,7 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
 
         other.tap()
         try requireExtension()
-        let reading = app.staticTexts["compositionReading"]
-        let extensionTrace = reading.value as? String ?? "<missing debug trace>"
+        let extensionTrace = compositionTraceLabel()
         let hostTrace = app.staticTexts["external-input-lifecycle-state"].label
         XCTAssertEqual(other.value as? String, "別",
                        "An active marked reading must not follow focus to another field; new=\(otherState.label), old=\(originalState.label), extension=\(extensionTrace), host=\(hostTrace)")
@@ -656,14 +659,14 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         waitForExpectations(timeout: 5)
         let reading = app.staticTexts["compositionReading"]
         let hostLifecycleTrace = app.staticTexts["external-input-lifecycle-state"]
-        let traceBeforeHide = reading.value as? String ?? ""
+        let traceBeforeHide = compositionTraceLabel()
         let traceBaseline = try XCTUnwrap(compositionTraceEvents(in: traceBeforeHide).last,
-                                         "The extension must publish a sequenced trace before Home.")
+                                         "The extension must publish a sequenced trace before Home. Trace label=\(traceBeforeHide)")
 
         XCUIDevice.shared.press(.home)
         let hostStateImmediatelyAfterHide = originalState.label
         let hostTraceImmediatelyAfterHide = app.staticTexts["external-input-lifecycle-state"].label
-        let extensionTraceImmediatelyAfterHide = reading.value as? String ?? "<missing debug trace>"
+        let extensionTraceImmediatelyAfterHide = compositionTraceLabel()
         let hideBoundaryUptime = try XCTUnwrap(
             hostLifecycleEventUptime(named: "will-resign-active", in: hostTraceImmediatelyAfterHide),
             "The host lifecycle trace must timestamp the Home transition."
@@ -681,18 +684,18 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
             "The host must record a fresh did-become-active event after app.activate(). Trace=\(hostLifecycleTrace.label)"
         )
         let resumeDeadline = Date().addingTimeInterval(5)
-        var extensionTraceAfterReturn = reading.value as? String ?? "<missing debug trace>"
+        var extensionTraceAfterReturn = compositionTraceLabel()
         var freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
-                                                    laterThan: activeHostUptime, in: extensionTraceAfterReturn)
+                                                    laterThan: hideBoundaryUptime, in: extensionTraceAfterReturn)
         while Date() < resumeDeadline && freshReady == nil {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            extensionTraceAfterReturn = reading.value as? String ?? "<missing debug trace>"
+            extensionTraceAfterReturn = compositionTraceLabel()
             freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
-                                                   laterThan: activeHostUptime, in: extensionTraceAfterReturn)
+                                                   laterThan: hideBoundaryUptime, in: extensionTraceAfterReturn)
         }
         let hostTraceAfterReturn = hostLifecycleTrace.label
         XCTAssertNotNil(freshReady,
-                        "The appearance-ready event must be newer than did-become-active and the pre-Home trace baseline; Home uptime=\(hideBoundaryUptime), active uptime=\(activeHostUptime), baseline=\(traceBaseline), trace=\(extensionTraceAfterReturn)")
+                        "The appearance-ready event must be newer than Home and the pre-Home trace baseline; Home uptime=\(hideBoundaryUptime), active uptime=\(activeHostUptime), baseline=\(traceBaseline), trace=\(extensionTraceAfterReturn)")
         XCTAssertTrue(originalState.label.contains("content=first;marked=false;"),
                       "Hiding must commit the owned mark while retaining its text: field=\(originalState.label), value=\(original.value ?? "<nil>"), host=\(hostTraceAfterReturn), extension=\(extensionTraceAfterReturn)")
 
@@ -719,7 +722,7 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
                        "The second host field must be unchanged before focus moves to it")
         other.tap()
         RunLoop.current.run(until: Date().addingTimeInterval(0.2))
-        let compositionTrace = reading.value as? String ?? "<missing debug trace>"
+        let compositionTrace = compositionTraceLabel()
         let hostTraceAfterFocusChange = hostLifecycleTrace.label
         XCTAssertEqual(other.value as? String, "別",
                        "Changing host focus must not transfer the first field's marked reading; state=\(otherState.label), trace=\(compositionTrace), host=\(hostTraceAfterFocusChange)")
@@ -757,14 +760,14 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         waitForExpectations(timeout: 5)
         let reading = app.staticTexts["compositionReading"]
         let hostLifecycleTrace = app.staticTexts["external-input-lifecycle-state"]
-        let traceBeforeHide = reading.value as? String ?? ""
+        let traceBeforeHide = compositionTraceLabel()
         let traceBaseline = try XCTUnwrap(compositionTraceEvents(in: traceBeforeHide).last,
-                                         "The extension must publish a sequenced trace before Home.")
+                                         "The extension must publish a sequenced trace before Home. Trace label=\(traceBeforeHide)")
 
         XCUIDevice.shared.press(.home)
         let hostStateImmediatelyAfterHide = originalState.label
         let hostTraceImmediatelyAfterHide = app.staticTexts["external-input-lifecycle-state"].label
-        let extensionTraceImmediatelyAfterHide = reading.value as? String ?? "<missing debug trace>"
+        let extensionTraceImmediatelyAfterHide = compositionTraceLabel()
         let hideBoundaryUptime = try XCTUnwrap(
             hostLifecycleEventUptime(named: "will-resign-active", in: hostTraceImmediatelyAfterHide),
             "The host lifecycle trace must timestamp the Home transition."
@@ -788,12 +791,12 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         let matchingContext = app.textFields["external-input-matching-context-field"]
         let matchingState = app.staticTexts["external-input-matching-context-field-state"]
         let resumeDeadline = Date().addingTimeInterval(5)
-        var appearanceTrace = reading.value as? String ?? "<missing debug trace>"
+        var appearanceTrace = compositionTraceLabel()
         var freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
                                                     laterThan: activeHostUptime, in: appearanceTrace)
         while Date() < resumeDeadline && freshReady == nil {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
-            appearanceTrace = reading.value as? String ?? "<missing debug trace>"
+            appearanceTrace = compositionTraceLabel()
             freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
                                                    laterThan: activeHostUptime, in: appearanceTrace)
         }
@@ -811,7 +814,6 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         try requireExtension()
         matchingContext.tap()
         try requireExtension()
-        let traceAfterFocusChange = reading.value as? String ?? "<missing debug trace>"
         let hostTraceAfterMatchingContextFocus = hostLifecycleTrace.label
         XCTAssertTrue(originalState.label.contains("content=both;marked=false;"),
                       "The original field must retain committed text after focus moves: \(originalState.label), host=\(hostTraceAfterMatchingContextFocus)")
@@ -847,7 +849,7 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         waitForExpectations(timeout: 5)
         XCTAssertTrue(matchingState.label.contains("content=other;marked=true;markedUTF16=1;selectionUTF16=2"),
                       "The new field must receive only the new key's composition: \(matchingState.label); reading=\(reading.label)")
-        let trace = reading.value as? String ?? "<missing debug trace>"
+        let trace = compositionTraceLabel()
         XCTAssertTrue(originalState.label.contains("content=both;"),
                       "Changing host fields must preserve the original owner's text instead of transferring it: \(originalState.label); trace=\(trace)")
         XCTAssertEqual(original.value as? String, "あい",
