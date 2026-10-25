@@ -6,10 +6,11 @@ final class PersonalLexiconTests: XCTestCase {
         let input = #"[{"id":7,"word":"菫","reading":"すみれ","posIndex":0,"posScore":4000},{"word":"bad","reading":"","posIndex":0,"posScore":0},{"word":"菫","reading":"すみれ","posIndex":0,"posScore":3000},{"word":"bad","reading":"あ","posIndex":true,"posScore":0}]"#
         let preview = try PersonalImportPreview.parse(Data(input.utf8))
         XCTAssertEqual(preview.entries.count, 1)
-        XCTAssertEqual(preview.entries[0].posScore, 3000)
+        XCTAssertEqual(preview.entries[0].posScore, 4000)
         XCTAssertEqual(preview.rejected, 2)
         XCTAssertEqual(preview.duplicates, 1)
         XCTAssertEqual(preview.errors.count, 2)
+        XCTAssertEqual(preview.duplicatePolicy, .keepFirst)
         XCTAssertThrowsError(try PersonalImportPreview.parse(Data("{bad".utf8)))
         XCTAssertThrowsError(try PersonalImportPreview.parse(Data("{}".utf8)))
     }
