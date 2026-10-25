@@ -116,6 +116,35 @@ final class PhysicalKeyboardShortcutStoreTests: XCTestCase {
     XCTAssertEqual(restored.orderedItems, store.orderedItems)
   }
 
+  func testClosedAccessSnapshotReadsAppGroupStoreWithoutWritingSharedDefaults() throws {
+    let sharedName = "ShortcutShared." + UUID().uuidString
+    let localName = "ShortcutLocal." + UUID().uuidString
+    let shared = try XCTUnwrap(UserDefaults(suiteName: sharedName))
+    let local = try XCTUnwrap(UserDefaults(suiteName: localName))
+    defer {
+      shared.removePersistentDomain(forName: sharedName)
+      local.removePersistentDomain(forName: localName)
+    }
+
+    var configured = PhysicalKeyboardShortcutStore()
+    try configured.ensureDefaultShortcuts()
+    try configured.save(defaults: shared)
+    let sharedBefore = shared.dictionaryRepresentation() as NSDictionary
+    let access = KeyboardSettingsAccess(shared: shared, local: local, allowSharedWrites: false)
+
+    XCTAssertTrue(access.readsSharedSettings)
+    XCTAssertFalse(access.writesSharedSettings)
+    XCTAssertEqual(
+      try PhysicalKeyboardShortcutStore.load(defaults: access.readDefaults), configured)
+
+    XCTAssertTrue(configured.delete(id: 1))
+    try configured.save(defaults: access.readDefaults)
+    access.reload()
+    XCTAssertEqual(
+      try PhysicalKeyboardShortcutStore.load(defaults: access.readDefaults).items.count, 32)
+    XCTAssertEqual(sharedBefore, shared.dictionaryRepresentation() as NSDictionary)
+  }
+
   func testLoadAndDecodeRejectMalformedOrUnsupportedData() throws {
     let defaults = defaults()
     defaults.set("not data", forKey: PhysicalKeyboardShortcutStore.storageKey)
