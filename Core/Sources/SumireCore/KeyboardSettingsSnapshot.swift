@@ -56,7 +56,13 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             for suffix in ["flickUp", "flickDown"] { result["qwerty.\(kind).\(suffix)"] = .boolean }
         }
         for suffix in ["halfWidthNumbers", "halfWidthSymbols"] { result["qwerty.romaji.\(suffix)"] = .boolean }
-        for key in [CircularSlotSetting.storageKey, FlickStyleSettings.storageKey, TouchFeedbackSettings.storageKey, SumireSpecialKeySettings.storageKey, KeyboardSelection.storageKey, RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey, KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape)] {
+        for key in [
+            CircularSlotSetting.storageKey, FlickStyleSettings.storageKey,
+            TouchFeedbackSettings.storageKey, SumireSpecialKeySettings.storageKey,
+            PhysicalKeyboardShortcutStore.storageKey, KeyboardSelection.storageKey,
+            RomajiLibrary.storageKey, CustomKeyboardLibrary.storageKey,
+            KeyboardSizingStore.key(.portrait), KeyboardSizingStore.key(.landscape),
+        ] {
             result[key] = .data
         }
         return result
@@ -136,6 +142,11 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
                     guard feedback == feedback.normalized() else { throw Self.invalid(key) }
                 } else if key == SumireSpecialKeySettings.storageKey {
                     _ = try SumireSpecialKeySettings.decode(data)
+                } else if key == PhysicalKeyboardShortcutStore.storageKey {
+                    guard data.count <= PhysicalKeyboardShortcutStore.maximumBytes else {
+                        throw Self.invalid(key)
+                    }
+                    _ = try PhysicalKeyboardShortcutStore.decode(data)
                 } else if key == KeyboardSelection.storageKey {
                     guard data.count <= 300_000 else { throw Self.invalid(key) }
                     try JSONDecoder().decode(KeyboardSelection.self, from: data).validate()

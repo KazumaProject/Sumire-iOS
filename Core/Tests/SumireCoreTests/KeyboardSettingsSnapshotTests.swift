@@ -40,6 +40,12 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         var specialKeys = SumireSpecialKeySettings()
         try specialKeys.set(.doNothing, for: .delete, gesture: .left, arrangement: .toggle, mode: .japanese)
         try specialKeys.save(defaults: defaults)
+        var physicalShortcuts = PhysicalKeyboardShortcutStore()
+        try physicalShortcuts.ensureDefaultShortcuts()
+        var customizedShortcut = try XCTUnwrap(physicalShortcuts.item(id: 1))
+        customizedShortcut.enabled = false
+        XCTAssertTrue(physicalShortcuts.update(customizedShortcut))
+        try physicalShortcuts.save(defaults: defaults)
         defaults.set("must not export", forKey: "unrelated.account")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
         XCTAssertNil(original.values["unrelated.account"])
@@ -52,6 +58,9 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         XCTAssertEqual(original.values["bunsetsuSeparation"], .boolean(true))
         XCTAssertEqual(original.values[KeyboardToolbarPreferences.storageKey],
                        .textArray(["resize", "select_date", "keyboard_picker", "live_conversion_toggle", "emoji", "paste"]))
+        let shortcutData = try XCTUnwrap(defaults.data(forKey: PhysicalKeyboardShortcutStore.storageKey))
+        XCTAssertEqual(original.values[PhysicalKeyboardShortcutStore.storageKey],
+                       .data(shortcutData))
         let restored = try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(original))
         defaults.removePersistentDomain(forName: name)
         defaults.set("keep", forKey: "unrelated.account")
@@ -62,6 +71,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         XCTAssertEqual(defaults.string(forKey: "unrelated.account"), "keep")
         XCTAssertEqual(try RomajiLibrary.load(defaults: defaults), romaji)
         XCTAssertEqual(try SumireSpecialKeySettings.load(defaults: defaults), specialKeys)
+        XCTAssertEqual(try PhysicalKeyboardShortcutStore.load(defaults: defaults), physicalShortcuts)
         XCTAssertEqual(KeyboardSizingStore(defaults: defaults).load(.portrait).height, 350)
         XCTAssertEqual(KeyboardSizingStore(defaults: defaults).load(.landscape).height, 180)
     }
@@ -72,6 +82,12 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
         defer { defaults.removePersistentDomain(forName: name) }
         defaults.set(2, forKey: "candidateRowCount")
         let original = try KeyboardSettingsSnapshot.capture(defaults: defaults)
+        let duplicateShortcutData = Data(#"""
+        {"version":1,"items":[
+            {"id":1,"contextID":"any","keyCode":31,"scanCode":null,"ctrl":true,"shift":false,"alt":false,"meta":false,"actionID":"copy","enabled":true,"sortOrder":0},
+            {"id":2,"contextID":"any","keyCode":31,"scanCode":null,"ctrl":true,"shift":false,"alt":false,"meta":false,"actionID":"paste","enabled":true,"sortOrder":1}
+        ]}
+        """#.utf8)
         let invalid: [(String, KeyboardSettingsSnapshot.Value)] = [
             (SymbolKeyboardMode.initialModeKey, .text("unknown")), (EmojiSkinTone.settingsKey, .text("unknown")),
             (ClipboardHistorySettings.enabledKey, .number(1)), ("clipboard.retentionHours", .number(73)),
@@ -81,6 +97,7 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
             ("bunsetsuSeparation", .number(1)),
             (KeyboardToolbarPreferences.storageKey, .textArray(["unknown_action"])),
             (KeyboardToolbarPreferences.storageKey, .textArray(["paste", "paste"])),
+            (PhysicalKeyboardShortcutStore.storageKey, .data(duplicateShortcutData)),
             ("appearance.english.keyScale", .number(0.1)),
             ("customRomaji.library", .data(Data("{}".utf8))),
             ("customKeyboard.library", .data(Data("{}".utf8))),
@@ -91,7 +108,13 @@ final class KeyboardSettingsSnapshotTests: XCTestCase {
             var snapshot = KeyboardSettingsSnapshot()
             snapshot.values["candidateRowCount"] = .number(3)
             snapshot.values[key] = value
-            XCTAssertThrowsError(try snapshot.restore(defaults: defaults), key)
+            if key == PhysicalKeyboardShortcutStore.storageKey {
+                XCTAssertThrowsError(try snapshot.restore(defaults: defaults), key) { error in
+                    XCTAssertEqual(error.localizedDescription, "物理キーボードショートカットの保存データが不正です")
+                }
+            } else {
+                XCTAssertThrowsError(try snapshot.restore(defaults: defaults), key)
+            }
             XCTAssertEqual(try KeyboardSettingsSnapshot.capture(defaults: defaults), original)
         }
         defaults.set("false", forKey: "englishReadingEnabled")

@@ -19,11 +19,23 @@ final class PersonalBackupTests: XCTestCase {
             KeyboardToolbarAction.emoji.rawValue,
             KeyboardToolbarAction.paste.rawValue
         ])
+        let suite = "ShortcutBackupTests." + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        var shortcuts = PhysicalKeyboardShortcutStore()
+        try shortcuts.ensureDefaultShortcuts()
+        try shortcuts.save(defaults: defaults)
+        settings.values[PhysicalKeyboardShortcutStore.storageKey] = .data(
+            try XCTUnwrap(defaults.data(forKey: PhysicalKeyboardShortcutStore.storageKey)))
         let contents = PersonalBackup.Contents(lexicon: lexicon, settings: settings)
         let encoded = try PersonalBackup.encode(contents)
         let restored = try PersonalBackup.decodeContents(encoded)
         XCTAssertEqual(restored, contents)
         XCTAssertEqual(restored.settings?.values[KeyboardToolbarPreferences.storageKey], settings.values[KeyboardToolbarPreferences.storageKey])
+        guard case .data(let restoredShortcutData)? = restored.settings?.values[PhysicalKeyboardShortcutStore.storageKey] else {
+            return XCTFail("The physical keyboard shortcut store was omitted from the personal backup")
+        }
+        XCTAssertEqual(try PhysicalKeyboardShortcutStore.decode(restoredShortcutData), shortcuts)
         XCTAssertEqual(try PersonalBackup.decode(encoded), lexicon)
         let legacy = try PersonalBackup.decodeContents(PersonalBackup.encode(lexicon))
         XCTAssertEqual(legacy.lexicon, lexicon)
