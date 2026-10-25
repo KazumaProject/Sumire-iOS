@@ -35,31 +35,9 @@ struct MarkedDocumentOwnership {
         isSuspended = false
     }
 
-    /// Exposes only ownership state for debug acceptance diagnostics; never returns
-    /// document contents or context text.
-    func diagnosticState(for current: Context) -> String {
-        guard let markedContext else { return "none" }
-        let lifecycle = isSuspended ? "suspended" : "active"
-        let match = markedContext == current ? "match" : "mismatch"
-        return "\(lifecycle)-\(match)"
-    }
-
-    /// If UIKit temporarily disconnects the proxy as the extension hides, keep
-    /// the ownership token until the same document and observable context return.
-    /// Never call unmarkText on a missing, different, or changed document.
-    mutating func resolveOnHide(_ current: Context) -> Resolution {
-        guard let owned = markedContext else { return .none }
-        guard current.document != nil else {
-            isSuspended = true
-            return .waitForDocument
-        }
-
-        discard() // Consume before invoking UIKit, whose callbacks may reenter.
-        return owned == current ? .unmarkOwnedText : .discardOwnership
-    }
-
-    /// A restored keyboard view must finalize any old mark before processing a
-    /// new key. This also handles hosts that skipped the expected hide callback.
+    /// A reappearing keyboard is a new editing session even if UIKit did not
+    /// deliver the disappearance callback. Resolve any prior mark before the
+    /// next key can replace it.
     mutating func resolveOnAppearance(_ current: Context) -> Resolution {
         guard let owned = markedContext else { return .none }
         guard current.document != nil else {
@@ -71,8 +49,9 @@ struct MarkedDocumentOwnership {
         return owned == current ? .unmarkOwnedText : .discardOwnership
     }
 
-    /// Retry a suspended token when the proxy reconnects between lifecycle
-    /// callbacks. Active marks are left alone during ordinary editing.
+    /// Resolve a temporary proxy disconnection without ever applying cleanup to
+    /// an unknown or changed document. A disconnected proxy suspends the token;
+    /// the first reconnected context must match every observable field.
     mutating func resolveCurrentContext(_ current: Context) -> Resolution {
         guard let owned = markedContext else { return .none }
         guard current.document != nil else {
@@ -81,7 +60,21 @@ struct MarkedDocumentOwnership {
         }
         guard isSuspended else { return .none }
 
-        discard()
+        discard() // Consume before invoking UIKit, whose callbacks may reenter.
+        return owned == current ? .unmarkOwnedText : .discardOwnership
+    }
+
+    /// On hide, finalize a mark only while the exact owning document/context is
+    /// available. If the host has disconnected, retain a guarded one-shot token
+    /// to resolve on reattachment instead of losing the ownership evidence.
+    mutating func resolveOnHide(_ current: Context) -> Resolution {
+        guard let owned = markedContext else { return .none }
+        guard current.document != nil else {
+            isSuspended = true
+            return .waitForDocument
+        }
+
+        discard() // Consume before invoking UIKit, whose callbacks may reenter.
         return owned == current ? .unmarkOwnedText : .discardOwnership
     }
 }

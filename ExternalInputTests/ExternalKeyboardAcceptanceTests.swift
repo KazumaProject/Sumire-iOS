@@ -91,33 +91,63 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         try exercise(input)
     }
 
-    func testComposingTextSurvivesHostReturnWithoutStaleReplacement() throws {
-        let input = app.textFields["external-input-field"]
+    private func exerciseDistinctCompositionAcrossHostReturn(_ input: XCUIElement,
+                                                             hostKind: String) throws {
+        let hostState = app.staticTexts["\(input.identifier)-state"]
         input.tap()
         try requireExtension()
-        guard let a = key(["sumire-a", "tenkey-0-0", "gojuon-0-10"]), a.label == "あ" else {
+        guard let first = key(["gojuon-0-10"]), first.label == "あ",
+              let second = key(["gojuon-1-10"]), second.label == "い",
+              let enter = key(["gojuon-enter"]) else {
             throw XCTSkip("Select a supported Japanese Sumire/TenKey/50音 layout manually.")
         }
-        a.tap()
-        let hasText = NSPredicate(format: "value != '' AND value != nil")
-        expectation(for: hasText, evaluatedWith: input)
+        first.tap()
+        expectation(for: NSPredicate(format: "value == %@", "あ"), evaluatedWith: input)
         waitForExpectations(timeout: 5)
-        let before = input.value as? String ?? ""
-        XCTAssertFalse(before.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        XCTAssertEqual(input.value as? String, "あ", "The first synthetic reading must be marked in the host")
+        let initialMark = NSPredicate(format: "label CONTAINS %@", "content=first;marked=true;")
+        expectation(for: initialMark, evaluatedWith: hostState)
+        waitForExpectations(timeout: 5)
+
         XCUIDevice.shared.press(.home)
         app.activate()
         input.tap()
         try requireExtension()
-        XCTAssertEqual(input.value as? String, before)
-        guard let returnedA = key(["sumire-a", "tenkey-0-0", "gojuon-0-10"]) else {
-            XCTFail("The selected Sumire layout disappeared on host return")
-            return
-        }
-        returnedA.tap()
-        // The previous host text must not be replaced by a stale marked-text session.
-        let appended = NSPredicate(format: "value == %@", before + "あ")
-        expectation(for: appended, evaluatedWith: input)
+        let finalized = NSPredicate(format: "label CONTAINS %@", "content=first;marked=false;")
+        expectation(for: finalized, evaluatedWith: hostState)
         waitForExpectations(timeout: 5)
+        let stateOnReturn = hostState.label
+        XCTAssertTrue(stateOnReturn.contains("content=first;"),
+                      "The host should retain the first reading across activation; stateOnReturn=\(stateOnReturn)")
+        XCTAssertTrue(stateOnReturn.contains("marked=false;"),
+                      "The old composition must be finalized before a new reading; stateOnReturn=\(stateOnReturn)")
+        XCTAssertTrue(first.waitForExistence(timeout: 5), "The selected Sumire layout disappeared on host return")
+
+        second.tap()
+        let bothContent = NSPredicate(format: "label CONTAINS %@", "content=both;marked=true;")
+        let bothExpectation = XCTNSPredicateExpectation(predicate: bothContent, object: hostState)
+        XCTAssertEqual(XCTWaiter.wait(for: [bothExpectation], timeout: 5), .completed,
+                       "The resumed composition should expose both synthetic readings as marked")
+        let stateAfterSecond = hostState.label
+        XCTAssertTrue(stateAfterSecond.contains("content=both;"),
+                      "The second distinct reading must append; stateOnReturn=\(stateOnReturn), stateAfterSecond=\(stateAfterSecond)")
+        XCTAssertEqual(input.value as? String, "あい",
+                       "The second distinct reading must append instead of replacing the suspended mark (\(hostKind)); stateOnReturn=\(stateOnReturn), stateAfterSecond=\(stateAfterSecond)")
+
+        enter.tap()
+        expectation(for: NSPredicate(format: "value == %@", "あい"), evaluatedWith: input)
+        waitForExpectations(timeout: 5)
+        XCTAssertEqual(input.value as? String, "あい", "Commit must retain both readings (\(hostKind))")
+    }
+
+    func testComposingTextSurvivesHostReturnWithoutStaleReplacementInUITextField() throws {
+        try exerciseDistinctCompositionAcrossHostReturn(app.textFields["external-input-field"],
+                                                       hostKind: "UITextField")
+    }
+
+    func testComposingTextSurvivesHostReturnWithoutStaleReplacementInUITextView() throws {
+        try exerciseDistinctCompositionAcrossHostReturn(app.textViews["external-input-view"],
+                                                       hostKind: "UITextView")
     }
 
 }
