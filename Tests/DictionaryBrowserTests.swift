@@ -11,6 +11,10 @@ final class DictionaryBrowserTests: XCTestCase {
     }
     func testSystemPagingAndPrefixSearch() {
         let app = XCUIApplication(); open(app)
+        let source = app.staticTexts["dictionary-browser-source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 10))
+        XCTAssertTrue(source.label.contains("生成元:"))
+        XCTAssertTrue(source.label.contains("manifest記載 SHA-256:"))
         // SwiftUI may expose combined rows as cells, so inspect all descendants.
         let first = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "dictionary-browser-row-")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10))
