@@ -87,6 +87,67 @@ final class PhysicalKeyboardShortcutMatcherTests: XCTestCase {
       ])
   }
 
+  func testDefaultCatalogMatchesAndroidAssignmentsAndSortOrder() {
+    let items = PhysicalKeyboardShortcutDefaults.items
+
+    XCTAssertEqual(items.count, 32)
+    XCTAssertEqual(items.map(\.sortOrder), Array(0..<32))
+    XCTAssertTrue(items.allSatisfy(\.enabled))
+    XCTAssertTrue(items.allSatisfy { $0.scanCode == nil })
+    XCTAssertEqual(Set(items.map(bindingKey)).count, items.count)
+    XCTAssertEqual(
+      items.map(catalogEntry),
+      [
+        "any|31|1000|copy",
+        "any|50|1000|paste",
+        "any|52|1000|cut",
+        "any|29|1000|select_all",
+        "any|62|1000|cycle_input_mode",
+        "any|75|0010|cycle_input_mode",
+        "any|214|0000|switch_to_japanese",
+        "composition|62|0000|convert",
+        "composition|136|0000|convert_to_hiragana",
+        "composition|137|0000|convert_to_full_katakana",
+        "composition|138|0000|convert_to_half_width",
+        "composition|139|0000|convert_to_full_alphanumeric",
+        "composition|140|0000|convert_to_half_alphanumeric",
+        "composition|213|0000|switch_to_english",
+        "conversion|62|0000|convert_next",
+        "conversion|62|0100|convert_prev",
+        "conversion|19|0000|convert_prev",
+        "conversion|20|0000|convert_next",
+        "conversion|66|0000|commit",
+        "conversion|67|0000|cancel",
+        "conversion|112|0000|cancel",
+        "bunsetsu_conversion|21|0000|segment_focus_left",
+        "bunsetsu_conversion|22|0000|segment_focus_right",
+        "bunsetsu_conversion|21|0100|segment_width_shrink",
+        "bunsetsu_conversion|22|0100|segment_width_expand",
+        "bunsetsu_conversion|19|0000|convert_prev",
+        "bunsetsu_conversion|20|0000|convert_next",
+        "bunsetsu_conversion|62|0000|convert_next",
+        "bunsetsu_conversion|62|0100|convert_prev",
+        "bunsetsu_conversion|66|0000|commit",
+        "bunsetsu_conversion|67|0000|cancel",
+        "bunsetsu_conversion|112|0000|cancel",
+      ]
+    )
+  }
+
+  func testMissingDefaultsPreservesExistingCustomizedBindingAndIsIdempotent() {
+    let customized = item(
+      contextID: "any", keyCode: 75, alt: true,
+      actionID: "switch_to_japanese", enabled: false
+    )
+    let existing = [customized]
+    let missing = PhysicalKeyboardShortcutDefaults.missingDefaults(from: existing)
+
+    XCTAssertEqual(missing.count, 31)
+    XCTAssertFalse(missing.contains { bindingKey($0) == bindingKey(customized) })
+    XCTAssertTrue(
+      PhysicalKeyboardShortcutDefaults.missingDefaults(from: existing + missing).isEmpty)
+  }
+
   private func item(
     contextID: String,
     keyCode: Int,
@@ -119,5 +180,24 @@ final class PhysicalKeyboardShortcutMatcherTests: XCTestCase {
       shortcuts: shortcuts, currentContext: context, keyCode: keyCode,
       scanCode: scanCode, ctrl: ctrl, shift: shift, alt: alt, meta: meta
     )
+  }
+
+  private func bindingKey(_ item: PhysicalKeyboardShortcutItem) -> String {
+    [
+      item.contextID,
+      String(item.keyCode),
+      item.scanCode.map(String.init) ?? "null",
+      String(item.ctrl),
+      String(item.shift),
+      String(item.alt),
+      String(item.meta),
+    ].joined(separator: ":")
+  }
+
+  private func catalogEntry(_ item: PhysicalKeyboardShortcutItem) -> String {
+    let modifiers = [item.ctrl, item.shift, item.alt, item.meta]
+      .map { $0 ? "1" : "0" }
+      .joined()
+    return "\(item.contextID)|\(item.keyCode)|\(modifiers)|\(item.actionID)"
   }
 }
