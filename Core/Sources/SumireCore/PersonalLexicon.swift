@@ -159,10 +159,32 @@ private extension String {
     var nilIfEmpty: String? { isEmpty ? nil : self }
 }
 public struct PersonalImportPreview {
+    public enum DuplicatePolicy: Equatable {
+        /// Android's Google/Microsoft text-dictionary importer keeps the first row.
+        case keepFirst
+        /// Reserved for import sources that explicitly replace earlier duplicates.
+        case keepLast
+    }
+
     public let entries: [PersonalWord]
     public let rejected: Int
     public let errors: [String]
     public let duplicates: Int
+    public let duplicatePolicy: DuplicatePolicy
+    public let isTextImport: Bool
+    public let wasTruncated: Bool
+
+    public init(entries: [PersonalWord], rejected: Int, errors: [String], duplicates: Int,
+                duplicatePolicy: DuplicatePolicy = .keepFirst, isTextImport: Bool = false,
+                wasTruncated: Bool = false) {
+        self.entries = entries
+        self.rejected = rejected
+        self.errors = errors
+        self.duplicates = duplicates
+        self.duplicatePolicy = duplicatePolicy
+        self.isTextImport = isTextImport
+        self.wasTruncated = wasTruncated
+    }
     /// Android exports a top-level array of UserWord/UserTemplate records.
     /// Valid rows are staged; callers explicitly apply the preview atomically.
     public static func parse(_ data: Data) throws -> Self {
@@ -179,14 +201,57 @@ public struct PersonalImportPreview {
                 let word = try JSONDecoder().decode(PersonalWord.self, from: encoded)
                 try word.validate()
                 let key = "\(word.reading.utf8.count):" + word.reading + word.word
-                if let position = positions[key] { result[position] = word; duplicates += 1 }
+                if positions[key] != nil { duplicates += 1 }
                 else { positions[key] = result.count; result.append(word) }
             } catch {
                 rejected += 1
                 if errors.count < 100 { errors.append("\(index + 1)件目: \(error.localizedDescription)") }
             }
         }
-        return Self(entries: result, rejected: rejected, errors: errors, duplicates: duplicates)
+        return Self(entries: result, rejected: rejected, errors: errors, duplicates: duplicates,
+                    duplicatePolicy: .keepFirst)
+    }
+
+    /// Plans Android-compatible insert-or-ignore behavior and validates the complete result
+    /// before the caller offers an apply action. Existing matching entries are preserved.
+    public func applying(to lexicon: PersonalLexicon, template: Bool) throws -> PersonalImportApplicationPreview {
+        guard !(template && isTextImport) else {
+            throw PersonalDataError("CSV・TSV形式の外部辞書はユーザー辞書に取り込んでください")
+        }
+        var result = lexicon
+        var target = template ? result.templates : result.words
+        func key(_ entry: PersonalWord) -> String {
+            "\(entry.reading.utf8.count):" + entry.reading + entry.word
+        }
+        var seen = Set(target.map(key))
+        var addedEntries = 0
+        var existingDuplicates = 0
+
+        for entry in entries {
+            if seen.insert(key(entry)).inserted {
+                target.append(entry)
+                addedEntries += 1
+            } else {
+                existingDuplicates += 1
+            }
+        }
+
+        if template { result.templates = target } else { result.words = target }
+        try result.validate()
+        return PersonalImportApplicationPreview(lexicon: result, addedEntries: addedEntries,
+                                                existingDuplicates: existingDuplicates)
+    }
+}
+
+public struct PersonalImportApplicationPreview {
+    public let lexicon: PersonalLexicon
+    public let addedEntries: Int
+    public let existingDuplicates: Int
+
+    public init(lexicon: PersonalLexicon, addedEntries: Int, existingDuplicates: Int) {
+        self.lexicon = lexicon
+        self.addedEntries = addedEntries
+        self.existingDuplicates = existingDuplicates
     }
 }
 
