@@ -147,19 +147,6 @@ final class PersonalLibrary: ObservableObject {
         else { next.words.remove(atOffsets: indices) }
         try apply(next)
     }
-    func importEntries(_ entries: [PersonalWord], template: Bool) throws {
-        var next = lexicon
-        var group = template ? next.templates : next.words
-        func key(_ word: PersonalWord) -> String { "\(word.reading.utf8.count):" + word.reading + word.word }
-        var positions = Dictionary(uniqueKeysWithValues: group.enumerated().map { (key($0.element), $0.offset) })
-        for entry in entries {
-            if let index = positions[key(entry)] { group[index] = entry }
-            else { positions[key(entry)] = group.count; group.append(entry) }
-        }
-        if template { next.templates = group } else { next.words = group }
-        try apply(next)
-    }
-
     func putTextMacro(_ macro: PersonalTextMacro, originalID: String?) throws {
         var next = lexicon
         let normalized = macro.normalized()
