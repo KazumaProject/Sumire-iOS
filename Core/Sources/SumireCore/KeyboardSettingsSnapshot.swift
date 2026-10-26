@@ -37,6 +37,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         )
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)
+        result[DictionaryCategoryCatalog.selectionKey] = .textArray(DictionaryCategoryCatalog.idSet, maximumCount: DictionaryCategoryCatalog.ids.count, maximumElementBytes: 256)
         result["categoryMask"] = .number(0...Double(0x3fff_ffff), integer: true)
         result["theme.hue"] = .number(0...1, integer: false)
         result["theme.saturation"] = .number(0...1, integer: false)
@@ -193,6 +194,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
             }
         }
         for key in removingKeys { defaults.removeObject(forKey: key) }
+        if (values["categoryMask"] != nil || removingKeys.contains("categoryMask")), values[DictionaryCategoryCatalog.selectionKey] == nil {
+            defaults.removeObject(forKey: DictionaryCategoryCatalog.selectionKey)
+        }
     }
     private static func invalid(_ key: String) -> PersonalDataError {
         PersonalDataError("設定バックアップの値またはキーが不正です: \(key.prefix(128))")

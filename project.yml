@@ -63,7 +63,7 @@ targets:
       - Shared
       - path: ConversionCore/src
         excludes: [main.cpp]
-      - path: ../sumire-data/bunsetsu-search/standard-mozc-scoring-auxiliary-correction-english
+      - path: ../sumire-data/releases/v1.7.277/dictionary-v1.7.277
         type: folder
         buildPhase: resources
     info:

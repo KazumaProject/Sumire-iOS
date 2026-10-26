@@ -28,7 +28,7 @@ enum KeyboardSettings {
         let migrationKey = "internal.appGroupSettingsMigrated.v1"
         guard !shared.bool(forKey: migrationKey) else { return }
         // Preserve the existing diagnostic app's setting on first group-enabled launch.
-        let keys = ["clipboardAutomaticPreview", "candidateRowCount", "liveConversion", "omissionSearch", "bunsetsuSeparation", "categoryMask", "englishReadingEnabled", "customRomaji.library", "customKeyboard.library", "learningEnabled", "learnFirstCandidate", "sumire.keyArrangement", "sumire.specialKeyActions", "keyboard.selection", "keyboard.lastUsed", KeyboardToolbarPreferences.storageKey, "editing.deleteBoundarySymbols", "input.touchFeedback"] +
+        let keys = ["clipboardAutomaticPreview", "candidateRowCount", "liveConversion", "omissionSearch", "bunsetsuSeparation", "categoryMask", DictionaryCategoryCatalog.selectionKey, "englishReadingEnabled", "customRomaji.library", "customKeyboard.library", "learningEnabled", "learnFirstCandidate", "sumire.keyArrangement", "sumire.specialKeyActions", "keyboard.selection", "keyboard.lastUsed", KeyboardToolbarPreferences.storageKey, "editing.deleteBoundarySymbols", "input.touchFeedback"] +
             source.dictionaryRepresentation().keys.filter {
                 $0.hasPrefix("appearance.") || $0.hasPrefix("keyboardSize.") || $0.hasPrefix("theme.") || $0.hasPrefix("qwerty.") || $0.hasPrefix("symbol.") || $0.hasPrefix("clipboard.")
             }

@@ -51,6 +51,11 @@ struct Result {
 std::u16string utf16(const std::string &);
 std::string utf8(const std::u16string &);
 std::vector<std::string> category_names();
+std::vector<std::string> release_category_names();
+// Resolve legacy families only for explicitly marked release generations.
+std::vector<std::string> resolve_category_names(const std::string &directory,
+                                              const std::vector<std::string> &requested,
+                                              bool expand_legacy_categories = true);
 struct PersonalEntry {
   std::string reading, text;
   uint16_t context_id;
@@ -91,7 +96,7 @@ class Engine {
 public:
   Engine(const std::string &directory,
          const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false,
-         bool standalone_priority = true);
+         bool standalone_priority = true, bool expand_legacy_categories = true);
   ~Engine();
   Result convert(const std::string &reading, size_t count = 10,
                  size_t state_limit = 200000, bool omission = false,

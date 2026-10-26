@@ -123,7 +123,9 @@ public enum DictionarySourceArchiveConverter {
                                                                  posTableCount: posTable[0].count)
             }
 
-            try SumireDictionarySourceConverter.write(source, to: destination.appendingPathComponent(name + ".sud"))
+            let output = destination.appendingPathComponent(name + ".sud")
+            try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try SumireDictionarySourceConverter.write(source, to: output)
             converted.append(name + ".sud")
         }
 

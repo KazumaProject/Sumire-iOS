@@ -41,7 +41,7 @@ public struct DictionaryGenerationStore {
 
     private var currentPointer: URL { directory.appendingPathComponent("current.json") }
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
-    private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + [
+    private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + DictionaryCategoryCatalog.ids + [
         "system", "english", "english_reading", "connection", "reading_correction",
         "single_kanji", "emoji", "emoticon", "symbol"
     ]).map { $0 + ".sud" })
@@ -52,7 +52,7 @@ public struct DictionaryGenerationStore {
         ["mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat"],
         ["single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"]
     ]
-    private static let supportFiles = Set(supportGroups.flatMap { $0 })
+    private static let supportFiles = Set(supportGroups.flatMap { $0 }).union([DictionaryCategoryCatalog.releaseMarker])
     private static let knownFiles = replacementFiles.union(supportFiles)
 
     /// Reads only pointer/manifest metadata and verifies all referenced files
@@ -92,6 +92,16 @@ public struct DictionaryGenerationStore {
         }
         let manager = FileManager.default
         try Self.requireDirectory(baseDirectory)
+        if try Self.existingFile(DictionaryCategoryCatalog.releaseMarker, in: baseDirectory) != nil {
+            let replacedLegacy = importedFiles.keys.filter { file in
+                guard file.hasSuffix(".sud") else { return false }
+                let id = String(file.dropLast(4))
+                return DictionaryArchivePlan.categoryIDs.contains(id) && !DictionaryCategoryCatalog.idSet.contains(id)
+            }
+            guard replacedLegacy.isEmpty else {
+                throw PersonalDataError("この旧分類辞書は新しい分類へ安全に分割できないため取り込めません: " + replacedLegacy.sorted().joined(separator: ", "))
+            }
+        }
         if let supportFallback {
             guard supportFallback.isFileURL else { throw PersonalDataError("補助辞書の保存先が不正です") }
             try Self.requireDirectory(supportFallback)
@@ -139,6 +149,9 @@ public struct DictionaryGenerationStore {
                 if let source { sources[file] = source }
             }
         }
+        if let marker = try Self.existingFile(DictionaryCategoryCatalog.releaseMarker, in: baseDirectory) {
+            sources[DictionaryCategoryCatalog.releaseMarker] = marker
+        }
         for (file, source) in sources.sorted(by: { $0.key < $1.key }) {
             let destination = final.appendingPathComponent(file)
             try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
@@ -146,6 +159,7 @@ public struct DictionaryGenerationStore {
         }
         for (file, source) in importedFiles.sorted(by: { $0.key < $1.key }) {
             let destination = final.appendingPathComponent(file)
+            try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
             try Self.copyRegularFile(source, to: destination, totalBytes: &totalBytes)
         }
@@ -255,8 +269,9 @@ public struct DictionaryGenerationStore {
     private static func existingFile(_ file: String, in root: URL) throws -> URL? {
         let manager = FileManager.default
         let url = root.appendingPathComponent(file)
-        let parent = url.deletingLastPathComponent()
-        if parent != root {
+        var parent = root
+        for component in file.split(separator: "/").dropLast() {
+            parent.appendPathComponent(String(component), isDirectory: true)
             do { try requireDirectory(parent) }
             catch let error as CocoaError where error.code == .fileNoSuchFile || error.code == .fileReadNoSuchFile { return nil }
         }

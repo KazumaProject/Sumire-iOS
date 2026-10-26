@@ -82,6 +82,8 @@ void errorText(char *out, size_t size, const char *text) {
 bool allowedName(const std::string &name) {
     if (name == "system" || name == "english" || name == "english_reading") return true;
     auto names = sumire::category_names();
+    const auto release = sumire::release_category_names();
+    names.insert(names.end(), release.begin(), release.end());
     return std::find(names.begin(), names.end(), name) != names.end();
 }
 }

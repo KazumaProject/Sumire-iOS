@@ -125,6 +125,7 @@ final class KeyboardViewController: UIInputViewController {
         surface.liveConversion = defaults.bool(forKey: "liveConversion")
         surface.omissionSearch = defaults.bool(forKey: "omissionSearch")
         surface.englishReadingEnabled = defaults.object(forKey: "englishReadingEnabled") as? Bool ?? true
+        surface.categoryIDs = DictionaryCategoryCatalog.selection(defaults: defaults)
         surface.categoryMask = UInt32(defaults.integer(forKey: "categoryMask") & 0x3fff_ffff)
         surface.candidateRowCount = rows
         surface.candidateBar.reloadToolbarSettings(defaults: defaults)

@@ -126,10 +126,15 @@ public struct DictionaryArchivePlan {
         // A classified path never falls back to the system basename aliases.
         if let index = path.firstIndex(of: "categories") {
             let tail = Array(path[index...])
-            guard tail.count == 3, categoryIDs.contains(tail[1]), let role = trio[raw] else {
+            let categoryPath = tail.dropFirst().dropLast().joined(separator: "/")
+            // The person replacement ZIP nests person leaves beneath person/,
+            // while the release manifest's stable category IDs are unprefixed.
+            let personLeaf = categoryPath.hasPrefix("person/") ? String(categoryPath.dropFirst(7)) : ""
+            let category = DictionaryCategoryCatalog.categories.contains(where: { $0.id == personLeaf && $0.legacyFamilies == ["person"] }) ? personLeaf : categoryPath
+            guard tail.count >= 3, (categoryIDs.contains(category) || DictionaryCategoryCatalog.idSet.contains(category)), let role = trio[raw] else {
                 return .unknown("分類辞書のカテゴリ名またはファイル役割を認識できません")
             }
-            return mapped(.category(tail[1]), role)
+            return mapped(.category(category), role)
         }
         let readingCorrectionRoles: [String: Role] = [
             "tango_reading_correction.dat": .tango,

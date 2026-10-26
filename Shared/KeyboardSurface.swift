@@ -52,6 +52,16 @@ final class KeyboardSurface: UIInputView {
             refreshConversion()
         }
     }
+    var categoryIDs: [String]? {
+        didSet {
+            guard oldValue != categoryIDs else { return }
+            beforeInput?()
+            converter.setCategoryIDs(categoryIDs)
+            guard hasComposition else { return }
+            composition.optionsChanged()
+            refreshConversion()
+        }
+    }
     var categoryMask: UInt32 = 0 {
         didSet {
             guard oldValue != categoryMask else { return }

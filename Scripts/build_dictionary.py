@@ -5,6 +5,39 @@ Only primitive arrays and java.util.BitSet are accepted. Output is immutable.
 import argparse, array, collections, hashlib, json, math, pathlib, shutil, struct, subprocess, sys, tempfile, zipfile, zlib
 
 REVISION = 'df1f38315bf56d860d32919a3eaed6a75499e91e'
+RELEASE_TAG = 'v1.7.277'
+RELEASE_REVISION = '13e391bc7a4a245f63aa0091c1e9c11db3dbd759'
+RELEASE_SHA256 = {
+    'archive': 'f2b1c1521a2dacd8fdfdf40a06cf9b7566db60a2592c14be78ea9ce7d5e26d63',
+    'manifest': '946aa2d6be2cc4b4b285b2600789c7061a3356877251ad414c663f8dc3785d60',
+    'licenses': '1002230bbdf760c6a00a81b6dd19d93299b9bba3a3e31815d2eff16bd1bd2ff2',
+}
+
+def unpack_release(archive, manifest_path, licenses_path, directory):
+    """Accept only the reviewed release, with every member authenticated."""
+    for role, path in [('archive', archive), ('manifest', manifest_path), ('licenses', licenses_path)]:
+        if hashlib.sha256(path.read_bytes()).hexdigest() != RELEASE_SHA256[role]:
+            raise ValueError('release ' + role + ' SHA-256 mismatch')
+    manifest = json.loads(manifest_path.read_text())
+    if manifest['schemaVersion'] != 1 or manifest['categoryCount'] != 143:
+        raise ValueError('unexpected release catalog')
+    expected = manifest['files']
+    with zipfile.ZipFile(archive) as z:
+        names = z.namelist()
+        if len(names) != len(set(names)) or set(names) != set(expected) | {'dictionary-distribution-manifest.json'}:
+            raise ValueError('release archive member set differs from manifest')
+        for info in z.infolist():
+            path = pathlib.PurePosixPath(info.filename)
+            if path.is_absolute() or '..' in path.parts or '\\' in info.filename or info.file_size > 256*1024*1024:
+                raise ValueError('unsafe release archive member')
+            raw = z.read(info)
+            digest = RELEASE_SHA256['manifest'] if info.filename == 'dictionary-distribution-manifest.json' else expected[info.filename]
+            if hashlib.sha256(raw).hexdigest() != digest:
+                raise ValueError('release member SHA-256 mismatch: ' + info.filename)
+            target = directory / path
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(raw)
+    return manifest
 CATEGORIES = 'address agreement award character event facility initiative kampo lineage medical mythological_figure organization person place product station term transport_route vehicle work_anime work_book work_film work_franchise work_game work_manga work_music work_other work_periodical work_program work_stage'.split()
 AUXILIARY_DICTIONARIES = {
     'single_kanji': ('single_kanji', 'singleKanji'),
@@ -209,12 +242,25 @@ class Bits:
             while x:
                 low=x&-x;yield i*64+low.bit_length()-1;x^=low
 
-def build(source,output,english_reading=False,english=False):
+def build(source,output,english_reading=False,english=False,release=None):
     if output.exists():raise ValueError('output already exists; choose a new generation directory')
     assets=source/'app/src/main/assets'
     revision=subprocess.check_output(['git','-C',str(source),'rev-parse','HEAD'],text=True).strip()
     if revision!=REVISION:raise ValueError('reference revision differs from pinned revision')
-    archive_sources={'system':'system', **{c:'categories/'+c for c in CATEGORIES}}
+    reference_assets = assets
+    categories = CATEGORIES
+    if release is not None:
+        assets, release_manifest, release_licenses = release
+        categories = [item['id'] for item in release_manifest['categories']]
+    archive_sources={'system':'system', **{c:'categories/'+c for c in categories}}
+    if release is not None:
+        # Person IDs are intentionally independent from their archive directory
+        # (for example actor is stored under categories/person/actor).
+        for item in release_manifest['categories']:
+            directories = {str(pathlib.PurePosixPath(p).parent).removeprefix('app/src/main/assets/') for p in item['assetPaths']}
+            if len(directories) != 1:
+                raise ValueError('inconsistent release category paths: ' + item['id'])
+            archive_sources[item['id']] = directories.pop()
     dictionary_sources=dict(archive_sources)
     dictionary_sources.update({name: directory for name, (directory, _) in AUXILIARY_DICTIONARIES.items()})
     if english_reading:
@@ -228,10 +274,15 @@ def build(source,output,english_reading=False,english=False):
     # Refuse locally modified shipped assets, even when HEAD still matches.
     subprocess.run(['git','-C',str(source),'diff','--exit-code','HEAD','--']+['app/src/main/assets/'+p for p in paths],check=True,stdout=subprocess.DEVNULL)
     hashes={}
+    supplements={}
     def read(name):
-        raw=read_pinned_asset(assets,name);hashes[name]=hashlib.sha256(raw).hexdigest()
+        origin = assets if (assets / name).is_file() else reference_assets
+        raw = (origin / name).read_bytes() if release is not None and origin == assets else read_pinned_asset(origin,name)
+        hashes[name]=hashlib.sha256(raw).hexdigest()
+        if release is not None and origin == reference_assets:
+            supplements[name] = hashes[name]
         if not name.endswith('.zip'):return raw
-        with zipfile.ZipFile(assets/name) as z:
+        with zipfile.ZipFile(origin/name) as z:
             files=z.infolist()
             if name in ('english/reading.dat.zip','english/token.dat.zip'):
                 expected=pathlib.PurePosixPath(name).name.removesuffix('.zip')
@@ -305,6 +356,7 @@ def build(source,output,english_reading=False,english=False):
             postings.append(ones)
             if min(terms,default=1)<1 or max(terms,default=0)+1>=len(postings):raise ValueError('invalid term IDs')
             if Bits(leaf).prefix[-1]!=len(terms) or Bits(lbs).prefix[-1]+1!=len(labels):raise ValueError('invalid reading trie')
+            (dest/(name+'.sud')).parent.mkdir(parents=True,exist_ok=True)
             pack_file(dest/(name+'.sud'),1,0,[le(a) for a in [lbs,labels,leaf,terms,postings,pos,cost,refs,offsets]]+[bytes(blob)])
             summary[name]={'entries':len(pos),'readings':len(terms),'bytes':(dest/(name+'.sud')).stat().st_size}
             print(name,summary[name],file=sys.stderr,flush=True)
@@ -325,10 +377,16 @@ def build(source,output,english_reading=False,english=False):
             target.write_bytes(payload)
             mozc_summary[pathlib.PurePosixPath(asset).name]={'bytes':len(payload),'sha256':hashlib.sha256(payload).hexdigest()}
         summary['mozc_assets']=mozc_summary
-        shutil.copytree(assets/'licenses',dest/'licenses')
+        shutil.copytree(reference_assets/'licenses',dest/'licenses')
         shutil.copy2(source/'LICENSE',dest/'SOURCE-LICENSE')
         manifest={'format':1,'source_revision':revision,'asset_sha256':hashes,'dictionaries':summary,'matrix_dimension':n,'modification':'Array encoding and connection costs are preserved. Surface paths are re-encoded as UTF-8; lone UTF-16 surrogates in pinned source tokens are replaced with U+FFFD so returned strings are valid Unicode. See copied licenses for data terms.'}
-        manifest['output_sha256']={p.relative_to(dest).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.rglob('*') if p.is_file() and (p.suffix=='.sud' or p.name.startswith('system_ngram') or p.parent==dest/'mozc')}
+        if release is not None:
+            (dest/'release-categories-v1.7.277').write_text(RELEASE_TAG+'\n')
+            shutil.copy2(release_licenses,dest/'licenses'/'DICTIONARY-LICENSES-v1.7.277.txt')
+            manifest.update(source_revision=RELEASE_REVISION, source_release=RELEASE_TAG,
+                            release_sha256=RELEASE_SHA256, categories=release_manifest['categories'],
+                            supplemental_source_revision=REVISION, supplemental_asset_sha256=supplements)
+        manifest['output_sha256']={p.relative_to(dest).as_posix():hashlib.sha256(p.read_bytes()).hexdigest() for p in dest.rglob('*') if p.is_file() and (p.suffix=='.sud' or p.name.startswith(('system_ngram','release-categories-')) or p.parent==dest/'mozc')}
         (dest/'manifest.json').write_text(json.dumps(manifest,ensure_ascii=False,indent=2)+'\n')
         # Rename a complete generation only; never replace an existing generation.
         dest.rename(output)
@@ -337,6 +395,19 @@ if __name__=='__main__':
     ap=argparse.ArgumentParser(description=__doc__);ap.add_argument('--source',type=pathlib.Path,default=pathlib.Path(__file__).resolve().parents[1]/'.reference/JapaneseKeyboard');ap.add_argument('--output',type=pathlib.Path,required=True)
     ap.add_argument('--english-reading',action='store_true',help='Include the optional kana-to-English dictionary (separate from the 30 categories)')
     ap.add_argument('--english',action='store_true',help='Include the optional English word dictionary')
+    ap.add_argument('--release-archive',type=pathlib.Path,help='Verified v1.7.277 release ZIP')
+    ap.add_argument('--release-manifest',type=pathlib.Path)
+    ap.add_argument('--release-licenses',type=pathlib.Path)
     args=ap.parse_args()
-    try:build(args.source.resolve(),args.output.resolve(),args.english_reading,args.english)
+    try:
+        if any([args.release_archive,args.release_manifest,args.release_licenses]):
+            if not all([args.release_archive,args.release_manifest,args.release_licenses]):
+                raise ValueError('release archive, manifest, and licenses are all required')
+            with tempfile.TemporaryDirectory(prefix='sumire-release-') as tmp:
+                directory=pathlib.Path(tmp)
+                manifest=unpack_release(args.release_archive,args.release_manifest,args.release_licenses,directory)
+                build(args.source.resolve(),args.output.resolve(),args.english_reading,args.english,
+                      (directory/'app/src/main/assets',manifest,args.release_licenses))
+        else:
+            build(args.source.resolve(),args.output.resolve(),args.english_reading,args.english)
     except (ValueError,OSError,subprocess.CalledProcessError,zipfile.BadZipFile) as e:ap.exit(1,str(e)+'\n')
