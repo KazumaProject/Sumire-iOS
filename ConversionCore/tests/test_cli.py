@@ -100,6 +100,21 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def test_release_hierarchical_category_ids_and_classified_origins(self):
+        (self.data/'release-categories-v1.7.277').write_text('v1.7.277\n')
+        (self.data/'facility/religious').mkdir(parents=True)
+        dictionary(self.data/'facility/religious/shrine.sud', [('あい','SHRINE',1,0)])
+        dictionary(self.data/'actor.sud', [('あい','ACTOR',1,0)])
+        dictionary(self.data/'character.sud', [('あい','CHARACTER',1,0)])
+        result=json.loads(self.run_cli('--categories','facility/religious/shrine,actor,actor','あい').stdout)
+        shrine=next(c for c in result['candidates'] if c['text']=='SHRINE')
+        self.assertEqual(shrine['categories'],['facility/religious/shrine'])
+        self.assertEqual(len([c for c in result['candidates'] if c['text']=='ACTOR']),1)
+        self.run_cli('--categories','facility/../system','あい',ok=False)
+        if C_API:
+            r=subprocess.run([C_API,str(self.data),'--release-categories'],capture_output=True)
+            self.assertEqual(r.returncode,0,r.stderr.decode())
+
     def install_auxiliary_dictionary_fixture(self):
         dictionary(self.data/'emoji.sud',[
             ('あいう','EMOJI',0,6000),('あいうえ','EMOJI-PREDICT',0,6000),

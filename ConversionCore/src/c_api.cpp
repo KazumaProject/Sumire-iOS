@@ -125,6 +125,37 @@ const char *sumire_category_name(size_t index) {
     return nullptr;
   }
 }
+size_t sumire_release_category_count(void) { return 143; }
+const char *sumire_release_category_name(size_t index) {
+  try {
+    static const auto names = sumire::release_category_names();
+    return index < names.size() ? names[index].c_str() : nullptr;
+  } catch (...) { return nullptr; }
+}
+int sumire_engine_open_with_category_ids(const char *directory, const char *const *ids,
+                                         size_t count, uint32_t flags,
+                                         sumire_engine **out, char *error, size_t size) {
+  if (out) *out = nullptr;
+  return guarded(error, size, [&] {
+    check(out && directory && (ids || count == 0), "null engine argument");
+    check((flags & ~uint32_t(7)) == 0, "unknown dictionary flags");
+    // Bound caller-controlled iteration while permitting repeated valid IDs.
+    check(count <= 100000, "too many category IDs");
+    const auto allowed = sumire::release_category_names();
+    std::vector<std::string> categories;
+    for (size_t i = 0; i < count; ++i) {
+      check(ids[i], "null category ID");
+      const auto found = std::find(allowed.begin(), allowed.end(), ids[i]);
+      check(found != allowed.end(), "unknown category ID");
+      if (std::find(categories.begin(), categories.end(), *found) == categories.end())
+        categories.push_back(*found);
+    }
+    auto engine = std::make_unique<sumire_engine>();
+    engine->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0,
+                                                   (flags & 1) != 0, (flags & 4) == 0, false);
+    *out = engine.release();
+  });
+}
 int sumire_engine_open(const char *directory, uint32_t mask,
                        sumire_engine **out, char *error, size_t size) {
   return sumire_engine_open_with_dictionaries(directory, mask, 0, out, error, size);

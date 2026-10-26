@@ -32,7 +32,9 @@ struct ConversionCandidate {
                 else { badge = "" }
             }
         }
-        let labels = Self.categoryLabels.filter { classifiedCategories.contains($0.0) }.map(\.1)
+        let legacy = Set(Self.categoryLabels.map(\.0))
+        let labels = Self.categoryLabels.filter { classifiedCategories.contains($0.0) }.map(\.1) +
+            classifiedCategories.filter { !legacy.contains($0) }.map { DictionaryCategoryCatalog.label(for: $0) }
         let categoryBadge = labels.isEmpty ? "" : "[" + labels.joined(separator: "・") + "]"
         let value = [badge, categoryBadge].filter { !$0.isEmpty }.joined(separator: " ")
         return value.isEmpty ? nil : value
@@ -132,6 +134,7 @@ final class ConversionService {
     private var cachedDictionaryDirectories: [URL]?
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
+    private var categoryIDs: [String]?
     private var categoryMask: UInt32
     private var personal = PersonalLexicon()
     private var learningURL: URL?
@@ -162,7 +165,7 @@ final class ConversionService {
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
-        let locations = ["standard-mozc-scoring-auxiliary-correction-english", "standard-mozc-scoring-auxiliary-english", "cli-priority-v1", "cli-english-v1"].flatMap { name in
+        let locations = ["dictionary-v1.7.277", "standard-mozc-scoring-auxiliary-correction-english", "standard-mozc-scoring-auxiliary-english", "cli-priority-v1", "cli-english-v1"].flatMap { name in
             [bundle.appendingPathComponent(name, isDirectory: true),
              bundle.appendingPathComponent("PlugIns/SumireKeyboard.appex/" + name, isDirectory: true)]
         }
@@ -178,6 +181,14 @@ final class ConversionService {
     func setCategories(_ mask: UInt32) {
         guard categoryMask != mask else { return }
         categoryMask = mask
+        _ = pending.advance()
+        let state = state
+        queue.async { state.close() }
+    }
+    func setCategoryIDs(_ ids: [String]?) {
+        let ids = ids.map(DictionaryCategoryCatalog.normalize)
+        guard categoryIDs != ids else { return }
+        categoryIDs = ids
         _ = pending.advance()
         let state = state
         queue.async { state.close() }
@@ -210,7 +221,7 @@ final class ConversionService {
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, directoryOverride = directoryOverride
-        let mask = categoryMask, englishReading = englishReadingEnabled
+        let mask = categoryMask, englishReading = englishReadingEnabled, categoryIDs = categoryIDs
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
@@ -219,8 +230,9 @@ final class ConversionService {
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading)
+                try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
                 let warnings = [try state.prepareLearning(reading: reading),
+                    state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
                 var error = [CChar](repeating: 0, count: 1024)
@@ -390,6 +402,8 @@ final class ConversionService {
         // Generations are immutable. Once a native open rejects one, skip it for
         // this process and try the previous pointer or bundled baseline.
         private var rejectedDirectories = Set<URL>()
+        var unavailableCategoryIDs: [String] = []
+        private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
         func prepareLearning(reading: String) throws -> String? {
@@ -426,15 +440,15 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
-        func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool) throws {
+        func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
             let candidates = directories.map(\.standardizedFileURL).filter { !rejectedDirectories.contains($0) }
             let requestedDirectory = candidates.first
             let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&
-                openedMask == mask && openedEnglishReading == englishReading
+                openedMask == mask && openedEnglishReading == englishReading && openedCategoryIDs == categoryIDs
             if sameConfiguration && (!english || englishLoaded) { return }
             if session != nil { close() }
             let opened = try NativeDictionaryEngineOpener.open(directories: candidates, mask: mask,
-                english: english, englishReading: englishReading, rejecting: &rejectedDirectories)
+                english: english, englishReading: englishReading, rejecting: &rejectedDirectories, categoryIDs: categoryIDs)
             defer { sumire_engine_close(opened.engine) }
             var error = [CChar](repeating: 0, count: 1024)
             guard sumire_session_create(opened.engine, &session, &error, error.count) == 0 else {
@@ -443,8 +457,10 @@ final class ConversionService {
             standaloneAvailable = sumire_engine_has_standalone_priority(opened.engine) != 0
             do {
                 try installPersonal()
+                unavailableCategoryIDs = opened.unavailableCategoryIDs
                 openedDirectory = opened.directory
                 openedMask = mask
+                openedCategoryIDs = categoryIDs
                 openedEnglishReading = englishReading
                 englishLoaded = english
             } catch { close(); throw error }
@@ -486,7 +502,9 @@ final class ConversionService {
             standaloneAvailable = false
             englishLoaded = false
             openedDirectory = nil
+            unavailableCategoryIDs = []
             openedMask = nil
+            openedCategoryIDs = nil
             openedEnglishReading = nil
         }
         deinit { close() }

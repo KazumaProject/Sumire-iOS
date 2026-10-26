@@ -85,6 +85,14 @@ uint32_t sumire_abi_version(void);
 /* Category bit i corresponds to category_name(i); zero selects only system. */
 size_t sumire_category_count(void);
 const char *sumire_category_name(size_t index);
+/* v1.7.277 leaf catalog; names have static lifetime. Legacy catalog/mask stays unchanged. */
+size_t sumire_release_category_count(void);
+const char *sumire_release_category_name(size_t index);
+/* Select release leaf IDs, not filesystem paths. Duplicates are ignored.
+ * count==0 accepts ids==NULL. Unknown/null IDs and unknown flags fail atomically. */
+int sumire_engine_open_with_category_ids(const char *directory, const char *const *ids,
+                                         size_t count, uint32_t flags,
+                                         sumire_engine **out, char *error, size_t error_size);
 int sumire_engine_open(const char *directory, uint32_t category_mask,
                        sumire_engine **out, char *error, size_t error_size);
 /* Additive ABI v1 entry point. Dictionary flags: bit 0 loads English words,

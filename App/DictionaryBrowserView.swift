@@ -1,5 +1,6 @@
 import SwiftUI
 import Foundation
+import SumireCore
 
 /// The worker owns the native cursor on one queue; only one bounded page crosses
 /// onto the main queue. Generation changes cancel scans between native steps.
@@ -103,10 +104,9 @@ struct DictionaryBrowserView: View {
     @FocusState private var searchFocused: Bool
     private var dictionaries: [(id: String, title: String)] {
         [("system", "システム"), ("english", "英単語"), ("english_reading", "かなから英単語")] +
-        (0..<sumire_category_count()).map { index in
-            let name = String(cString: sumire_category_name(index))
-            return (name, DictionarySettings.names[name] ?? name)
-        }
+        DictionaryCategoryCatalog.categories.map { ($0.id, $0.label) } +
+        DictionaryCategoryCatalog.legacyIDs.filter { !DictionaryCategoryCatalog.idSet.contains($0) }
+            .map { ($0, DictionaryCategoryCatalog.label(for: $0)) }
     }
     var body: some View {
         List {

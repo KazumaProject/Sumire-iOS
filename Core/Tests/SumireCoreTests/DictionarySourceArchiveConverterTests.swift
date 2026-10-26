@@ -191,6 +191,26 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
         }
     }
 
+    func testConvertsReleaseNestedCategoryAndPersonAlias() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originals = sourceFiles(includeMacMetadata: false)
+        var files = originals.filter { !$0.0.hasPrefix("system/") }
+        for category in ["facility/religious/shrine", "person/actor"] {
+            files += originals.filter { $0.0.hasPrefix("system/") }.map {
+                ($0.0.replacingOccurrences(of: "system/", with: "categories/" + category + "/"), $0.1)
+            }
+        }
+        let archive = root.appendingPathComponent("release.zip")
+        try storedZIP(files).write(to: archive)
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archive, into: root.appendingPathComponent("converted"))
+        XCTAssertEqual(Set(report.convertedFiles), ["connection.sud", "actor.sud", "facility/religious/shrine.sud"])
+        for name in report.convertedFiles {
+            XCTAssertEqual(String(data: try Data(contentsOf: report.outputDirectory.appendingPathComponent(name)).prefix(8), encoding: .ascii), "SUMIRE01")
+        }
+    }
+
     func testConvertsAndroidReadingCorrectionDictionaryGroup() throws {
         let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
         try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)

@@ -1,3 +1,4 @@
+#include "release_categories.hpp"
 #include "engine.hpp"
 #include "dictionary_format.hpp"
 #include "standalone_dictionary.hpp"
@@ -285,6 +286,43 @@ std::vector<std::string> category_names() {
           "work_program",
           "work_stage"};
 }
+std::vector<std::string> release_category_names() {
+  std::vector<std::string> names;
+  for (auto id : detail::release_categories) names.emplace_back(id);
+  return names;
+}
+std::vector<std::string> resolve_category_names(const std::string &directory,
+                                              const std::vector<std::string> &requested,
+                                              bool expand_legacy_categories) {
+  const auto legacy = category_names();
+  const auto release = release_category_names();
+  const bool is_release = expand_legacy_categories &&
+      std::filesystem::exists(directory + "/release-categories-v1.7.277");
+  std::vector<std::string> result;
+  std::unordered_set<std::string> seen;
+  auto append = [&](const std::string &id) {
+    if (seen.insert(id).second) result.push_back(id);
+  };
+  for (const auto &id : requested) {
+    const bool is_legacy = std::find(legacy.begin(), legacy.end(), id) != legacy.end();
+    const bool is_leaf = std::find(release.begin(), release.end(), id) != release.end();
+    require(is_legacy || is_leaf, "unknown category");
+    if (!is_release || !is_legacy) {
+      append(id);
+      continue;
+    }
+    if (id == "person") {
+      for (auto leaf : detail::release_person_categories) append(std::string(leaf));
+    } else {
+      for (const auto &leaf : release) {
+        if (leaf == id || leaf.starts_with(id + "/") ||
+            ((id == "character" || id.starts_with("work_")) && leaf.starts_with("media_demographic/")))
+          append(leaf);
+      }
+    }
+  }
+  return result;
+}
 struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
@@ -295,7 +333,7 @@ struct Engine::Impl {
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
   std::unique_ptr<detail::SystemNgram> system_ngram;
   std::unique_ptr<detail::MozcScoringData> mozc_scoring_data;
-  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority)
+  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority, bool expand_legacy_categories)
       : connection(dir) {
     const auto path = dir + "/standalone.sud";
     if (standalone_priority && std::filesystem::exists(path))
@@ -323,15 +361,10 @@ struct Engine::Impl {
       for (auto p : reading_correction->pos)
         require(p < connection.left.size(), "reading correction POS outside table");
     }
-    auto valid = category_names();
-    std::unordered_set<std::string> used;
-    for (const auto &n : cats)
-      require(std::find(valid.begin(), valid.end(), n) != valid.end(),
-              "unknown category");
+    const auto resolved = resolve_category_names(dir, cats, expand_legacy_categories);
     dictionaries.push_back(std::make_unique<Dictionary>(dir, "system"));
-    for (const auto &n : cats)
-      if (used.insert(n).second)
-        dictionaries.push_back(std::make_unique<Dictionary>(dir, n));
+    for (const auto &n : resolved)
+      dictionaries.push_back(std::make_unique<Dictionary>(dir, n));
     for (auto &d : dictionaries)
       for (auto p : d->pos)
         require(p < connection.left.size(), "token POS outside table");
@@ -356,8 +389,8 @@ struct Engine::Impl {
     }
   }
 };
-Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority)
-    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority)) {}
+Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority, bool expand_legacy_categories)
+    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority, expand_legacy_categories)) {}
 Engine::~Engine() = default;
 bool Engine::standalone_priority_available() const { return impl->standalone != nullptr; }
 size_t Engine::mapped_bytes() const {

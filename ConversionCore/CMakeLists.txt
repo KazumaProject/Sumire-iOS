@@ -43,3 +43,7 @@ target_link_libraries(sumire-browser-test PRIVATE sumire_conversion)
 add_test(NAME dictionary_browser COMMAND ${Python3_EXECUTABLE} ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_dictionary_browser.py $<TARGET_FILE:sumire-browser-test>)
 add_executable(sumire-incremental-test tests/test_incremental.cpp)
 target_link_libraries(sumire-incremental-test PRIVATE sumire_conversion)
+
+add_executable(sumire-release-categories-test tests/test_release_categories.cpp)
+target_link_libraries(sumire-release-categories-test PRIVATE sumire_conversion)
+add_test(NAME release_categories COMMAND sumire-release-categories-test)

@@ -1,4 +1,5 @@
 #include "c_api.h"
+#include "dictionary_browser.h"
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -317,7 +318,62 @@ static void test_auxiliary_completion_ranges(const char *directory) {
   sumire_engine_close(engine);
 }
 
+static void test_release_categories(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  CHECK(sumire_category_count() == 30 && strcmp(sumire_category_name(12), "person") == 0);
+  CHECK(sumire_release_category_count() == 143);
+  CHECK(sumire_release_category_name(143) == NULL);
+  for (size_t i = 0; i < sumire_release_category_count(); ++i) {
+    CHECK(sumire_release_category_name(i) != NULL);
+    for (size_t j = 0; j < i; ++j)
+      CHECK(strcmp(sumire_release_category_name(i), sumire_release_category_name(j)) != 0);
+  }
+  CHECK(sumire_engine_open_with_category_ids(directory, NULL, 0, 4, &engine, error, sizeof error) == 0);
+  sumire_engine_close(engine);
+  const char *ids[] = {"facility/religious/shrine", "actor", "facility/religious/shrine", "character"};
+  CHECK(sumire_engine_open_with_category_ids(directory, ids, 4, 4, &engine, error, sizeof error) == 0);
+  sumire_session *session = NULL;
+  sumire_result *result = NULL;
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "あい", strlen("あい"), 0, 20, 200000, 0};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (candidate.text.size == 6 && memcmp(candidate.text.data, "SHRINE", 6) == 0) {
+      CHECK(sumire_result_category_count(result, i) == 1);
+      sumire_string category;
+      CHECK(sumire_result_category(result, i, 0, &category) == 0);
+      CHECK(category.size == strlen(ids[0]) && memcmp(category.data, ids[0], category.size) == 0);
+      found = 1;
+    }
+  }
+  CHECK(found);
+  sumire_result_destroy(result); sumire_session_destroy(session); sumire_engine_close(engine);
+  sumire_dictionary_browser *browser = NULL;
+  CHECK(sumire_dictionary_browser_open(directory, ids[0], "あ", 0, &browser, error, sizeof error) == 0);
+  CHECK(sumire_dictionary_browser_step(browser, 100, error, sizeof error) == 0);
+  CHECK(sumire_dictionary_browser_count(browser) == 1);
+  sumire_dictionary_browser_close(browser);
+  CHECK(sumire_dictionary_browser_open(directory, "../system", "", 0, &browser, error, sizeof error) < 0);
+  CHECK(browser == NULL);
+  const char *invalid[] = {"../system", "/system", "facility/../system", "person", "unknown", "facility/religious/shrine.sud", NULL};
+  for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+    engine = (sumire_engine *)1;
+    CHECK(sumire_engine_open_with_category_ids(directory, &invalid[i], 1, 0, &engine, error, sizeof error) < 0);
+    CHECK(engine == NULL);
+  }
+  CHECK(sumire_engine_open_with_category_ids(directory, NULL, 1, 0, &engine, error, sizeof error) < 0);
+  CHECK(sumire_engine_open_with_category_ids(directory, NULL, 0, 8, &engine, error, sizeof error) < 0);
+  CHECK(sumire_engine_open_with_category_ids(NULL, NULL, 0, 0, &engine, error, sizeof error) < 0);
+  CHECK(sumire_engine_open_with_category_ids(directory, NULL, 0, 0, NULL, error, sizeof error) < 0);
+}
 int main(int argc, char **argv) {
+  if (argc == 3 && strcmp(argv[2], "--release-categories") == 0) {
+    test_release_categories(argv[1]); return 0;
+  }
   if (argc == 3 && strcmp(argv[2],"--ascii-generated") == 0) {
     test_generated_ascii_fullwidth_ranges(argv[1]);
     return 0;

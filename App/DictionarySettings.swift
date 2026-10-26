@@ -60,6 +60,7 @@ struct DictionarySettings: View {
     @Binding var categoryMask: Int
     @Binding var englishReadingEnabled: Bool
     @Environment(\.dismiss) private var dismiss
+    @State private var selectedCategories = DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults)
     @State private var importingArchive = false
     @State private var importInProgress = false
     @State private var importOutcome: DictionaryImportOutcome?
@@ -82,8 +83,10 @@ struct DictionarySettings: View {
             List {
                 Section {
                     Text("システム辞書は常に有効です。分類辞書は必要なものを選べます。")
-                    Button("すべて有効") { categoryMask = 0x3fff_ffff }
-                    Button("分類辞書をすべて無効") { categoryMask = 0 }
+                    Button("すべて有効") { saveCategories(DictionaryCategoryCatalog.ids) }
+                    Button("分類辞書をすべて無効") { saveCategories([]) }
+                    Text("旧作品・キャラクター設定は共通の対象層分類にも引き継がれます。")
+                        .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("英単語読み辞書") {
                     Toggle("かなから英単語を表示", isOn: $englishReadingEnabled)
@@ -117,15 +120,15 @@ struct DictionarySettings: View {
                     }
                 }
                 Section("分類辞書") {
-                    ForEach(0..<Int(sumire_category_count()), id: \.self) { index in
-                        let id = String(cString: sumire_category_name(index))
-                        Toggle(Self.names[id] ?? id, isOn: Binding(
-                            get: { categoryMask & (1 << index) != 0 },
+                    ForEach(DictionaryCategoryCatalog.categories) { category in
+                        Toggle(category.label, isOn: Binding(
+                            get: { selectedCategories.contains(category.id) },
                             set: { enabled in
-                                if enabled { categoryMask |= 1 << index }
-                                else { categoryMask &= ~(1 << index) }
+                                var selected = Set(selectedCategories)
+                                if enabled { selected.insert(category.id) } else { selected.remove(category.id) }
+                                saveCategories(Array(selected))
                             }))
-                            .accessibilityIdentifier("category-" + id)
+                            .accessibilityIdentifier("category-" + category.id)
                     }
                 }
             }
@@ -148,6 +151,12 @@ struct DictionarySettings: View {
                 DictionaryImportOutcomeView(outcome: outcome)
             }
         }
+    }
+
+    private func saveCategories(_ ids: [String]) {
+        selectedCategories = DictionaryCategoryCatalog.normalize(ids)
+        DictionaryCategoryCatalog.save(selectedCategories, defaults: KeyboardSettings.appDefaults)
+        categoryMask = Int(DictionaryCategoryCatalog.legacyMask(for: selectedCategories))
     }
 
     private func startImport(_ archive: URL) {
@@ -184,7 +193,17 @@ struct DictionarySettings: View {
                 throw ImportError(message: "取り込みに必要な同梱の補助辞書が見つかりません")
             }
             var base: URL?
-            let baseCandidates = store.loadCandidates().map(\.directory) + [bundledSupport]
+            let usesReleaseLeaves = report.convertedFiles.contains {
+                DictionaryCategoryCatalog.idSet.contains(String($0.dropLast(4))) &&
+                    !DictionaryArchivePlan.categoryIDs.contains(String($0.dropLast(4)))
+            }
+            let storedCandidates = store.loadCandidates().map(\.directory)
+            // Preserve earlier release-leaf replacements when importing another leaf.
+            // Old generations cannot safely serve as a release-taxonomy baseline.
+            let releaseCandidates = storedCandidates.filter {
+                FileManager.default.fileExists(atPath: $0.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker).path)
+            }
+            let baseCandidates = usesReleaseLeaves ? releaseCandidates + [bundledSupport] : storedCandidates + [bundledSupport]
             for candidate in baseCandidates {
                 do {
                     try Self.validateNativeDictionaries(at: candidate)
@@ -213,18 +232,12 @@ struct DictionarySettings: View {
     }
 
     nonisolated private static func validateNativeDictionaries(at directory: URL) throws {
-        var engine: OpaquePointer?
-        var error = [CChar](repeating: 0, count: 1024)
         let hasEnglish = FileManager.default.fileExists(atPath: directory.appendingPathComponent("english.sud").path)
         let hasEnglishReading = FileManager.default.fileExists(atPath: directory.appendingPathComponent("english_reading.sud").path)
-        let flags: UInt32 = (hasEnglish ? 1 : 0) | (hasEnglishReading ? 2 : 0)
-        let status = directory.path.withCString { path in
-            sumire_engine_open_with_dictionaries(path, 0x3fff_ffff, flags, &engine, &error, error.count)
-        }
-        guard status == 0, let engine else {
-            throw ImportError(message: String(cString: error))
-        }
-        sumire_engine_close(engine)
+        var rejected = Set<URL>()
+        let opened = try NativeDictionaryEngineOpener.open(directories: [directory], mask: 0x3fff_ffff,
+            english: hasEnglish, englishReading: hasEnglishReading, rejecting: &rejected)
+        sumire_engine_close(opened.engine)
     }
 
     private struct ImportError: LocalizedError {

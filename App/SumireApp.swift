@@ -60,7 +60,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults))
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -216,6 +216,7 @@ struct InputHarness: UIViewRepresentable {
     let bunsetsuSeparation: Bool
     let englishReadingEnabled: Bool
     let categoryMask: UInt32
+    var categoryIDs: [String]? = nil
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextView {
         #if DEBUG
@@ -332,6 +333,7 @@ struct InputHarness: UIViewRepresentable {
         surface.omissionSearch = omissionSearch
         surface.bunsetsuSeparation = bunsetsuSeparation
         surface.englishReadingEnabled = englishReadingEnabled
+        surface.categoryIDs = categoryIDs
         surface.categoryMask = categoryMask
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }
         surface.saturation = CGFloat(saturation)
