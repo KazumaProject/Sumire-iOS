@@ -19,6 +19,7 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         let controllerIdentifier: UInt64
         let uptime: TimeInterval
         let name: String
+        let detail: String?
     }
 
     private var app: XCUIApplication!
@@ -65,7 +66,7 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
                   let name = fields["event"] else { return nil }
             return CompositionTraceEvent(sequence: sequence, processIdentifier: processIdentifier,
                                          controllerIdentifier: controllerIdentifier, uptime: uptime,
-                                         name: name)
+                                         name: name, detail: fields["detail"])
         }
     }
 
@@ -81,6 +82,44 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
             if let lowerBound, uptime <= lowerBound { return nil }
             return uptime
         }.last
+    }
+
+    private func hostLifecycleReplacementMarkSnapshots(in trace: String)
+        -> [(sequence: UInt64, uptime: TimeInterval, event: String, marked: Bool)] {
+        trace.split(separator: "|", omittingEmptySubsequences: true).compactMap { rawEvent in
+            let parts = rawEvent.split(separator: "{", maxSplits: 1, omittingEmptySubsequences: false)
+            guard parts.count == 2 else { return nil }
+            let header = String(parts[0])
+            let headerParts = header.split(separator: ":", maxSplits: 1, omittingEmptySubsequences: false)
+            guard headerParts.count == 2 else { return nil }
+            let sequenceAndUptime = headerParts[0].split(separator: "@", maxSplits: 1,
+                                                         omittingEmptySubsequences: false)
+            guard sequenceAndUptime.count == 2,
+                  let sequence = UInt64(sequenceAndUptime[0].dropFirst()),
+                  let uptime = TimeInterval(String(sequenceAndUptime[1])) else { return nil }
+
+            let body = String(parts[1])
+            guard let replacementStart = body.range(of: "other="),
+                  let nextEditor = body.range(of: ";matching=",
+                                              range: replacementStart.upperBound..<body.endIndex) else {
+                return nil
+            }
+            let replacementState = body[replacementStart.upperBound..<nextEditor.lowerBound]
+            return (sequence, uptime, String(headerParts[1]),
+                    replacementState.contains(";marked=true;"))
+        }
+    }
+
+    private func hostObservedReplacementMark(in trace: String) -> Bool? {
+        let prefix = "replacement-mark-observed="
+        guard let marker = trace.split(separator: "|").last(where: { $0.hasPrefix(prefix) }) else {
+            return nil
+        }
+        switch marker.dropFirst(prefix.count) {
+        case "true": return true
+        case "false": return false
+        default: return nil
+        }
     }
 
     private func waitForHostLifecycleEvent(named name: String, laterThan lowerBound: TimeInterval,
@@ -104,6 +143,29 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
             event.name == name && event.uptime > uptime &&
                 (event.processIdentifier != baseline.processIdentifier || event.sequence > baseline.sequence)
         }
+    }
+
+    private func waitForCompositionTraceEvent(named name: String, after baseline: CompositionTraceEvent,
+                                              timeout: TimeInterval = 5) -> CompositionTraceEvent? {
+        func matchingEvent(in trace: String) -> CompositionTraceEvent? {
+            compositionTraceEvents(in: trace).first { event in
+                event.name == name && event.uptime > baseline.uptime &&
+                    event.processIdentifier == baseline.processIdentifier &&
+                    event.controllerIdentifier == baseline.controllerIdentifier &&
+                    event.sequence > baseline.sequence
+            }
+        }
+
+        let deadline = Date().addingTimeInterval(timeout)
+        var trace = compositionTraceLabel()
+        while Date() < deadline {
+            if let event = matchingEvent(in: trace) {
+                return event
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.1))
+            trace = compositionTraceLabel()
+        }
+        return matchingEvent(in: trace)
     }
 
     private func japanese50OnKey(_ identifier: String, label: String) throws -> XCUIElement {
@@ -625,20 +687,501 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         XCTAssertEqual(original.value as? String ?? "", "")
         original.tap()
         try requireExtension()
+        let traceBeforeMark = compositionTraceLabel()
+        let eventBaseline = try XCTUnwrap(
+            compositionTraceEvents(in: traceBeforeMark).last,
+            "The extension must publish a sequenced trace before the marked-text write."
+        )
         let first = try japanese50OnKey("gojuon-0-10", label: "あ")
         first.tap()
         expectation(for: NSPredicate(format: "label CONTAINS %@", "marked=true;"),
                     evaluatedWith: originalState)
         waitForExpectations(timeout: 5)
 
+        let traceBaseline = try XCTUnwrap(
+            waitForCompositionTraceEvent(named: "mark.accepted", after: eventBaseline),
+            "The extension must publish a new accepted ownership event before host focus changes."
+        )
+        let hostLifecycleTraceElement = app.staticTexts["external-input-lifecycle-state"]
+        let hostTraceBeforeSwitch = hostLifecycleTraceElement.label
+        let hostEventBaselineSequence = try XCTUnwrap(
+            hostLifecycleReplacementMarkSnapshots(in: hostTraceBeforeSwitch).last?.sequence,
+            "The host must publish a sequenced callback snapshot before the focus-switch diagnostic."
+        )
+        XCTAssertEqual(hostObservedReplacementMark(in: hostTraceBeforeSwitch), false,
+                       "The replacement field must not already have a callback-observed mark before focus switches: \(hostTraceBeforeSwitch)")
+        let originalFocusUptime = try XCTUnwrap(
+            hostLifecycleEventUptime(named: "field-begin-editing", in: hostTraceBeforeSwitch),
+            "The host must record the original field entering editing before the focus-change diagnostic."
+        )
         other.tap()
         try requireExtension()
+        let finalizationExpectation = expectation(
+            for: NSPredicate(format: "label CONTAINS %@", "content=first;marked=false;"),
+            evaluatedWith: originalState
+        )
+        let finalizationWaitResult = XCTWaiter.wait(for: [finalizationExpectation], timeout: 5)
+        // Capture only the host's coarse state labels and the extension's
+        // boolean ownership trace before assertions can stop the test. Neither
+        // diagnostic surface contains the field's actual text or document IDs.
+        let originalStateAfterSwitch = originalState.label
+        let otherStateAfterSwitch = otherState.label
         let extensionTrace = compositionTraceLabel()
-        let hostTrace = app.staticTexts["external-input-lifecycle-state"].label
-        XCTAssertEqual(other.value as? String, "別",
-                       "An active marked reading must not follow focus to another field; new=\(otherState.label), old=\(originalState.label), extension=\(extensionTrace), host=\(hostTrace)")
-        XCTAssertTrue(originalState.label.contains("content=first;marked=false;"),
-                      "The old field should retain the reading as committed text; old=\(originalState.label), extension=\(extensionTrace), host=\(hostTrace)")
+        let freshExtensionEvents = compositionTraceEvents(in: extensionTrace).filter { event in
+            event.processIdentifier == traceBaseline.processIdentifier &&
+                event.controllerIdentifier == traceBaseline.controllerIdentifier &&
+                event.sequence > traceBaseline.sequence
+        }
+        let freshOwnershipEvents = freshExtensionEvents.filter { event in
+            event.name == "ownership.discard" || event.name == "composition.invalidate.request" ||
+                event.name.hasPrefix("owner.resolve.")
+        }
+        let freshDiscardReasonEvents = freshOwnershipEvents.filter { event in
+            guard let detail = event.detail, detail.hasPrefix("reason=") else { return false }
+            return detail != "reason=none" &&
+                (event.name == "ownership.discard" || event.name == "composition.invalidate.request" ||
+                    event.name.hasSuffix(".discard"))
+        }
+        let freshOwnershipSummary = freshOwnershipEvents.map { event in
+            "\(event.sequence):\(event.name):\(event.detail ?? "na")"
+        }.joined(separator: "|")
+        let hostTrace = hostLifecycleTraceElement.label
+        let replacementMarkObserved = hostObservedReplacementMark(in: hostTrace)
+        let postSwitchHostSnapshots = hostLifecycleReplacementMarkSnapshots(in: hostTrace).filter {
+            $0.sequence > hostEventBaselineSequence
+        }
+        let replacementMarkedSnapshots = postSwitchHostSnapshots.filter(\.marked)
+        let replacementMarkedSnapshotSummary = replacementMarkedSnapshots.map {
+            "\($0.sequence):\($0.event)@\($0.uptime)"
+        }.joined(separator: ",")
+        let otherValueAfterSwitch = other.value as? String
+        let hostShouldEndUptime = hostLifecycleEventUptime(
+            named: "field-should-end-editing", laterThan: originalFocusUptime, in: hostTrace
+        )
+        let hostShouldBeginUptime = hostLifecycleEventUptime(
+            named: "field-should-begin-editing", laterThan: originalFocusUptime, in: hostTrace
+        )
+        let finalizationRequestUptime = freshExtensionEvents.first {
+            $0.name == "mark.finalize.request"
+        }?.uptime
+        let finalizationReturnUptime = freshExtensionEvents.first {
+            $0.name == "mark.finalize.return"
+        }?.uptime
+        let ownerProxyFinalizationRequest = freshExtensionEvents.first {
+            $0.name == "mark.finalize.request" && $0.detail?.hasPrefix("target=marked-owner-proxy,") == true
+        }
+        let ownerProxyFinalizationReturn = freshExtensionEvents.first {
+            $0.name == "mark.finalize.return" && $0.detail?.hasPrefix("target=marked-owner-proxy,") == true
+        }
+        let ownerProxyFinalizationRequestedDuringFocusSwitch = ownerProxyFinalizationRequest != nil
+        let ownerProxyFinalizationReturnedDuringFocusSwitch = ownerProxyFinalizationReturn != nil
+
+        // Persist only callback labels, monotonic timestamps, and marked-state
+        // booleans. The attachment deliberately excludes editor contents and IDs.
+        XCTContext.runActivity(named: "Sanitized host-extension focus callback order") { activity in
+            let attachment = XCTAttachment(string: [
+                "field-should-end-editing=\(hostShouldEndUptime.map { String($0) } ?? "missing")",
+                "field-should-begin-editing=\(hostShouldBeginUptime.map { String($0) } ?? "missing")",
+                "mark.finalize.request=\(finalizationRequestUptime.map { String($0) } ?? "missing")",
+                "mark.finalize.return=\(finalizationReturnUptime.map { String($0) } ?? "missing")",
+                "owner-proxy-finalization-request-during-focus-switch=\(ownerProxyFinalizationRequestedDuringFocusSwitch)",
+                "owner-proxy-finalization-return-during-focus-switch=\(ownerProxyFinalizationReturnedDuringFocusSwitch)",
+                "owner-proxy-request-comparison=\(ownerProxyFinalizationRequest?.detail ?? "missing")",
+                "owner-proxy-return-comparison=\(ownerProxyFinalizationReturn?.detail ?? "missing")",
+                "old-host-marked-after-switch=\(originalStateAfterSwitch.contains("marked=true;"))",
+                "new-host-marked-after-switch=\(otherStateAfterSwitch.contains("marked=true;"))",
+                "replacement-mark-observed-after-switch=\(replacementMarkObserved.map { String($0) } ?? "missing")",
+                "post-switch-host-callback-snapshots=\(postSwitchHostSnapshots.count)",
+                "replacement-marked-callback-snapshots=\(replacementMarkedSnapshotSummary.isEmpty ? "none" : replacementMarkedSnapshotSummary)"
+            ].joined(separator: "\n"))
+            attachment.name = "Focus callback timing (privacy-safe)"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+
+        let previousContinueAfterFailure = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = previousContinueAfterFailure }
+
+        XCTAssertFalse(freshExtensionEvents.isEmpty,
+                       "The extension published no sequenced events after focus switched; baseline=\(traceBaseline.sequence), trace=\(extensionTrace)")
+        XCTAssertFalse(freshDiscardReasonEvents.isEmpty,
+                      "The fresh ownership trace must identify a fixed discard/resolution reason without host text or document IDs: \(freshOwnershipSummary)")
+        XCTAssertTrue(ownerProxyFinalizationRequestedDuringFocusSwitch &&
+                      ownerProxyFinalizationReturnedDuringFocusSwitch,
+                      "The focus-boundary callback must finalize through the retained owner proxy, not the dynamically routed current proxy: \(extensionTrace)")
+        XCTAssertTrue(
+            ownerProxyFinalizationRequest?.detail?.contains("ownerDocumentCurrent=") == true &&
+                ownerProxyFinalizationReturn?.detail?.contains("ownerDocumentCurrent=") == true,
+            "The privacy-safe owner-document comparison must be captured around finalization: \(extensionTrace)"
+        )
+        XCTAssertNotNil(hostShouldEndUptime,
+                        "The host must capture its should-end boundary after the original field began editing: \(hostTrace)")
+        XCTAssertNotNil(hostShouldBeginUptime,
+                        "The host must capture its should-begin boundary for the replacement field: \(hostTrace)")
+        XCTAssertTrue(replacementMarkedSnapshots.isEmpty,
+                      "The replacement field must stay unmarked in every retained post-switch host callback snapshot; snapshots=\(replacementMarkedSnapshotSummary)")
+        XCTAssertEqual(replacementMarkObserved, false,
+                       "No host callback after the focus-switch baseline may observe a marked replacement field, even if its event ages out of the bounded trace: \(hostTrace)")
+        XCTAssertEqual(otherValueAfterSwitch, "別",
+                       "An active marked reading must not follow focus to another field; new=\(otherStateAfterSwitch), old=\(originalStateAfterSwitch), extension=\(extensionTrace), host=\(hostTrace)")
+        XCTAssertTrue(otherStateAfterSwitch.contains("marked=false;"),
+                      "The replacement field must remain unmarked after the original host composition is finalized: new=\(otherStateAfterSwitch), old=\(originalStateAfterSwitch), extension=\(extensionTrace), host=\(hostTrace)")
+        XCTAssertTrue(originalStateAfterSwitch.contains("content=first;marked=false;"),
+                      "The old field should retain the reading as committed text; wait=\(finalizationWaitResult), old=\(originalStateAfterSwitch), new=\(otherStateAfterSwitch), extension=\(extensionTrace), host=\(hostTrace)")
+        let finalizedWithinDeadline: Bool
+        if case .completed = finalizationWaitResult {
+            finalizedWithinDeadline = true
+        } else {
+            finalizedWithinDeadline = false
+        }
+        XCTAssertTrue(finalizedWithinDeadline,
+                      "The old field should finalize within five seconds; wait=\(finalizationWaitResult), old=\(originalStateAfterSwitch), new=\(otherStateAfterSwitch), extension=\(extensionTrace), host=\(hostTrace)")
+    }
+
+    private func privacySafeOwnerContextComparison(_ detail: String?) -> String {
+        let allowlistedKeys = [
+            "document", "before", "after", "selected", "baseline",
+            "ownerDocumentPresent", "ownerDocumentCurrent", "ownerDocumentMatchesMark",
+            "markedContextCurrent", "canFinalize"
+        ]
+        let metadataValues: [String: Set<String>] = [
+            "lease": ["present"],
+            "suspended": ["true", "false"]
+        ]
+        guard let detail else { return "missing" }
+        guard detail.hasPrefix("target=retained-owner-proxy,") else { return "invalid" }
+
+        var values: [String: String] = [:]
+        let comparison = detail.dropFirst("target=retained-owner-proxy,".count)
+        for component in comparison.split(whereSeparator: { $0 == "," || $0 == ";" }) {
+            guard let separator = component.firstIndex(of: "=") else { return "invalid" }
+            let key = String(component[..<separator])
+            let value = String(component[component.index(after: separator)...])
+            if allowlistedKeys.contains(key) {
+                guard value == "true" || value == "false" else { return "invalid" }
+            } else if let acceptedValues = metadataValues[key] {
+                guard acceptedValues.contains(value) else { return "invalid" }
+            } else {
+                return "invalid"
+            }
+            guard values[key] == nil else { return "invalid" }
+            values[key] = value
+        }
+
+        guard values.count == allowlistedKeys.count + metadataValues.count else { return "invalid" }
+        return allowlistedKeys.map { "\($0)=\(values[$0]!)" }.joined(separator: ",")
+    }
+
+    func testOwnedMarkFinalizesThroughRetainedProxyWhileHostFocusRemainsStable() throws {
+        let original = app.textFields["external-input-field"]
+        let originalState = app.staticTexts["external-input-field-state"]
+        let hostLifecycleTraceElement = app.staticTexts["external-input-lifecycle-state"]
+
+        original.tap()
+        try requireExtension()
+        let first = try japanese50OnKey("gojuon-0-10", label: "あ")
+        first.tap()
+
+        let markedExpectation = expectation(
+            for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@",
+                             "content=first;marked=true;", "firstResponder=true"),
+            evaluatedWith: originalState
+        )
+        let markedWaitResult = XCTWaiter.wait(for: [markedExpectation], timeout: 5)
+        let markedStateReady = originalState.label.contains("content=first;marked=true;") &&
+            originalState.label.contains("firstResponder=true")
+        let markedWaitCompleted: Bool
+        if case .completed = markedWaitResult {
+            markedWaitCompleted = true
+        } else {
+            markedWaitCompleted = false
+        }
+        XCTAssertTrue(markedStateReady,
+                      "The original field must own a mark before retained-proxy finalization: \(originalState.label)")
+
+        let hostTraceBefore = hostLifecycleTraceElement.label
+        let originalFocusUptime = try XCTUnwrap(
+            hostLifecycleEventUptime(named: "field-begin-editing", in: hostTraceBefore),
+            "The host must record the original field entering editing before the diagnostic."
+        )
+        let traceBefore = compositionTraceLabel()
+        let traceBaseline = try XCTUnwrap(
+            compositionTraceEvents(in: traceBefore).last,
+            "The extension must publish a sequenced trace before retained-proxy finalization."
+        )
+
+        let finishButton = app.buttons["sumire-debug-finish-retained-owner-marked-text"]
+        XCTAssertTrue(finishButton.waitForExistence(timeout: 5),
+                      "The DEBUG-only retained-owner finalization control must be visible.")
+        XCTAssertTrue(finishButton.isHittable,
+                      "The retained-owner control must be hittable without switching host fields.")
+
+        let previousContinueAfterFailure = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = previousContinueAfterFailure }
+
+        finishButton.tap()
+        let finalizedExpectation = expectation(
+            for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@",
+                             "content=first;marked=false;", "firstResponder=true"),
+            evaluatedWith: originalState
+        )
+        let finalizationWaitResult = XCTWaiter.wait(for: [finalizedExpectation], timeout: 5)
+
+        let originalStateAfter = originalState.label
+        let extensionTrace = compositionTraceLabel()
+        let freshEvents = compositionTraceEvents(in: extensionTrace).filter { event in
+            event.processIdentifier == traceBaseline.processIdentifier &&
+                event.controllerIdentifier == traceBaseline.controllerIdentifier &&
+                event.sequence > traceBaseline.sequence
+        }
+        let hostTraceAfter = hostLifecycleTraceElement.label
+        let hostShouldEnd = hostLifecycleEventUptime(
+            named: "field-should-end-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostDidEnd = hostLifecycleEventUptime(
+            named: "field-end-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostShouldBegin = hostLifecycleEventUptime(
+            named: "field-should-begin-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostDidBegin = hostLifecycleEventUptime(
+            named: "field-begin-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let ownerRequest = freshEvents.first {
+            $0.name == "mark.finalize.request" &&
+                $0.detail?.hasPrefix("target=retained-owner-proxy,") == true
+        }
+        let ownerReturn = freshEvents.first {
+            $0.name == "mark.finalize.return" &&
+                $0.detail?.hasPrefix("target=retained-owner-proxy,") == true
+        }
+        let diagnosticAccepted = freshEvents.contains {
+            $0.name == "debug.stable-owner.finalization-return"
+        }
+        let diagnosticRejected = freshEvents.contains {
+            $0.name == "debug.stable-owner.finalization-rejected"
+        }
+        let hostContentPreserved = originalStateAfter.contains("content=first;")
+        let hostCompositionCleared = originalStateAfter.contains("marked=false;")
+        let hostStillFirstResponder = originalStateAfter.contains("firstResponder=true")
+        let hostStillMarked = originalStateAfter.contains("marked=true;")
+        let finalizationWaitCompleted: Bool
+        if case .completed = finalizationWaitResult {
+            finalizationWaitCompleted = true
+        } else {
+            finalizationWaitCompleted = false
+        }
+        let requestUptime = ownerRequest?.uptime
+        let returnUptime = ownerReturn?.uptime
+        let ownerRequestComparison = privacySafeOwnerContextComparison(ownerRequest?.detail)
+        let ownerReturnComparison = privacySafeOwnerContextComparison(ownerReturn?.detail)
+
+        XCTContext.runActivity(named: "Sanitized retained-owner stable-focus result") { activity in
+            let attachment = XCTAttachment(string: [
+                "marked-state-ready=\(markedStateReady)",
+                "marked-wait-completed=\(markedWaitCompleted)",
+                "owner-proxy-request=\(ownerRequest != nil)",
+                "owner-proxy-return=\(ownerReturn != nil)",
+                "owner-proxy-request-comparison=\(ownerRequestComparison)",
+                "owner-proxy-return-comparison=\(ownerReturnComparison)",
+                "diagnostic-accepted=\(diagnosticAccepted)",
+                "diagnostic-rejected=\(diagnosticRejected)",
+                "host-content-preserved=\(hostContentPreserved)",
+                "host-composition-cleared=\(hostCompositionCleared)",
+                "host-still-marked=\(hostStillMarked)",
+                "host-still-first-responder=\(hostStillFirstResponder)",
+                "field-should-end-after-baseline=\(hostShouldEnd.map { String($0) } ?? "missing")",
+                "field-did-end-after-baseline=\(hostDidEnd.map { String($0) } ?? "missing")",
+                "field-should-begin-after-baseline=\(hostShouldBegin.map { String($0) } ?? "missing")",
+                "field-did-begin-after-baseline=\(hostDidBegin.map { String($0) } ?? "missing")",
+                "owner-proxy-request-uptime=\(requestUptime.map { String($0) } ?? "missing")",
+                "owner-proxy-return-uptime=\(returnUptime.map { String($0) } ?? "missing")",
+                "finalization-wait-completed=\(finalizationWaitCompleted)"
+            ].joined(separator: "\n"))
+            attachment.name = "Retained-owner stable-focus finalization (privacy-safe)"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+
+        XCTAssertNotNil(ownerRequest,
+                        "The stable-focus control must request unmark through the retained owner proxy: \(extensionTrace)")
+        XCTAssertNotNil(ownerReturn,
+                        "The retained owner proxy call must return before interpreting host state: \(extensionTrace)")
+        XCTAssertTrue(ownerRequest?.detail?.contains("ownerDocumentCurrent=") == true &&
+                      ownerReturn?.detail?.contains("ownerDocumentCurrent=") == true,
+                      "The diagnostic must retain only boolean owner-context comparisons: \(extensionTrace)")
+        XCTAssertFalse(["missing", "invalid"].contains(ownerRequestComparison) ||
+                       ["missing", "invalid"].contains(ownerReturnComparison),
+                       "The stable-focus attachment must contain only the complete allowlisted boolean comparisons.")
+        XCTAssertTrue(diagnosticAccepted,
+                      "The extension must accept the guarded retained-owner diagnostic: \(extensionTrace)")
+        XCTAssertFalse(diagnosticRejected,
+                       "The extension must not reject the stable same-field control: \(extensionTrace)")
+        XCTAssertNil(hostShouldEnd, "Stable-focus finalization must not start host focus handoff: \(hostTraceAfter)")
+        XCTAssertNil(hostDidEnd, "Stable-focus finalization must not end host editing: \(hostTraceAfter)")
+        XCTAssertNil(hostShouldBegin, "Stable-focus finalization must not begin another host field: \(hostTraceAfter)")
+        XCTAssertNil(hostDidBegin, "Stable-focus finalization must not begin another host field: \(hostTraceAfter)")
+        XCTAssertTrue(hostContentPreserved,
+                      "The same field must retain its content class: \(originalStateAfter)")
+        XCTAssertTrue(hostCompositionCleared,
+                      "The same field's marked range must be cleared: \(originalStateAfter)")
+        XCTAssertTrue(hostStillFirstResponder,
+                      "The same field must remain first responder: \(originalStateAfter)")
+        XCTAssertFalse(hostStillMarked,
+                       "The same field must no longer have a marked range: \(originalStateAfter)")
+        XCTAssertTrue(finalizationWaitCompleted,
+                      "The same field must report committed text within five seconds: \(originalStateAfter)")
+    }
+
+    func testOwnedMarkFinalizesWhileHostFocusRemainsStable() throws {
+        let original = app.textFields["external-input-field"]
+        let originalState = app.staticTexts["external-input-field-state"]
+        let hostLifecycleTraceElement = app.staticTexts["external-input-lifecycle-state"]
+
+        original.tap()
+        try requireExtension()
+        let first = try japanese50OnKey("gojuon-0-10", label: "あ")
+        first.tap()
+
+        let markedExpectation = expectation(
+            for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@",
+                             "content=first;marked=true;", "firstResponder=true"),
+            evaluatedWith: originalState
+        )
+        let markedWaitResult = XCTWaiter.wait(for: [markedExpectation], timeout: 5)
+        let markedStateReady = originalState.label.contains("content=first;marked=true;") &&
+            originalState.label.contains("firstResponder=true")
+        let markedWaitCompleted: Bool
+        if case .completed = markedWaitResult {
+            markedWaitCompleted = true
+        } else {
+            markedWaitCompleted = false
+        }
+        XCTAssertTrue(markedStateReady,
+                      "The original field must own a marked composition before the stable-focus diagnostic: \(originalState.label)")
+
+        let hostTraceBefore = hostLifecycleTraceElement.label
+        let originalFocusUptime = try XCTUnwrap(
+            hostLifecycleEventUptime(named: "field-begin-editing", in: hostTraceBefore),
+            "The host must record the original field entering editing before the diagnostic."
+        )
+        let traceBefore = compositionTraceLabel()
+        let traceBaseline = try XCTUnwrap(
+            compositionTraceEvents(in: traceBefore).last,
+            "The extension must publish a sequenced trace before stable-focus finalization."
+        )
+
+        let finishButton = app.buttons["sumire-debug-finish-marked-text"]
+        XCTAssertTrue(finishButton.waitForExistence(timeout: 5),
+                      "The DEBUG-only control for the existing extension finalization closure must be visible.")
+        XCTAssertTrue(finishButton.isHittable,
+                      "The DEBUG-only finalization control must be hittable without switching host fields.")
+
+        let previousContinueAfterFailure = continueAfterFailure
+        continueAfterFailure = true
+        defer { continueAfterFailure = previousContinueAfterFailure }
+
+        finishButton.tap()
+        let finalizedExpectation = expectation(
+            for: NSPredicate(format: "label CONTAINS %@ AND label CONTAINS %@",
+                             "content=first;marked=false;", "firstResponder=true"),
+            evaluatedWith: originalState
+        )
+        let finalizationWaitResult = XCTWaiter.wait(for: [finalizedExpectation], timeout: 5)
+
+        // Retain only fixed event names, times, and coarse host-state booleans.
+        let originalStateAfter = originalState.label
+        let extensionTrace = compositionTraceLabel()
+        let freshEvents = compositionTraceEvents(in: extensionTrace).filter { event in
+            event.processIdentifier == traceBaseline.processIdentifier &&
+                event.controllerIdentifier == traceBaseline.controllerIdentifier &&
+                event.sequence > traceBaseline.sequence
+        }
+        let hostTraceAfter = hostLifecycleTraceElement.label
+        let hostShouldEnd = hostLifecycleEventUptime(
+            named: "field-should-end-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostDidEnd = hostLifecycleEventUptime(
+            named: "field-end-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostShouldBegin = hostLifecycleEventUptime(
+            named: "field-should-begin-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let hostDidBegin = hostLifecycleEventUptime(
+            named: "field-begin-editing", laterThan: originalFocusUptime, in: hostTraceAfter
+        )
+        let finalizationRequested = freshEvents.contains { $0.name == "mark.finalize.request" }
+        let finalizationReturned = freshEvents.contains { $0.name == "mark.finalize.return" }
+        let diagnosticAccepted = freshEvents.contains {
+            $0.name == "debug.stable-focus.finalization-return"
+        }
+        let diagnosticRejected = freshEvents.contains {
+            $0.name == "debug.stable-focus.finalization-rejected"
+        }
+        let hostStateStillMarked = originalStateAfter.contains("marked=true;")
+        let hostCompositionCleared = originalStateAfter.contains("marked=false;")
+        let hostContentPreserved = originalStateAfter.contains("content=first;")
+        let hostStillFirstResponder = originalStateAfter.contains("firstResponder=true")
+        let finalizationWaitCompleted: Bool
+        if case .completed = finalizationWaitResult {
+            finalizationWaitCompleted = true
+        } else {
+            finalizationWaitCompleted = false
+        }
+        let finalizationRequestUptime = freshEvents.first {
+            $0.name == "mark.finalize.request"
+        }?.uptime
+        let finalizationReturnUptime = freshEvents.first {
+            $0.name == "mark.finalize.return"
+        }?.uptime
+
+        XCTContext.runActivity(named: "Sanitized stable-focus finalization result") { activity in
+            let attachment = XCTAttachment(string: [
+                "marked-state-ready=\(markedStateReady)",
+                "marked-wait-completed=\(markedWaitCompleted)",
+                "marked-wait=\(String(describing: markedWaitResult))",
+                "proxy-finalization-request=\(finalizationRequested)",
+                "proxy-finalization-return=\(finalizationReturned)",
+                "diagnostic-accepted=\(diagnosticAccepted)",
+                "diagnostic-rejected=\(diagnosticRejected)",
+                "host-content-preserved=\(hostContentPreserved)",
+                "host-composition-cleared=\(hostCompositionCleared)",
+                "host-still-marked=\(hostStateStillMarked)",
+                "host-still-first-responder=\(hostStillFirstResponder)",
+                "field-should-end-after-baseline=\(hostShouldEnd.map { String($0) } ?? "missing")",
+                "field-did-end-after-baseline=\(hostDidEnd.map { String($0) } ?? "missing")",
+                "field-should-begin-after-baseline=\(hostShouldBegin.map { String($0) } ?? "missing")",
+                "field-did-begin-after-baseline=\(hostDidBegin.map { String($0) } ?? "missing")",
+                "mark.finalize.request-uptime=\(finalizationRequestUptime.map { String($0) } ?? "missing")",
+                "mark.finalize.return-uptime=\(finalizationReturnUptime.map { String($0) } ?? "missing")",
+                "finalization-wait-completed=\(finalizationWaitCompleted)",
+                "finalization-wait=\(String(describing: finalizationWaitResult))"
+            ].joined(separator: "\n"))
+            attachment.name = "Stable-focus finalization (privacy-safe)"
+            attachment.lifetime = .keepAlways
+            activity.add(attachment)
+        }
+
+        XCTAssertTrue(finalizationRequested && finalizationReturned && diagnosticAccepted,
+                      "The extension must acknowledge a fresh request and return through its existing proxy closure before this result is interpreted.")
+        XCTAssertFalse(diagnosticRejected,
+                       "The extension must not reject the stable-focus diagnostic preconditions.")
+        XCTAssertNil(hostShouldEnd, "Stable-focus finalization must not start host focus handoff: \(hostTraceAfter)")
+        XCTAssertNil(hostDidEnd, "Stable-focus finalization must not end host editing: \(hostTraceAfter)")
+        XCTAssertNil(hostShouldBegin, "Stable-focus finalization must not begin another host field: \(hostTraceAfter)")
+        XCTAssertNil(hostDidBegin, "Stable-focus finalization must not begin another host field: \(hostTraceAfter)")
+        XCTAssertTrue(hostContentPreserved,
+                      "The same host field must retain the original content class: \(originalStateAfter)")
+        XCTAssertTrue(hostCompositionCleared,
+                      "The same host field's marked range must be cleared: \(originalStateAfter)")
+        XCTAssertTrue(hostStillFirstResponder,
+                      "The same host field must remain first responder during the diagnostic: \(originalStateAfter)")
+        XCTAssertTrue(finalizationWaitCompleted,
+                      "The host must report committed composition within five seconds: \(originalStateAfter)")
+        XCTAssertFalse(hostStateStillMarked,
+                       "The existing extension unmark path should commit the mark while host focus is stable: \(originalStateAfter)")
     }
 
     func testHiddenCompositionDoesNotTransferToDifferentHostContext() throws {
@@ -793,15 +1336,15 @@ final class ExternalKeyboardAcceptanceTests: XCTestCase {
         let resumeDeadline = Date().addingTimeInterval(5)
         var appearanceTrace = compositionTraceLabel()
         var freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
-                                                    laterThan: activeHostUptime, in: appearanceTrace)
+                                                    laterThan: hideBoundaryUptime, in: appearanceTrace)
         while Date() < resumeDeadline && freshReady == nil {
             RunLoop.current.run(until: Date().addingTimeInterval(0.1))
             appearanceTrace = compositionTraceLabel()
             freshReady = freshCompositionTraceEvent(named: "lifecycle.did-appear.ready", after: traceBaseline,
-                                                   laterThan: activeHostUptime, in: appearanceTrace)
+                                                   laterThan: hideBoundaryUptime, in: appearanceTrace)
         }
         XCTAssertNotNil(freshReady,
-                        "The appearance-ready event must be newer than did-become-active and the pre-Home trace baseline; Home uptime=\(hideBoundaryUptime), active uptime=\(activeHostUptime), baseline=\(traceBaseline), trace=\(appearanceTrace)")
+                        "The appearance-ready event must be newer than Home and the pre-Home trace baseline; UIKit may report extension readiness before host did-become-active (\(activeHostUptime)); Home uptime=\(hideBoundaryUptime), baseline=\(traceBaseline), trace=\(appearanceTrace)")
         XCTAssertEqual(original.value as? String, "あい",
                        "Returning to the host must not lose the original reading")
         XCTAssertTrue(originalState.label.contains("content=both;marked=false;"),

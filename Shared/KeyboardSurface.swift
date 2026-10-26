@@ -554,6 +554,8 @@ final class KeyboardSurface: UIInputView {
     private let lifecycleDiagnosticLabel = UILabel()
     private let compositionTraceDiagnosticLabel = UILabel()
     private let lifecycleSwitchButton = UIButton(type: .system)
+    private let stableFocusFinalizeButton = UIButton(type: .system)
+    private let retainedOwnerFinalizeButton = UIButton(type: .system)
     /// Debug-only accessibility channel for lifecycle diagnostics. It carries
     /// fixed event names and booleans, never input text or document identifiers.
     var lifecycleDiagnostics: String? {
@@ -576,6 +578,42 @@ final class KeyboardSurface: UIInputView {
             lifecycleSwitchButton.trailingAnchor.constraint(equalTo: trailingAnchor),
             lifecycleSwitchButton.widthAnchor.constraint(equalToConstant: 44),
             lifecycleSwitchButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+
+    func exposeStableFocusFinalizationForDiagnostics(action: @escaping () -> Void) {
+        stableFocusFinalizeButton.translatesAutoresizingMaskIntoConstraints = false
+        stableFocusFinalizeButton.accessibilityIdentifier = "sumire-debug-finish-marked-text"
+        stableFocusFinalizeButton.accessibilityLabel = "Debug finalize marked text without changing focus"
+        stableFocusFinalizeButton.isUserInteractionEnabled = true
+        stableFocusFinalizeButton.setTitle("Finish", for: .normal)
+        stableFocusFinalizeButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        stableFocusFinalizeButton.backgroundColor = .systemOrange
+        stableFocusFinalizeButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(stableFocusFinalizeButton)
+        NSLayoutConstraint.activate([
+            stableFocusFinalizeButton.topAnchor.constraint(equalTo: topAnchor),
+            stableFocusFinalizeButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stableFocusFinalizeButton.widthAnchor.constraint(equalToConstant: 52),
+            stableFocusFinalizeButton.heightAnchor.constraint(equalToConstant: 32)
+        ])
+    }
+
+    func exposeRetainedOwnerFinalizationForDiagnostics(action: @escaping () -> Void) {
+        retainedOwnerFinalizeButton.translatesAutoresizingMaskIntoConstraints = false
+        retainedOwnerFinalizeButton.accessibilityIdentifier = "sumire-debug-finish-retained-owner-marked-text"
+        retainedOwnerFinalizeButton.accessibilityLabel = "Debug finalize retained owner mark without changing focus"
+        retainedOwnerFinalizeButton.isUserInteractionEnabled = true
+        retainedOwnerFinalizeButton.setTitle("Owner", for: .normal)
+        retainedOwnerFinalizeButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        retainedOwnerFinalizeButton.backgroundColor = .systemOrange
+        retainedOwnerFinalizeButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(retainedOwnerFinalizeButton)
+        NSLayoutConstraint.activate([
+            retainedOwnerFinalizeButton.topAnchor.constraint(equalTo: topAnchor),
+            retainedOwnerFinalizeButton.leadingAnchor.constraint(equalTo: stableFocusFinalizeButton.trailingAnchor, constant: 4),
+            retainedOwnerFinalizeButton.widthAnchor.constraint(equalToConstant: 64),
+            retainedOwnerFinalizeButton.heightAnchor.constraint(equalToConstant: 32)
         ])
     }
 #endif
@@ -2009,7 +2047,10 @@ final class KeyboardSurface: UIInputView {
     }
 #if DEBUG
     func setDebugCompositionTrace(_ value: String) {
-        compositionTraceDiagnosticLabel.accessibilityLabel = String(value.suffix(4_096))
+        // The session keeps up to 96 fixed-name/boolean events. Preserve the
+        // full ring so XCTest can compare a post-focus-switch sequence baseline
+        // without losing early events to accessibility-label truncation.
+        compositionTraceDiagnosticLabel.accessibilityLabel = String(value.suffix(32_768))
     }
 #endif
     private func closeExpandedCandidates() {

@@ -29,6 +29,7 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
     private let lifecycleState = UILabel()
     private var lifecycleEvents: [String] = []
     private var hostEventSequence = 0
+    private var replacementMarkSeen = false
 
     private var usesIdenticalContextFixture: Bool {
         ProcessInfo.processInfo.arguments.contains("--identical-context-owner")
@@ -106,6 +107,7 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         textState.isAccessibilityElement = true
         lifecycleState.accessibilityIdentifier = "external-input-lifecycle-state"
         lifecycleState.isAccessibilityElement = true
+        lifecycleState.text = "replacement-mark-observed=false"
         let stack = UIStackView(arrangedSubviews: [title, note, fieldLabel, field, fieldState,
                                                    otherFieldLabel, otherField, otherFieldState,
                                                    matchingContextLabel, matchingContextField, matchingContextFieldState,
@@ -171,6 +173,16 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         refreshInputState()
     }
 
+    func textFieldShouldEndEditing(_ textField: UITextField) -> Bool {
+        recordHostEvent("field-should-end-editing")
+        return true
+    }
+
+    func textFieldShouldBeginEditing(_ textField: UITextField) -> Bool {
+        recordHostEvent("field-should-begin-editing")
+        return true
+    }
+
     func textFieldDidEndEditing(_ textField: UITextField) {
         recordHostEvent("field-end-editing")
         refreshInputState()
@@ -211,11 +223,17 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         // This test-only trace stores editor state flags and selection lengths,
         // coarse content classes, and monotonic order; never input text.
         hostEventSequence += 1
+        if otherField?.markedTextRange != nil {
+            replacementMarkSeen = true
+        }
         let uptime = String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
         let snapshot = "#\(hostEventSequence)@\(uptime):\(name){field=\(editState(of: field));view=\(editState(of: text));other=\(editState(of: otherField));matching=\(editState(of: matchingContextField))}"
         lifecycleEvents.append(snapshot)
         if lifecycleEvents.count > 24 { lifecycleEvents.removeFirst() }
-        lifecycleState.text = lifecycleEvents.joined(separator: "|")
+        // This sticky boolean survives ring-buffer eviction while still exposing
+        // only callback-observed state, never text or document identity.
+        lifecycleState.text = lifecycleEvents.joined(separator: "|") +
+            "|replacement-mark-observed=\(replacementMarkSeen)"
     }
 
     private func editState(of input: UITextInput?) -> String {

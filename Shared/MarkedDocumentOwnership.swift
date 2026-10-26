@@ -76,10 +76,23 @@ struct MarkedDocumentOwnership {
         case discardOwnership
     }
 
+    enum DiscardReason: String {
+        case invalidMarkContext = "invalid-mark-context"
+        case markOwnerChanged = "mark-owner-changed"
+        case suspendedFocusChanged = "suspended-focus-changed"
+        case appearanceDocumentMismatch = "appearance-document-mismatch"
+        case appearanceTextContextMismatch = "appearance-text-context-mismatch"
+        case suspendedContextMismatch = "suspended-context-mismatch"
+        case hideContextMismatch = "hide-context-mismatch"
+    }
+
     private var markedContext: Context?
     private var preCompositionContext: Context?
     private var ownerDocument: String?
     private var isSuspended = false
+#if DEBUG
+    private(set) var debugLastDiscardReason: DiscardReason?
+#endif
 
     /// A new mark can extend the current composition only in the exact context
     /// that received its previous mark. Text equality is not field identity;
@@ -98,19 +111,24 @@ struct MarkedDocumentOwnership {
         return current.document == ownerDocument && markedContext == current
     }
 
-    mutating func recordMark(before: Context, after: Context, isEmpty: Bool) {
+    @discardableResult
+    mutating func recordMark(before: Context, after: Context, isEmpty: Bool) -> Bool {
+#if DEBUG
+        debugLastDiscardReason = nil
+#endif
         guard !isEmpty, let document = before.document, after.document == document else {
-            discard()
-            return
+            discard(reason: .invalidMarkContext)
+            return false
         }
         if let ownerDocument, ownerDocument != document {
-            discard()
-            return
+            discard(reason: .markOwnerChanged)
+            return false
         }
         if markedContext == nil { preCompositionContext = before }
         ownerDocument = document
         markedContext = after
         isSuspended = false
+        return true
     }
 
     mutating func discard() {
@@ -120,11 +138,21 @@ struct MarkedDocumentOwnership {
         isSuspended = false
     }
 
+    private mutating func discard(reason: DiscardReason) {
+#if DEBUG
+        debugLastDiscardReason = reason
+#endif
+        discard()
+    }
+
     /// Revalidate the suspended mark after the host reattaches the keyboard.
     /// Matching proxy-visible text is insufficient to transfer a mark to a new
     /// document: a different field can expose the same surrounding text.
     mutating func resolveOnAppearance(_ current: Context,
                                       discardSuspended: Bool = false) -> Resolution {
+#if DEBUG
+        debugLastDiscardReason = nil
+#endif
         guard let owned = markedContext else { return .none }
         guard current.document != nil else {
             isSuspended = true
@@ -132,7 +160,7 @@ struct MarkedDocumentOwnership {
         }
 
         if isSuspended && discardSuspended {
-            discard()
+            discard(reason: .suspendedFocusChanged)
             return .discardOwnership
         }
 
@@ -141,7 +169,7 @@ struct MarkedDocumentOwnership {
         // no public evidence here that a changed identifier names that field.
         // Fail closed rather than risk restoring composition into another field.
         guard ownerDocument == current.document else {
-            discard()
+            discard(reason: .appearanceDocumentMismatch)
             return .discardOwnership
         }
 
@@ -163,7 +191,7 @@ struct MarkedDocumentOwnership {
             return .preserveOwnedText
         }
 
-        discard()
+        discard(reason: .appearanceTextContextMismatch)
         return .discardOwnership
     }
 
@@ -171,6 +199,9 @@ struct MarkedDocumentOwnership {
     /// unknown context. Resume only when document identity and text context both
     /// match the editor that received our marked-text write.
     mutating func resolveCurrentContext(_ current: Context) -> Resolution {
+#if DEBUG
+        debugLastDiscardReason = nil
+#endif
         guard let owned = markedContext else { return .none }
         guard current.document != nil else {
             isSuspended = true
@@ -179,7 +210,7 @@ struct MarkedDocumentOwnership {
         guard isSuspended else { return .none }
 
         guard owned == current else {
-            discard()
+            discard(reason: .suspendedContextMismatch)
             return .discardOwnership
         }
 
@@ -191,6 +222,9 @@ struct MarkedDocumentOwnership {
     /// because the proxy was disconnected), suspend the ownership token until
     /// return rather than writing through an unidentified document.
     mutating func resolveOnHide(_ current: Context) -> Resolution {
+#if DEBUG
+        debugLastDiscardReason = nil
+#endif
         guard let owned = markedContext else { return .none }
         guard current.document != nil else {
             isSuspended = true
@@ -198,7 +232,7 @@ struct MarkedDocumentOwnership {
         }
 
         guard owned == current else {
-            discard()
+            discard(reason: .hideContextMismatch)
             return .discardOwnership
         }
 
@@ -213,9 +247,15 @@ extension MarkedDocumentOwnership {
     /// Reports only equality booleans for the ownership regression trace.
     /// It deliberately never exposes document identifiers or text context.
     func debugContextComparison(_ current: Context) -> String {
-        guard let markedContext else { return "lease=none" }
+        guard let markedContext else {
+            return "lease=none;suspended=\(isSuspended);ownerDocumentPresent=\(ownerDocument != nil);ownerDocumentCurrent=false;ownerDocumentMatchesMark=false;markedContextCurrent=false;canFinalize=false"
+        }
         let baselineMatches = preCompositionContext?.hasSameTextContext(as: current) ?? false
-        return "lease=present;suspended=\(isSuspended);document=\(markedContext.document == current.document);before=\(markedContext.before == current.before);after=\(markedContext.after == current.after);selected=\(markedContext.selected == current.selected);baseline=\(baselineMatches)"
+        let ownerDocumentMatchesCurrent = ownerDocument == current.document
+        let ownerDocumentMatchesMark = ownerDocument == markedContext.document
+        let markedContextMatchesCurrent = markedContext == current
+        let canFinalize = canFinalizeMark(in: current)
+        return "lease=present;suspended=\(isSuspended);document=\(markedContext.document == current.document);before=\(markedContext.before == current.before);after=\(markedContext.after == current.after);selected=\(markedContext.selected == current.selected);baseline=\(baselineMatches);ownerDocumentPresent=\(ownerDocument != nil);ownerDocumentCurrent=\(ownerDocumentMatchesCurrent);ownerDocumentMatchesMark=\(ownerDocumentMatchesMark);markedContextCurrent=\(markedContextMatchesCurrent);canFinalize=\(canFinalize)"
     }
 }
 #endif

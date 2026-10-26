@@ -81,7 +81,9 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
                       owner: inout Sumire.MarkedDocumentOwnership) throws {
         let before = try context(input, document: document)
         input.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0))
-        owner.recordMark(before: before, after: try context(input, document: document), isEmpty: text.isEmpty)
+        XCTAssertTrue(owner.recordMark(before: before, after: try context(input, document: document),
+                                      isEmpty: text.isEmpty),
+                      "A valid nonempty mark must be accepted into the ownership lease")
     }
     func testSameDocumentHideFinalizesMarkAndKeepsTextForReentry() throws {
         for input in [UITextField(), UITextView()] as [UIView & UITextInput] {
@@ -127,6 +129,22 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
         XCTAssertEqual(owner.resolveOnHide(marked), .preserveOwnedText)
         XCTAssertFalse(owner.canFinalizeMark(in: marked),
                        "A suspended mark cannot be finalized until its owner is revalidated")
+    }
+
+    func testRejectedMarkReportsFailureAndDiscardsPreviousLease() {
+        let before = Context(document: "A", before: "left", after: "right", selected: nil)
+        let marked = Context(document: "A", before: "leftあ", after: "right", selected: nil)
+        let mismatchedAfter = Context(document: "B", before: "leftあ", after: "right", selected: nil)
+        var owner = Sumire.MarkedDocumentOwnership()
+
+        XCTAssertTrue(owner.recordMark(before: before, after: marked, isEmpty: false))
+        XCTAssertTrue(owner.canFinalizeMark(in: marked))
+        XCTAssertFalse(owner.recordMark(before: marked, after: mismatchedAfter, isEmpty: false),
+                       "A mark that changes document identity must be rejected")
+        XCTAssertFalse(owner.canFinalizeMark(in: marked),
+                       "A rejected mark must discard the former ownership lease")
+        XCTAssertTrue(owner.canUpdateMark(in: mismatchedAfter),
+                      "A later mark may establish a new lease after the rejected owner was cleared")
     }
 
     func testSwitchingDocumentNeverUnmarksOtherEditorsComposition() throws {

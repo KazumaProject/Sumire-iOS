@@ -23,17 +23,32 @@ final class AndroidCompositionHideParityTests: XCTestCase {
         firstKey.tap()
         waitForValue(field, equals: "あ")
         waitForLabel(app.staticTexts["compositionReading"], equals: "あ")
-        let lifecycleBeforeSwitch = app.staticTexts["sumire-lifecycle-diagnostic"].label
-        XCTAssertTrue(lifecycleBeforeSwitch.contains("set-marked-called:"),
-                      "The initial key should create a host marked range: \(lifecycleBeforeSwitch)")
+        let fieldState = app.staticTexts["external-input-field-state"]
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "marked=true;"), evaluatedWith: fieldState)
+        waitForExpectations(timeout: 5)
+        let traceBeforeSwitch = app.staticTexts["sumire-debug-composition-trace"].label
+        XCTAssertTrue(traceBeforeSwitch.contains("event=mark.wrote;"),
+                      "The current extension trace should confirm a marked-text write: \(traceBeforeSwitch)")
 
-        let keyboardSwitcher = app.buttons["sumire-debug-advance-ime"]
+        let keyboardSwitcher = app.buttons["Next keyboard"]
         XCTAssertTrue(keyboardSwitcher.waitForExistence(timeout: 3),
-                      "Debug acceptance should expose a test-only input-mode switch")
+                      "The active third-party keyboard should expose the system input-mode switch")
         keyboardSwitcher.tap()
+        let compositionReading = app.staticTexts["compositionReading"]
+        let keyboardHidden = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "exists == false"),
+            object: compositionReading
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [keyboardHidden], timeout: 5), .completed,
+                       "Switching input methods should hide the Sumire keyboard extension")
+        XCTAssertEqual(field.value as? String, "あ",
+                       "Hiding the input view must keep the host text")
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "marked=false;"), evaluatedWith: fieldState)
+        waitForExpectations(timeout: 5)
+
         try requireSumireKeyboard()
         XCTAssertEqual(field.value as? String, "あ",
-                       "Hiding the input view must keep the text while finalizing its composing state")
+                       "Returning to Sumire must not lose the finalized host text")
         waitForLabel(app.staticTexts["compositionReading"], equals: "Sumire · C++変換")
 
         let nextKey = try japaneseKey(identifier: "gojuon-0-9", label: "か")
@@ -41,9 +56,9 @@ final class AndroidCompositionHideParityTests: XCTestCase {
         waitForLabel(app.staticTexts["compositionReading"], equals: "か",
                      message: "The next key must begin a new composing range")
         waitForValue(field, equals: "あか")
-        let lifecycleAfterNextKey = app.staticTexts["sumire-lifecycle-diagnostic"].label
-        XCTAssertTrue(lifecycleAfterNextKey.contains("set-marked-called:"),
-                      "Debug lifecycle trace should show the next host write: \(lifecycleAfterNextKey)")
+        expectation(for: NSPredicate(format: "label CONTAINS %@", "content=other;marked=true;markedUTF16=1;"),
+                    evaluatedWith: fieldState)
+        waitForExpectations(timeout: 5)
 
         guard let enter = key(["sumire-enter_key", "tenkey-enter", "gojuon-enter"]) else {
             XCTFail("The selected Japanese layout has no accessible enter key")

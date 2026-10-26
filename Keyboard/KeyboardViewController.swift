@@ -30,6 +30,7 @@ final class KeyboardViewController: UIInputViewController {
     private var isPreparingAppearance = false
     private var hasReachedViewDidAppear = false
     private var appearanceContextValidated = false
+    private var markedOwnerProxy: UITextDocumentProxy?
     private var hostWillResignActiveObserver: NSObjectProtocol?
 #if DEBUG
     private let compositionLogger = Logger(subsystem: "com.kazumaproject.sumire.ios", category: "CompositionLease")
@@ -56,6 +57,12 @@ final class KeyboardViewController: UIInputViewController {
 #if DEBUG
         compositionTraceControllerIdentifier = session.registerDebugController()
         surface.debugCompositionTrace = { [weak self] event in self?.traceCompositionEvent(event) }
+        surface.exposeStableFocusFinalizationForDiagnostics { [weak self] in
+            self?.finalizeOwnedMarkWithStableFocusForDiagnostics()
+        }
+        surface.exposeRetainedOwnerFinalizationForDiagnostics { [weak self] in
+            self?.finalizeOwnedMarkThroughRetainedProxyWithStableFocusForDiagnostics()
+        }
         session.debugCompositionDidChange = { [weak self] in
             self?.traceCompositionEvent("composition.change")
         }
@@ -139,12 +146,43 @@ final class KeyboardViewController: UIInputViewController {
             self.surface.clearCompositionDeletionHistory()
             self.changing = true
             proxy.setMarkedText(text, selectedRange: selection)
-            if text.isEmpty { proxy.unmarkText() }
+            if text.isEmpty {
+                proxy.unmarkText()
+                self.markedOwnerProxy = nil
+            }
             let after = self.context(for: proxy)
-            self.markedOwnership.recordMark(before: before, after: after, isEmpty: text.isEmpty)
+            let acceptedMark = self.markedOwnership.recordMark(
+                before: before, after: after, isEmpty: text.isEmpty
+            )
+            if acceptedMark {
+                if self.markedOwnerProxy == nil { self.markedOwnerProxy = proxy }
+            } else {
+                // Do not let an unaccepted mark leave a proxy that a later
+                // composition could mistake for the current owner.
+                self.markedOwnerProxy = nil
+                if !text.isEmpty {
+                    // The proxy write already happened, but the controller
+                    // cannot safely attribute it to a document after ownership
+                    // changed. Drop the local reading so a later key cannot
+                    // replay it into the newly observed context.
+                    self.session.needsCompositionRefresh = false
+                    self.session.hostFocusChangedWhileSuspended = false
+                    self.session.needsHostMarkRestore = false
+                    self.surface.invalidateComposition()
+                }
+            }
+#if DEBUG
+            if let reason = self.markedOwnership.debugLastDiscardReason {
+                self.traceCompositionEvent("ownership.discard", proxy: proxy,
+                                           detail: "reason=mark-\(reason.rawValue)")
+            }
+#endif
             self.expectedContext = after
             self.changing = false
             self.traceCompositionEvent("mark.wrote", proxy: proxy, generation: generation)
+            if acceptedMark {
+                self.traceCompositionEvent("mark.accepted", proxy: proxy, generation: generation)
+            }
         }
         surface.updateMarkedSelection = mark
         surface.updateMarkedText = { mark($0, NSRange(location: $0.utf16.count, length: 0), $1) }
@@ -294,6 +332,7 @@ final class KeyboardViewController: UIInputViewController {
                 current, discardSuspended: session.hostFocusChangedWhileSuspended)
             : markedOwnership.resolveCurrentContext(current)
 #if DEBUG
+        let discardReason = markedOwnership.debugLastDiscardReason?.rawValue ?? "none"
         let resolutionName: String
         switch resolution {
         case .none: resolutionName = "none"
@@ -303,7 +342,7 @@ final class KeyboardViewController: UIInputViewController {
         case .discardOwnership: resolutionName = "discard"
         }
         traceCompositionEvent("owner.resolve.\(onAppearance ? "appearance" : "current").\(resolutionName)",
-                              proxy: proxy, detail: ownershipComparison)
+                              proxy: proxy, detail: "reason=\(discardReason);\(ownershipComparison)")
 #endif
         switch resolution {
         case .none:
@@ -316,8 +355,14 @@ final class KeyboardViewController: UIInputViewController {
                 session.hostFocusChangedWhileSuspended = false
                 session.needsHostMarkRestore = false
                 surface.isUserInteractionEnabled = false
-                if surface.hasComposition { surface.invalidateComposition() }
+                if surface.hasComposition {
+#if DEBUG
+                    traceCompositionInvalidation(reason: "disconnected-proxy-without-owner", proxy: proxy)
+#endif
+                    surface.invalidateComposition()
+                }
                 else { surface.suspendCompositionDisplay() }
+                markedOwnerProxy = nil
                 return false
             }
             if onAppearance, surface.hasComposition {
@@ -327,7 +372,11 @@ final class KeyboardViewController: UIInputViewController {
                 session.needsCompositionRefresh = false
                 session.hostFocusChangedWhileSuspended = false
                 session.needsHostMarkRestore = false
+#if DEBUG
+                traceCompositionInvalidation(reason: "appearance-without-owned-mark", proxy: proxy)
+#endif
                 surface.invalidateComposition()
+                markedOwnerProxy = nil
             }
             return true
         case .preserveOwnedText:
@@ -367,7 +416,11 @@ final class KeyboardViewController: UIInputViewController {
             session.needsCompositionRefresh = false
             session.needsHostMarkRestore = false
             if onAppearance { session.hostFocusChangedWhileSuspended = false }
+#if DEBUG
+            traceCompositionInvalidation(reason: "resolver-\(discardReason)", proxy: proxy)
+#endif
             surface.invalidateComposition()
+            markedOwnerProxy = nil
             return true
         }
     }
@@ -399,7 +452,11 @@ final class KeyboardViewController: UIInputViewController {
             committedDeletionHistory.removeAll(keepingCapacity: true)
             pendingDeletionUndoContext = nil
         }
+#if DEBUG
+        traceOwnershipDiscard(reason: "host-write-started", proxy: proxy)
+#endif
         markedOwnership.discard()
+        markedOwnerProxy = nil
         changing = true
         operation(proxy)
         expectedContext = context(for: proxy)
@@ -470,7 +527,12 @@ final class KeyboardViewController: UIInputViewController {
             surface.clearCompositionDeletionHistory()
         }
         if current.document == nil || expectedContext.map({ current != $0 }) == true {
+#if DEBUG
+            let reason = current.document == nil ? "validate-missing-document" : "validate-context-drift"
+            traceOwnershipDiscard(reason: reason, proxy: proxy)
+#endif
             markedOwnership.discard()
+            markedOwnerProxy = nil
             surface.invalidateComposition()
         }
         expectedContext = current
@@ -496,7 +558,11 @@ final class KeyboardViewController: UIInputViewController {
     private func rejectStaleHostWrite(for proxy: UITextDocumentProxy) {
         traceCompositionEvent("host-write.reject", proxy: proxy)
         let current = context(for: proxy)
+#if DEBUG
+        traceOwnershipDiscard(reason: "stale-host-write-rejected", proxy: proxy)
+#endif
         markedOwnership.discard()
+        markedOwnerProxy = nil
         session.needsCompositionRefresh = false
         surface.invalidateComposition()
         expectedContext = current
@@ -520,6 +586,117 @@ final class KeyboardViewController: UIInputViewController {
         guard didFinalize else { return }
         surface.invalidateComposition()
     }
+
+#if DEBUG
+    /// Test-only entry point for checking the exact proxy unmark path without
+    /// changing the host responder. It retains the normal owner/context vetoes.
+    private func finalizeOwnedMarkWithStableFocusForDiagnostics() {
+        let proxy = textDocumentProxy
+        let current = context(for: proxy)
+        let contextMatches = expectedContext == current
+        let ownerMatches = markedOwnership.canFinalizeMark(in: current)
+        guard surface.hasComposition, hasReachedViewDidAppear,
+              appearanceContextValidated, !isPreparingAppearance, !changing,
+              !session.needsCompositionRefresh, contextMatches, ownerMatches else {
+            traceCompositionEvent(
+                "debug.stable-focus.finalization-rejected",
+                proxy: proxy,
+                detail: "composition=\(surface.hasComposition);appeared=\(hasReachedViewDidAppear);validated=\(appearanceContextValidated);context=\(contextMatches);owner=\(ownerMatches)"
+            )
+            return
+        }
+
+        traceCompositionEvent("debug.stable-focus.finalization-request", proxy: proxy)
+        let traceSequenceBeforeFinalize = session.debugCompositionTraceSequence
+        surface.finishMarkedText?()
+
+        let newTraceEvents = session.debugCompositionTraceEvents.filter { entry in
+            guard let sequenceField = entry.split(separator: ";", maxSplits: 1).first,
+                  sequenceField.hasPrefix("seq="),
+                  let sequence = UInt64(sequenceField.dropFirst("seq=".count)) else { return false }
+            return sequence > traceSequenceBeforeFinalize &&
+                entry.contains(";controller=\(compositionTraceControllerIdentifier);")
+        }
+        let didRequestUnmark = newTraceEvents.contains { $0.contains(";event=mark.finalize.request;") }
+        let didReturnFromUnmark = newTraceEvents.contains { $0.contains(";event=mark.finalize.return;") }
+        traceCompositionEvent(
+            "debug.stable-focus.finalization-result",
+            proxy: proxy,
+            detail: "request=\(didRequestUnmark);return=\(didReturnFromUnmark)"
+        )
+        guard didRequestUnmark, didReturnFromUnmark else { return }
+
+        surface.invalidateComposition()
+        traceCompositionEvent("debug.stable-focus.finalization-return", proxy: proxy)
+    }
+
+    /// Test-only same-focus control for the proxy retained with the owned mark.
+    /// Require both the current and retained proxy to match the exact lease
+    /// before writing, so this control cannot finalize a different host field.
+    private func finalizeOwnedMarkThroughRetainedProxyWithStableFocusForDiagnostics() {
+        let currentProxy = textDocumentProxy
+        let current = context(for: currentProxy)
+        guard let ownerProxy = markedOwnerProxy else {
+            traceCompositionEvent(
+                "debug.stable-owner.finalization-rejected",
+                proxy: currentProxy,
+                detail: "ownerProxy=false;composition=\(surface.hasComposition)"
+            )
+            return
+        }
+
+        let ownerContext = context(for: ownerProxy)
+        let expectedMatchesCurrent = expectedContext == current
+        let expectedMatchesOwner = expectedContext == ownerContext
+        let currentMatchesOwner = current == ownerContext
+        let ownerCanFinalize = markedOwnership.canFinalizeMark(in: ownerContext)
+        guard surface.hasComposition, hasReachedViewDidAppear,
+              appearanceContextValidated, !isPreparingAppearance, !changing,
+              !session.needsCompositionRefresh, expectedMatchesCurrent,
+              expectedMatchesOwner, currentMatchesOwner, ownerCanFinalize else {
+            traceCompositionEvent(
+                "debug.stable-owner.finalization-rejected",
+                proxy: ownerProxy,
+                detail: "ownerProxy=true;composition=\(surface.hasComposition);appeared=\(hasReachedViewDidAppear);validated=\(appearanceContextValidated);expectedCurrent=\(expectedMatchesCurrent);expectedOwner=\(expectedMatchesOwner);proxiesEqual=\(currentMatchesOwner);owner=\(ownerCanFinalize)"
+            )
+            return
+        }
+
+        let before = markedOwnership.debugContextComparison(ownerContext)
+            .replacingOccurrences(of: ";", with: ",")
+        let traceSequenceBeforeFinalize = session.debugCompositionTraceSequence
+        traceCompositionEvent("debug.stable-owner.finalization-request", proxy: ownerProxy,
+                              detail: "target=retained-owner-proxy,\(before)")
+        traceCompositionEvent("mark.finalize.request", proxy: ownerProxy,
+                              detail: "target=retained-owner-proxy,\(before)")
+        changing = true
+        ownerProxy.unmarkText()
+        changing = false
+
+        let after = markedOwnership.debugContextComparison(context(for: ownerProxy))
+            .replacingOccurrences(of: ";", with: ",")
+        traceCompositionEvent("mark.finalize.return", proxy: ownerProxy,
+                              detail: "target=retained-owner-proxy,\(after)")
+        let newTraceEvents = session.debugCompositionTraceEvents.filter { entry in
+            guard let sequenceField = entry.split(separator: ";", maxSplits: 1).first,
+                  sequenceField.hasPrefix("seq="),
+                  let sequence = UInt64(sequenceField.dropFirst("seq=".count)) else { return false }
+            return sequence > traceSequenceBeforeFinalize &&
+                entry.contains(";controller=\(compositionTraceControllerIdentifier);")
+        }
+        let didRequestUnmark = newTraceEvents.contains { $0.contains(";event=mark.finalize.request;") }
+        let didReturnFromUnmark = newTraceEvents.contains { $0.contains(";event=mark.finalize.return;") }
+        traceCompositionEvent(
+            "debug.stable-owner.finalization-result",
+            proxy: ownerProxy,
+            detail: "request=\(didRequestUnmark);return=\(didReturnFromUnmark);ownerAfter=\(after)"
+        )
+        guard didRequestUnmark, didReturnFromUnmark else { return }
+
+        surface.invalidateComposition()
+        traceCompositionEvent("debug.stable-owner.finalization-return", proxy: ownerProxy)
+    }
+#endif
 
     override func textWillChange(_ textInput: UITextInput?) {
         traceCompositionEvent("callback.text-will-change", inputAvailable: textInput != nil)
@@ -566,19 +743,55 @@ final class KeyboardViewController: UIInputViewController {
         guard !changing, !session.needsCompositionRefresh, surface.hasComposition else { return }
         let proxy = textDocumentProxy
         let current = context(for: proxy)
-        if expectedContext == current, markedOwnership.canFinalizeMark(in: current) {
-            // Commit only an existing mark whose exact owner is still current.
-            // This prevents UIKit from carrying the mark into the next field,
-            // while refusing to write when the proxy has already changed.
-            traceCompositionEvent("context-change.finalize-owned-mark", proxy: proxy)
-            surface.finishMarkedText?()
+#if DEBUG
+        let ownershipComparison = markedOwnership.debugContextComparison(current)
+#else
+        let ownershipComparison = "unavailable"
+#endif
+        let expectedContextMatches = expectedContext == current
+        let canFinalizeMark = markedOwnership.canFinalizeMark(in: current)
+        if expectedContextMatches, canFinalizeMark {
+            if let ownerProxy = markedOwnerProxy {
+                // Keep the exact proxy object used for the owner's marked-text
+                // write. The controller's current proxy can be retargeted to
+                // the next field before UIKit delivers this callback.
+                traceCompositionEvent("context-change.finalize-marked-owner", proxy: proxy)
+                #if DEBUG
+                let ownerContextAtRequest = markedOwnership
+                    .debugContextComparison(context(for: ownerProxy))
+                    .replacingOccurrences(of: ";", with: ",")
+                #else
+                let ownerContextAtRequest = "unavailable"
+                #endif
+                traceCompositionEvent("mark.finalize.request", proxy: ownerProxy,
+                                      detail: "target=marked-owner-proxy,\(ownerContextAtRequest)")
+                changing = true
+                ownerProxy.unmarkText()
+                changing = false
+                #if DEBUG
+                let ownerContextAtReturn = markedOwnership
+                    .debugContextComparison(context(for: ownerProxy))
+                    .replacingOccurrences(of: ";", with: ",")
+                #else
+                let ownerContextAtReturn = "unavailable"
+                #endif
+                traceCompositionEvent("mark.finalize.return", proxy: ownerProxy,
+                                      detail: "target=marked-owner-proxy,\(ownerContextAtReturn)")
+            } else {
+                traceCompositionEvent("mark.finalize.owner-proxy-unavailable", proxy: proxy)
+            }
         }
         appearanceContextValidated = false
         expectedContext = context()
+#if DEBUG
+        traceOwnershipDiscard(reason: "context-change", proxy: proxy)
+#endif
         markedOwnership.discard()
+        markedOwnerProxy = nil
         session.needsHostMarkRestore = false
         surface.invalidateComposition()
-        traceCompositionEvent(event)
+        traceCompositionEvent(event, proxy: proxy,
+                              detail: "expected=\(expectedContextMatches);before-discard=\(ownershipComparison)")
     }
 
     private func isSensitiveInput(_ proxy: UITextDocumentProxy) -> Bool {
@@ -1029,6 +1242,12 @@ final class KeyboardViewController: UIInputViewController {
             surface.finishMarkedText?()
         }
         let resolution = markedOwnership.resolveOnHide(context(for: proxy))
+#if DEBUG
+        if let reason = markedOwnership.debugLastDiscardReason {
+            traceCompositionEvent("ownership.discard", proxy: proxy,
+                                  detail: "reason=hide-\(reason.rawValue)")
+        }
+#endif
         hasReachedViewDidAppear = false
         appearanceContextValidated = false
         switch resolution {
@@ -1059,6 +1278,11 @@ final class KeyboardViewController: UIInputViewController {
             session.needsCompositionRefresh = false
             session.hostFocusChangedWhileSuspended = false
             session.needsHostMarkRestore = false
+#if DEBUG
+            let reason = resolution == .none ? "hide-without-owned-mark" : "hide-owner-discarded"
+            traceCompositionInvalidation(reason: reason, proxy: proxy)
+#endif
+            markedOwnerProxy = nil
             surface.invalidateComposition()
         }
         super.viewWillDisappear(animated)
@@ -1069,6 +1293,22 @@ final class KeyboardViewController: UIInputViewController {
 #if DEBUG
     /// Temporary, privacy-safe trace for the composition ownership regression.
     /// It records only event ordering and boolean state, never text or document IDs.
+    private func traceOwnershipDiscard(reason: String, proxy: UITextDocumentProxy) {
+        let current = context(for: proxy)
+        let comparison = markedOwnership.debugContextComparison(current)
+        guard surface.hasComposition || comparison.hasPrefix("lease=present;") else { return }
+        traceCompositionEvent("ownership.discard", proxy: proxy,
+                              detail: "reason=\(reason);\(comparison)")
+    }
+
+    private func traceCompositionInvalidation(reason: String, proxy: UITextDocumentProxy) {
+        guard surface.hasComposition else { return }
+        let current = context(for: proxy)
+        let comparison = markedOwnership.debugContextComparison(current)
+        traceCompositionEvent("composition.invalidate.request", proxy: proxy,
+                              detail: "reason=\(reason);\(comparison)")
+    }
+
     private func traceCompositionEvent(_ event: String, proxy: UITextDocumentProxy? = nil,
                                       generation: UInt64? = nil, inputAvailable: Bool? = nil,
                                       detail: String? = nil) {
