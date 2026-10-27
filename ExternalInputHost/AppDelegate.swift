@@ -3,15 +3,37 @@ import UIKit
 // Deliberately independent of SumireCore/Shared and App Groups: all text is volatile.
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
-    var window: UIWindow?
+    func application(_ application: UIApplication, didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
+        true
+    }
 
-    func application(_ application: UIApplication,
-                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        let window = UIWindow(frame: UIScreen.main.bounds)
+    func application(_ application: UIApplication, configurationForConnecting connectingSceneSession: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "Input Host", sessionRole: connectingSceneSession.role)
+        configuration.delegateClass = InputHostSceneDelegate.self
+        return configuration
+    }
+}
+
+final class InputHostSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options connectionOptions: UIScene.ConnectionOptions) {
+        guard let scene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: scene)
         window.rootViewController = InputHostViewController()
-        window.makeKeyAndVisible()
         self.window = window
-        return true
+        window.makeKeyAndVisible()
+    }
+}
+
+/// Read the editor itself whenever XCTest requests state. Unmarking need not
+/// emit an editing notification, so a cached UILabel.text is not evidence of
+/// the current markedTextRange. This getter never changes host input.
+private final class LiveInputStateLabel: UILabel {
+    var snapshot: (() -> String)?
+    override var accessibilityLabel: String? {
+        get { snapshot?() ?? super.accessibilityLabel }
+        set { super.accessibilityLabel = newValue }
     }
 }
 
@@ -22,14 +44,16 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
     private weak var forwardDeleteField: UITextField?
     private weak var forwardDeleteSelectionStatus: UILabel?
     private weak var text: UITextView?
-    private let fieldState = UILabel()
-    private let otherFieldState = UILabel()
-    private let matchingContextFieldState = UILabel()
-    private let textState = UILabel()
+    private let fieldState = LiveInputStateLabel()
+    private let otherFieldState = LiveInputStateLabel()
+    private let matchingContextFieldState = LiveInputStateLabel()
+    private let textState = LiveInputStateLabel()
     private let lifecycleState = UILabel()
     private var lifecycleEvents: [String] = []
     private var hostEventSequence = 0
     private var replacementMarkSeen = false
+    private var originalFieldEndEditingBoundary: String?
+    private var firstOriginalUnmarkedCallbackAfterEndEditing: String?
 
     private var usesIdenticalContextFixture: Bool {
         ProcessInfo.processInfo.arguments.contains("--identical-context-owner")
@@ -82,7 +106,7 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         matchingContextLabel.text = "UITextField (同文脈)"
         let matchingContextField = UITextField()
         matchingContextField.borderStyle = .roundedRect
-        matchingContextField.text = "あ"
+        matchingContextField.text = usesIdenticalContextFixture ? "あい" : "あ"
         matchingContextField.accessibilityIdentifier = "external-input-matching-context-field"
         matchingContextField.accessibilityLabel = "同文脈テスト入力"
         matchingContextField.autocorrectionType = .no
@@ -146,6 +170,10 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
                                                name: UIApplication.didBecomeActiveNotification, object: nil)
         NotificationCenter.default.addObserver(self, selector: #selector(recordWillResignActive),
                                                name: UIApplication.willResignActiveNotification, object: nil)
+        fieldState.snapshot = { [weak self] in self.map { $0.sampledState(of: $0.field) } ?? "unavailable" }
+        otherFieldState.snapshot = { [weak self] in self.map { $0.sampledState(of: $0.otherField) } ?? "unavailable" }
+        matchingContextFieldState.snapshot = { [weak self] in self.map { $0.sampledState(of: $0.matchingContextField) } ?? "unavailable" }
+        textState.snapshot = { [weak self] in self.map { $0.sampledState(of: $0.text) } ?? "unavailable" }
         refreshInputState()
     }
 
@@ -165,6 +193,12 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
     }
 
     func textFieldDidBeginEditing(_ textField: UITextField) {
+        if textField === field {
+            // Start a fresh diagnostic window for this original-field editing
+            // session so a relaunch/reused host cannot expose a stale marker.
+            originalFieldEndEditingBoundary = nil
+            firstOriginalUnmarkedCallbackAfterEndEditing = nil
+        }
         if textField === matchingContextField || (usesIdenticalContextFixture && textField === field) {
             let end = textField.endOfDocument
             textField.selectedTextRange = textField.textRange(from: end, to: end)
@@ -174,7 +208,7 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
     }
 
     func textFieldShouldEndEditing(_ textField: UITextField) -> Bool {
-        recordHostEvent("field-should-end-editing")
+        recordHostEvent("field-should-end-editing", originalFieldEndEditingBoundary: textField === field)
         return true
     }
 
@@ -219,20 +253,34 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         refreshInputState()
     }
 
-    private func recordHostEvent(_ name: String) {
+    private func recordHostEvent(_ name: String, originalFieldEndEditingBoundary: Bool = false) {
         // This test-only trace stores editor state flags and selection lengths,
         // coarse content classes, and monotonic order; never input text.
         hostEventSequence += 1
+        let uptime = String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
+        if originalFieldEndEditingBoundary, self.originalFieldEndEditingBoundary == nil {
+            self.originalFieldEndEditingBoundary = "#\(hostEventSequence)@\(uptime)"
+        } else if self.originalFieldEndEditingBoundary != nil,
+                  firstOriginalUnmarkedCallbackAfterEndEditing == nil,
+                  let field,
+                  field.markedTextRange == nil {
+            // Keep the first post-boundary callback that observes the old field
+            // as unmarked, even if its event later ages out of the bounded trace.
+            firstOriginalUnmarkedCallbackAfterEndEditing = "#\(hostEventSequence)@\(uptime):\(name)"
+        }
         if otherField?.markedTextRange != nil {
             replacementMarkSeen = true
         }
-        let uptime = String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
         let snapshot = "#\(hostEventSequence)@\(uptime):\(name){field=\(editState(of: field));view=\(editState(of: text));other=\(editState(of: otherField));matching=\(editState(of: matchingContextField))}"
         lifecycleEvents.append(snapshot)
         if lifecycleEvents.count > 24 { lifecycleEvents.removeFirst() }
         // This sticky boolean survives ring-buffer eviction while still exposing
         // only callback-observed state, never text or document identity.
+        let boundary = self.originalFieldEndEditingBoundary ?? "missing"
+        let oldFieldClear = firstOriginalUnmarkedCallbackAfterEndEditing ?? "missing"
         lifecycleState.text = lifecycleEvents.joined(separator: "|") +
+            "|original-should-end=\(boundary)" +
+            "|original-unmarked-after-should-end=\(oldFieldClear)" +
             "|replacement-mark-observed=\(replacementMarkSeen)"
     }
 
@@ -256,6 +304,10 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
         return "available=true;content=\(contentClass);marked=\(markLength != nil);markLength=\(markLength.map(String.init) ?? "-");selection=\(selection.map(String.init) ?? "-");firstResponder=\(isFirstResponder)"
     }
 
+    private func sampledState(of input: UITextInput?) -> String {
+        state(of: input) + ";sampleUptime=" + String(format: "%.6f", ProcessInfo.processInfo.systemUptime)
+    }
+
     private func state(of input: UITextInput?) -> String {
         guard let input else { return "unavailable" }
         let contents = input.textRange(from: input.beginningOfDocument, to: input.endOfDocument)
@@ -274,7 +326,7 @@ final class InputHostViewController: UIViewController, UITextFieldDelegate, UITe
             input.offset(from: input.beginningOfDocument, to: $0.start)
         }
         let firstResponder = (input as? UIView)?.isFirstResponder ?? false
-        return "content=\(contentClass);marked=\(marked != nil);markedUTF16=\(markedLength.map(String.init) ?? "-");selectionUTF16=\(selection.map(String.init) ?? "-");firstResponder=\(firstResponder)"
+        return "content=\(contentClass);marked=\(marked != nil);markedUTF16=\(markedLength.map(String.init) ?? "-");selectionUTF16=\(selection.map(String.init) ?? "-");firstResponder=\(firstResponder);inputLanguage=\((input as? UIResponder)?.textInputMode?.primaryLanguage ?? "-")"
     }
     private func updateForwardDeleteSelectionStatus() {
         guard let field = forwardDeleteField, let selectionStatus = forwardDeleteSelectionStatus,

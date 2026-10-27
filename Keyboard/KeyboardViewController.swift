@@ -27,6 +27,7 @@ final class KeyboardViewController: UIInputViewController {
     private let maximumCommittedDeletionHistoryEntries = 64
     private let maximumCommittedDeletionHistoryUTF16Units = 16_384
     private var changing = false
+    private var contextTransitionPending = false
     private var isPreparingAppearance = false
     private var hasReachedViewDidAppear = false
     private var appearanceContextValidated = false
@@ -241,6 +242,9 @@ final class KeyboardViewController: UIInputViewController {
         // window, restoring the composition would write the old reading into
         // the new editor before the user presses a key.
         let access = KeyboardSettings.extensionAccess(hasFullAccess: hasFullAccess)
+#if DEBUG
+        traceCompositionEvent("settings.access", detail: "fullAccess=\(hasFullAccess);sharedReads=\(access.readsSharedSettings)")
+#endif
         settingsAccess = access
         let defaults = access.readDefaults
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
@@ -281,6 +285,7 @@ final class KeyboardViewController: UIInputViewController {
         super.viewDidAppear(animated)
         traceCompositionEvent("lifecycle.did-appear.begin")
         hasReachedViewDidAppear = true
+        contextTransitionPending = false
         appearanceContextValidated = false
         let wasSuspended = session.needsCompositionRefresh
         let focusChangedWhileSuspended = session.hostFocusChangedWhileSuspended
@@ -469,7 +474,7 @@ final class KeyboardViewController: UIInputViewController {
         // Lifecycle configuration may refresh local settings before the surface
         // becomes interactive. Actual key actions remain disabled until didAppear.
         if isPreparingAppearance { return true }
-        guard hasReachedViewDidAppear, !changing else { return false }
+        guard hasReachedViewDidAppear, !changing, !contextTransitionPending else { return false }
         let proxy = textDocumentProxy
         // viewDidAppear can arrive before UIKit reconnects the document proxy.
         // While that appearance remains unresolved, later callbacks must use
@@ -700,98 +705,42 @@ final class KeyboardViewController: UIInputViewController {
 
     override func textWillChange(_ textInput: UITextInput?) {
         traceCompositionEvent("callback.text-will-change", inputAvailable: textInput != nil)
-        // A proxy can still report the old document identifier while UIKit is
-        // routing a focus transition to another field. The helper finalizes only
-        // when the exact marked-document owner and context still match.
-        guard !changing, hasReachedViewDidAppear, appearanceContextValidated,
-              !session.needsCompositionRefresh, surface.hasComposition else { return }
-        discardLocalCompositionBeforeContextChange(event: "callback.text-will-change.discarded-local")
+        guard !changing else { return }
+        // During Will UIKit may still expose the old context while proxy
+        // writes already route to the next field. Never finalize through it.
+        contextTransitionPending = true
+        appearanceContextValidated = false
     }
     override func textDidChange(_ textInput: UITextInput?) {
         traceCompositionEvent("callback.text-did-change", inputAvailable: textInput != nil)
-        updateTextMacroContext()
-        validateContext()
-    }
-    override func selectionDidChange(_ textInput: UITextInput?) {
-        traceCompositionEvent("callback.selection-did-change", inputAvailable: textInput != nil)
+        contextTransitionPending = false
+        if !changing, surface.hasComposition, markedOwnerProxy != nil,
+           context() != expectedContext {
+            // External-build diagnostic: immediate Did boundary, current proxy only.
+            traceCompositionEvent("diagnostic.did-current-unmark.begin")
+            changing = true
+            textDocumentProxy.unmarkText()
+            changing = false
+            traceCompositionEvent("diagnostic.did-current-unmark.end")
+            markedOwnership.discard()
+            markedOwnerProxy = nil
+            surface.invalidateComposition()
+        }
         updateTextMacroContext()
         validateContext()
     }
     override func selectionWillChange(_ textInput: UITextInput?) {
-        // UITextDocumentProxy does not expose field identity. Finalize a mark
-        // only while the proxy still matches its exact owner context; a proxy
-        // that has already switched to another editor must never receive it.
-#if DEBUG
-        let suspendedComparison = session.needsCompositionRefresh
-            ? markedOwnership.debugContextComparison(context()) : nil
-#else
-        let suspendedComparison: String? = nil
-#endif
-        traceCompositionEvent("callback.selection-will-change", inputAvailable: textInput != nil,
-                              detail: suspendedComparison)
-        if session.needsCompositionRefresh {
-            // A focus transition observed while the keyboard was suspended
-            // invalidates the suspended lease even if a replacement editor
-            // exposes identical document/text context values.
-            session.hostFocusChangedWhileSuspended = true
-            return
-        }
-        discardLocalCompositionBeforeContextChange(event: "callback.selection-will-change.discarded-local")
-    }
-
-    private func discardLocalCompositionBeforeContextChange(event: String) {
-        guard !changing, !session.needsCompositionRefresh, surface.hasComposition else { return }
-        let proxy = textDocumentProxy
-        let current = context(for: proxy)
-#if DEBUG
-        let ownershipComparison = markedOwnership.debugContextComparison(current)
-#else
-        let ownershipComparison = "unavailable"
-#endif
-        let expectedContextMatches = expectedContext == current
-        let canFinalizeMark = markedOwnership.canFinalizeMark(in: current)
-        if expectedContextMatches, canFinalizeMark {
-            if let ownerProxy = markedOwnerProxy {
-                // Keep the exact proxy object used for the owner's marked-text
-                // write. The controller's current proxy can be retargeted to
-                // the next field before UIKit delivers this callback.
-                traceCompositionEvent("context-change.finalize-marked-owner", proxy: proxy)
-                #if DEBUG
-                let ownerContextAtRequest = markedOwnership
-                    .debugContextComparison(context(for: ownerProxy))
-                    .replacingOccurrences(of: ";", with: ",")
-                #else
-                let ownerContextAtRequest = "unavailable"
-                #endif
-                traceCompositionEvent("mark.finalize.request", proxy: ownerProxy,
-                                      detail: "target=marked-owner-proxy,\(ownerContextAtRequest)")
-                changing = true
-                ownerProxy.unmarkText()
-                changing = false
-                #if DEBUG
-                let ownerContextAtReturn = markedOwnership
-                    .debugContextComparison(context(for: ownerProxy))
-                    .replacingOccurrences(of: ";", with: ",")
-                #else
-                let ownerContextAtReturn = "unavailable"
-                #endif
-                traceCompositionEvent("mark.finalize.return", proxy: ownerProxy,
-                                      detail: "target=marked-owner-proxy,\(ownerContextAtReturn)")
-            } else {
-                traceCompositionEvent("mark.finalize.owner-proxy-unavailable", proxy: proxy)
-            }
-        }
+        traceCompositionEvent("callback.selection-will-change", inputAvailable: textInput != nil)
+        guard !changing else { return }
+        if session.needsCompositionRefresh { session.hostFocusChangedWhileSuspended = true }
+        contextTransitionPending = true
         appearanceContextValidated = false
-        expectedContext = context()
-#if DEBUG
-        traceOwnershipDiscard(reason: "context-change", proxy: proxy)
-#endif
-        markedOwnership.discard()
-        markedOwnerProxy = nil
-        session.needsHostMarkRestore = false
-        surface.invalidateComposition()
-        traceCompositionEvent(event, proxy: proxy,
-                              detail: "expected=\(expectedContextMatches);before-discard=\(ownershipComparison)")
+    }
+    override func selectionDidChange(_ textInput: UITextInput?) {
+        traceCompositionEvent("callback.selection-did-change", inputAvailable: textInput != nil)
+        contextTransitionPending = false
+        updateTextMacroContext()
+        validateContext()
     }
 
     private func isSensitiveInput(_ proxy: UITextDocumentProxy) -> Bool {
@@ -1299,6 +1248,14 @@ final class KeyboardViewController: UIInputViewController {
         guard surface.hasComposition || comparison.hasPrefix("lease=present;") else { return }
         traceCompositionEvent("ownership.discard", proxy: proxy,
                               detail: "reason=\(reason);\(comparison)")
+    }
+
+    /// Compare the current and retained document-proxy contexts without exposing
+    /// document identifiers, surrounding text, or selection contents.
+    private func debugProxyContextRelationship(_ current: MarkedDocumentOwnership.Context,
+                                               _ retained: MarkedDocumentOwnership.Context) -> String {
+        let bothHaveDocument = current.document != nil && retained.document != nil
+        return "bothDocumentsPresent=\(bothHaveDocument);documentEqual=\(current.document == retained.document);beforeEqual=\(current.before == retained.before);afterEqual=\(current.after == retained.after);selectionEqual=\(current.selected == retained.selected);fullContextEqual=\(current == retained)"
     }
 
     private func traceCompositionInvalidation(reason: String, proxy: UITextDocumentProxy) {

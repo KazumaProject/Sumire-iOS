@@ -549,10 +549,16 @@ final class KeyboardSurface: UIInputView {
     private let touchRouter = KeyTouchRouter()
     private var touchFeedback = TouchFeedbackSettings()
     private let stack = UIStackView()
-    private let status = UILabel()
+    private let status: UILabel = {
+        let label = UILabel()
 #if DEBUG
+        label.accessibilityLabel = "sumire-debug-composition-trace=trace-pending"
+#endif
+        return label
+    }()
+#if DEBUG
+    private var debugCompositionTraceValue = "trace-pending"
     private let lifecycleDiagnosticLabel = UILabel()
-    private let compositionTraceDiagnosticLabel = UILabel()
     private let lifecycleSwitchButton = UIButton(type: .system)
     private let stableFocusFinalizeButton = UIButton(type: .system)
     private let retainedOwnerFinalizeButton = UIButton(type: .system)
@@ -584,7 +590,7 @@ final class KeyboardSurface: UIInputView {
     func exposeStableFocusFinalizationForDiagnostics(action: @escaping () -> Void) {
         stableFocusFinalizeButton.translatesAutoresizingMaskIntoConstraints = false
         stableFocusFinalizeButton.accessibilityIdentifier = "sumire-debug-finish-marked-text"
-        stableFocusFinalizeButton.accessibilityLabel = "Debug finalize marked text without changing focus"
+        stableFocusFinalizeButton.accessibilityLabel = "trace-pending"
         stableFocusFinalizeButton.isUserInteractionEnabled = true
         stableFocusFinalizeButton.setTitle("Finish", for: .normal)
         stableFocusFinalizeButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
@@ -647,14 +653,6 @@ final class KeyboardSurface: UIInputView {
         lifecycleDiagnosticLabel.accessibilityIdentifier = "sumire-lifecycle-diagnostic"
         lifecycleDiagnosticLabel.accessibilityLabel = "diagnostic-pending"
         addSubview(lifecycleDiagnosticLabel)
-
-        compositionTraceDiagnosticLabel.frame = CGRect(x: 0, y: 1, width: 1, height: 1)
-        compositionTraceDiagnosticLabel.alpha = 1
-        compositionTraceDiagnosticLabel.isUserInteractionEnabled = false
-        compositionTraceDiagnosticLabel.isAccessibilityElement = true
-        compositionTraceDiagnosticLabel.accessibilityIdentifier = "sumire-debug-composition-trace"
-        compositionTraceDiagnosticLabel.accessibilityLabel = "trace-pending"
-        addSubview(compositionTraceDiagnosticLabel)
 #endif
         stackLeading = stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: geometry.horizontalInset)
         stackTrailing = stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -geometry.horizontalInset)
@@ -757,6 +755,9 @@ final class KeyboardSurface: UIInputView {
         view.subviews.forEach { configureTouchInput(in: $0) }
     }
     private func rebuild() {
+#if DEBUG
+        defer { updateDebugCompositionTraceAccessibilityLabel() }
+#endif
         var customNotice: String?
         if inputMode == .custom, !customEnglishVisible,
            let layout = customLayouts.first(where: { $0.id == activeCustomID }) {
@@ -2046,11 +2047,20 @@ final class KeyboardSurface: UIInputView {
         refreshConversion(updateHostMarkedText: reapplyHostMark)
     }
 #if DEBUG
+    private func updateDebugCompositionTraceAccessibilityLabel() {
+        status.accessibilityLabel =
+            "\(status.text ?? "") | sumire-debug-composition-trace=\(debugCompositionTraceValue)"
+    }
+
     func setDebugCompositionTrace(_ value: String) {
         // The session keeps up to 96 fixed-name/boolean events. Preserve the
         // full ring so XCTest can compare a post-focus-switch sequence baseline
         // without losing early events to accessibility-label truncation.
-        compositionTraceDiagnosticLabel.accessibilityLabel = String(value.suffix(32_768))
+        debugCompositionTraceValue = String(value.suffix(32_768))
+        // XCTest already discovers this real, visible status label as a
+        // static-text element. Keep its rendered text/layout unchanged, and
+        // expose the sanitized trace only through DEBUG accessibility metadata.
+        updateDebugCompositionTraceAccessibilityLabel()
     }
 #endif
     private func closeExpandedCandidates() {
