@@ -28,6 +28,86 @@ final class PhysicalKeyboardShortcutEventResolverTests: XCTestCase {
     XCTAssertEqual(match, composition)
   }
 
+  func testCycleInputModeFallsBackAcrossConversionContexts() {
+    let compositionBinding = item(context: .composition, action: .cycleInputMode)
+
+    XCTAssertEqual(
+      resolve(shortcuts: [compositionBinding], context: .conversion, usage: 0x04),
+      compositionBinding
+    )
+    XCTAssertEqual(
+      resolve(shortcuts: [compositionBinding], context: .bunsetsuConversion, usage: 0x04),
+      compositionBinding
+    )
+  }
+
+  func testContextAwareMatchPrecedesCycleInputModeFallback() {
+    let fallback = item(context: .composition, action: .cycleInputMode)
+    let exact = item(context: .conversion, action: .commit)
+
+    XCTAssertEqual(
+      resolve(shortcuts: [fallback, exact], context: .conversion, usage: 0x04),
+      exact
+    )
+  }
+
+  func testCycleInputModeFallbackPreservesShortcutListOrder() {
+    let first = PhysicalKeyboardShortcutItem(
+      id: 8,
+      contextID: PhysicalKeyboardShortcutContext.composition.id,
+      keyCode: 29,
+      actionID: PhysicalKeyboardShortcutAction.cycleInputMode.id
+    )
+    let second = PhysicalKeyboardShortcutItem(
+      id: 9,
+      contextID: PhysicalKeyboardShortcutContext.composition.id,
+      keyCode: 29,
+      actionID: PhysicalKeyboardShortcutAction.cycleInputMode.id
+    )
+
+    XCTAssertEqual(resolve(shortcuts: [first, second], context: .conversion, usage: 0x04), first)
+  }
+
+  func testCycleInputModeFallbackRequiresMatchingKeyModifiersScanCodeAndEnabledState() {
+    let matching = PhysicalKeyboardShortcutItem(
+      id: 7,
+      contextID: PhysicalKeyboardShortcutContext.composition.id,
+      keyCode: 29,
+      scanCode: 17,
+      ctrl: true,
+      shift: true,
+      alt: true,
+      meta: true,
+      actionID: PhysicalKeyboardShortcutAction.cycleInputMode.id
+    )
+    XCTAssertEqual(resolveCycleFallback(shortcuts: [matching]), matching)
+    XCTAssertNil(resolveCycleFallback(shortcuts: [matching], scanCode: nil))
+    XCTAssertNil(resolveCycleFallback(shortcuts: [matching], scanCode: 18))
+
+    var wrongKey = matching
+    wrongKey.keyCode = 30
+    var wrongCtrl = matching
+    wrongCtrl.ctrl = false
+    var wrongShift = matching
+    wrongShift.shift = false
+    var wrongAlt = matching
+    wrongAlt.alt = false
+    var wrongMeta = matching
+    wrongMeta.meta = false
+    var disabled = matching
+    disabled.enabled = false
+
+    for nonmatching in [wrongKey, wrongCtrl, wrongShift, wrongAlt, wrongMeta, disabled] {
+      XCTAssertNil(resolveCycleFallback(shortcuts: [nonmatching]))
+    }
+  }
+
+  func testOnlyCycleInputModeUsesTheContextAgnosticFallback() {
+    let compositionShortcut = item(context: .composition, action: .switchToEnglish)
+
+    XCTAssertNil(resolve(shortcuts: [compositionShortcut], context: .conversion, usage: 0x04))
+  }
+
   func testUnsupportedHIDUsageDoesNotFallBackToCharactersOrAnyBinding() {
     let global = item(context: .any, action: .cycleInputMode)
 
@@ -72,6 +152,22 @@ final class PhysicalKeyboardShortcutEventResolverTests: XCTestCase {
       shift: shift,
       alt: alt,
       meta: meta
+    )
+  }
+
+  private func resolveCycleFallback(
+    shortcuts: [PhysicalKeyboardShortcutItem],
+    scanCode: Int? = 17
+  ) -> PhysicalKeyboardShortcutItem? {
+    resolve(
+      shortcuts: shortcuts,
+      context: .conversion,
+      usage: 0x04,
+      scanCode: scanCode,
+      ctrl: true,
+      shift: true,
+      alt: true,
+      meta: true
     )
   }
 
