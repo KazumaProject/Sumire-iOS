@@ -2,19 +2,6 @@ import SwiftUI
 import UniformTypeIdentifiers
 import SumireCore
 
-private struct DictionaryImportOutcome: Identifiable, Sendable {
-    let id = UUID()
-    let succeeded: Bool
-    let message: String
-    let convertedFiles: [String]
-    let skippedGroups: [String]
-    let diagnostics: [String]
-
-    static func failure(_ message: String) -> Self {
-        Self(succeeded: false, message: message, convertedFiles: [], skippedGroups: [], diagnostics: [])
-    }
-}
-
 private struct DictionaryImportOutcomeView: View {
     let outcome: DictionaryImportOutcome
     @Environment(\.dismiss) private var dismiss
@@ -26,10 +13,23 @@ private struct DictionaryImportOutcomeView: View {
                     Text(outcome.message)
                         .foregroundColor(outcome.succeeded ? Color.primary : Color.red)
                         .textSelection(.enabled)
+                        .accessibilityIdentifier("dictionary-import-outcome-message")
                 }
                 if !outcome.convertedFiles.isEmpty {
                     Section("有効化した辞書") {
                         ForEach(outcome.convertedFiles, id: \.self) { Text($0) }
+                    }
+                }
+                if !outcome.storedLegacyAggregateIDs.isEmpty {
+                    Section("保存した旧分類集約辞書（未有効化）") {
+                        ForEach(outcome.storedLegacyAggregateIDs, id: \.self) { Text($0) }
+                    }
+                }
+                if !outcome.preservedUnclassifiedCategoryIDs.isEmpty {
+                    Section("分類未判定の既存辞書（未有効化）") {
+                        Text("旧世代の分類情報は判定できないため、内容を別領域に保持しています。現在のキーボード変換には使われません。正しい分類のZIPを選んで再取り込みしてください。")
+                            .font(.caption)
+                        ForEach(outcome.preservedUnclassifiedCategoryIDs, id: \.self) { Text($0) }
                     }
                 }
                 if !outcome.skippedGroups.isEmpty {
@@ -56,6 +56,27 @@ private struct DictionaryImportOutcomeView: View {
     }
 }
 
+private enum DictionaryArchiveImportMode: String, CaseIterable, Identifiable, Sendable {
+    case releaseLeaf
+    case legacyAggregate
+
+    var id: String { rawValue }
+
+    var categoryInterpretation: DictionarySourceArchiveConverter.CategoryInterpretation {
+        switch self {
+        case .releaseLeaf: .releaseLeaf
+        case .legacyAggregate: .legacyAggregate
+        }
+    }
+
+    var storeImportMode: DictionaryGenerationStore.ImportMode {
+        switch self {
+        case .releaseLeaf: .releaseLeaf
+        case .legacyAggregate: .typedLegacyAggregate
+        }
+    }
+}
+
 struct DictionarySettings: View {
     @Binding var categoryMask: Int
     @Binding var englishReadingEnabled: Bool
@@ -64,6 +85,7 @@ struct DictionarySettings: View {
     @State private var importingArchive = false
     @State private var importInProgress = false
     @State private var importOutcome: DictionaryImportOutcome?
+    @State private var archiveImportMode: DictionaryArchiveImportMode = .releaseLeaf
 
     static let names = ["address":"住所", "agreement":"条約・協定", "award":"賞", "character":"キャラクター",
                          "event":"出来事", "facility":"施設", "initiative":"事業・計画", "kampo":"漢方",
@@ -100,7 +122,21 @@ struct DictionarySettings: View {
                         } label: {
                             Label("Android辞書ZIPを取り込む", systemImage: "archivebox")
                         }
+                        .accessibilityIdentifier("dictionary-import-android-zip")
                         .disabled(importInProgress)
+
+                        Picker("分類形式", selection: $archiveImportMode) {
+                            Text("release個別分類").tag(DictionaryArchiveImportMode.releaseLeaf)
+                            Text("旧Android集約分類").tag(DictionaryArchiveImportMode.legacyAggregate)
+                        }
+                        .pickerStyle(.menu)
+                        .accessibilityIdentifier("dictionary-import-mode")
+                        .disabled(importInProgress)
+
+                        Text(archiveImportMode == .releaseLeaf
+                             ? "個別分類IDとして辞書を取り込みます。"
+                             : "旧Android分類を型付きで保存します。現行キーボードの変換にはまだ使われません。")
+                            .font(.caption).foregroundStyle(.secondary)
 
                         if importInProgress {
                             HStack(spacing: 10) {
@@ -134,6 +170,7 @@ struct DictionarySettings: View {
             }
             .navigationTitle("辞書")
             .toolbar { ToolbarItem(placement: .confirmationAction) { Button("完了") { dismiss() } } }
+            .onAppear(perform: seedUITestArchiveIfRequested)
             .fileImporter(isPresented: $importingArchive, allowedContentTypes: [.zip], allowsMultipleSelection: false) { result in
                 switch result {
                 case .success(let urls):
@@ -141,7 +178,7 @@ struct DictionarySettings: View {
                         importOutcome = .failure("選択したファイルを取得できませんでした")
                         return
                     }
-                    startImport(archive)
+                    startImport(archive, mode: archiveImportMode)
                 case .failure(let error):
                     if (error as? CocoaError)?.code == .userCancelled { return }
                     importOutcome = .failure(error.localizedDescription)
@@ -159,89 +196,54 @@ struct DictionarySettings: View {
         categoryMask = Int(DictionaryCategoryCatalog.legacyMask(for: selectedCategories))
     }
 
-    private func startImport(_ archive: URL) {
+    private func seedUITestArchiveIfRequested() {
+#if DEBUG
+        let arguments = ProcessInfo.processInfo.arguments
+        guard let documents = FileManager.default.urls(for: .documentDirectory, in: .userDomainMask).first else { return }
+
+        let fixtureName: String
+        let fixtureData: Data
+        if arguments.contains("-seed-invalid-dictionary-import-zip") {
+            fixtureName = "sumire-ui-invalid-dictionary.zip"
+            fixtureData = Data("not a ZIP archive; intentionally malformed test fixture".utf8)
+        } else if arguments.contains("-seed-valid-dictionary-import-zip"),
+                  let encoded = ProcessInfo.processInfo.environment["SUMIRE_UI_DICTIONARY_ARCHIVE_BASE64"],
+                  let decoded = Data(base64Encoded: encoded), decoded.count <= 1_048_576 {
+            fixtureName = "sumire-ui-valid-dictionary.zip"
+            fixtureData = decoded
+        } else {
+            return
+        }
+
+        try? fixtureData.write(to: documents.appendingPathComponent(fixtureName), options: .atomic)
+#endif
+    }
+
+    private func startImport(_ archive: URL, mode: DictionaryArchiveImportMode) {
         guard let sharedContainer = FileManager.default.containerURL(
             forSecurityApplicationGroupIdentifier: KeyboardSettings.groupIdentifier) else {
             importOutcome = .failure("App Groupsの共有コンテナを取得できません")
             return
         }
+        guard archive.startAccessingSecurityScopedResource() else {
+            importOutcome = .failure("選択したZIPを読み取る権限を取得できませんでした")
+            return
+        }
         importInProgress = true
+        let categoryInterpretation = mode.categoryInterpretation
+        let storeImportMode = mode.storeImportMode
         Task {
             let outcome = await Task.detached(priority: .userInitiated) {
-                Self.performImport(archive: archive, sharedContainer: sharedContainer)
+                defer { archive.stopAccessingSecurityScopedResource() }
+                return DictionaryArchiveImporter.perform(
+                    archive: archive,
+                    sharedContainer: sharedContainer,
+                    categoryInterpretation: categoryInterpretation,
+                    storeImportMode: storeImportMode,
+                    bundledSupport: ConversionService.bundledDictionary)
             }.value
             importOutcome = outcome
             importInProgress = false
         }
-    }
-
-    nonisolated private static func performImport(archive: URL, sharedContainer: URL) -> DictionaryImportOutcome {
-        guard archive.startAccessingSecurityScopedResource() else {
-            return .failure("選択したZIPを読み取る権限を取得できませんでした")
-        }
-        defer { archive.stopAccessingSecurityScopedResource() }
-
-        let store = DictionaryGenerationStore(
-            directory: sharedContainer.appendingPathComponent("Sumire/Dictionaries", isDirectory: true))
-        let staging = FileManager.default.temporaryDirectory
-            .appendingPathComponent("sumire-dictionary-source-\(UUID().uuidString)", isDirectory: true)
-        do {
-            let report = try DictionarySourceArchiveConverter.convert(archiveAt: archive, into: staging)
-            defer { try? FileManager.default.removeItem(at: report.outputDirectory) }
-
-            guard let bundledSupport = ConversionService.bundledDictionary else {
-                throw ImportError(message: "取り込みに必要な同梱の補助辞書が見つかりません")
-            }
-            var base: URL?
-            let usesReleaseLeaves = report.convertedFiles.contains {
-                DictionaryCategoryCatalog.idSet.contains(String($0.dropLast(4))) &&
-                    !DictionaryArchivePlan.categoryIDs.contains(String($0.dropLast(4)))
-            }
-            let storedCandidates = store.loadCandidates().map(\.directory)
-            // Preserve earlier release-leaf replacements when importing another leaf.
-            // Old generations cannot safely serve as a release-taxonomy baseline.
-            let releaseCandidates = storedCandidates.filter {
-                FileManager.default.fileExists(atPath: $0.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker).path)
-            }
-            let baseCandidates = usesReleaseLeaves ? releaseCandidates + [bundledSupport] : storedCandidates + [bundledSupport]
-            for candidate in baseCandidates {
-                do {
-                    try Self.validateNativeDictionaries(at: candidate)
-                    base = candidate
-                    break
-                } catch { continue }
-            }
-            guard let base else {
-                throw ImportError(message: "変換の基準となる辞書が見つかりません")
-            }
-            let files = Dictionary(uniqueKeysWithValues: report.convertedFiles.map {
-                ($0, report.outputDirectory.appendingPathComponent($0))
-            })
-            let loaded = try store.publish(importedFiles: files, from: base, supportFallback: bundledSupport) { directory in
-                try Self.validateNativeDictionaries(at: directory)
-            }
-            return DictionaryImportOutcome(
-                succeeded: true,
-                message: "検証済みの辞書世代を有効化しました（\(loaded.generation)）。",
-                convertedFiles: report.convertedFiles,
-                skippedGroups: report.skippedGroups,
-                diagnostics: report.diagnostics)
-        } catch {
-            return .failure(error.localizedDescription)
-        }
-    }
-
-    nonisolated private static func validateNativeDictionaries(at directory: URL) throws {
-        let hasEnglish = FileManager.default.fileExists(atPath: directory.appendingPathComponent("english.sud").path)
-        let hasEnglishReading = FileManager.default.fileExists(atPath: directory.appendingPathComponent("english_reading.sud").path)
-        var rejected = Set<URL>()
-        let opened = try NativeDictionaryEngineOpener.open(directories: [directory], mask: 0x3fff_ffff,
-            english: hasEnglish, englishReading: hasEnglishReading, rejecting: &rejected)
-        sumire_engine_close(opened.engine)
-    }
-
-    private struct ImportError: LocalizedError {
-        let message: String
-        var errorDescription: String? { message }
     }
 }

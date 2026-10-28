@@ -4,6 +4,11 @@ import Foundation
 /// entries that were ignored, unsupported, unknown, or incomplete.
 public struct DictionarySourceImportReport {
     public let outputDirectory: URL
+    /// Flat, release-taxonomy-compatible files suitable for `DictionaryGenerationStore.publish`.
+    public let importedFiles: [String: URL]
+    /// Old category-family dictionaries kept separate from same-named release leaves.
+    public let legacyAggregateOverlays: [DictionaryCategoryCatalog.LegacyAggregateID: URL]
+    /// Relative paths for every converted file inside `outputDirectory`.
     public let convertedFiles: [String]
     public let skippedGroups: [String]
     public let diagnostics: [String]
@@ -14,7 +19,16 @@ public struct DictionarySourceImportReport {
 /// The destination must be new; it is removed if any recognized complete group
 /// fails validation or conversion, so callers never observe partial output.
 public enum DictionarySourceArchiveConverter {
-    public static func convert(archiveAt archiveURL: URL, into destination: URL) throws -> DictionarySourceImportReport {
+    public enum CategoryInterpretation: Equatable, Sendable {
+        /// Preserve the existing release-leaf import behavior.
+        case releaseLeaf
+        /// Treat exact pinned legacy family IDs as typed aggregate overlays.
+        /// Release-only category paths are rejected rather than guessed from a raw name.
+        case legacyAggregate
+    }
+
+    public static func convert(archiveAt archiveURL: URL, into destination: URL,
+                               categoryInterpretation: CategoryInterpretation = .releaseLeaf) throws -> DictionarySourceImportReport {
         guard destination.isFileURL,
               !FileManager.default.fileExists(atPath: destination.path) else {
             throw PersonalDataError("辞書の一時保存先は新規のローカルフォルダにしてください")
@@ -49,6 +63,8 @@ public enum DictionarySourceArchiveConverter {
         }
         var skipped = Set<String>()
         var converted: [String] = []
+        var importedFiles: [String: URL] = [:]
+        var legacyAggregateOverlays: [DictionaryCategoryCatalog.LegacyAggregateID: URL] = [:]
 
         let common = plan.groups.first { $0.group == .common }
         let posTable: [DictionaryPrimitiveArray]?
@@ -62,8 +78,10 @@ public enum DictionarySourceArchiveConverter {
             let matrix = try readPayload(matrixEntry, from: archive, indexedBy: archiveEntries,
                                          temporaryDirectory: sourceTemporaryDirectory, diagnostics: &diagnostics)
             let connection = try ConnectionSourceValidation.validate(posTable: table, matrix: matrix)
-            try SumireConnectionSourceConverter.write(connection, to: destination.appendingPathComponent("connection.sud"))
+            let output = destination.appendingPathComponent("connection.sud")
+            try SumireConnectionSourceConverter.write(connection, to: output)
             converted.append("connection.sud")
+            importedFiles["connection.sud"] = output
             posTable = table
         } else if let common {
             skipped.insert(common.group.id)
@@ -74,6 +92,11 @@ public enum DictionarySourceArchiveConverter {
         }
 
         for group in plan.groups where group.group != .common {
+            if case .category(let id) = group.group,
+               categoryInterpretation == .legacyAggregate,
+               !DictionaryCategoryCatalog.legacyIDs.contains(id) {
+                throw PersonalDataError("旧分類辞書の集約IDとして扱えない分類パスです: \(id)")
+            }
             guard group.canValidate else {
                 skipped.insert(group.group.id)
                 diagnostics.append("\(group.group.id): \(groupProblem(group))")
@@ -123,15 +146,31 @@ public enum DictionarySourceArchiveConverter {
                                                                  posTableCount: posTable[0].count)
             }
 
-            let output = destination.appendingPathComponent(name + ".sud")
+            let legacyAggregateID: DictionaryCategoryCatalog.LegacyAggregateID?
+            if case .category(let id) = group.group,
+               categoryInterpretation == .legacyAggregate {
+                legacyAggregateID = DictionaryCategoryCatalog.LegacyAggregateID(rawValue: id)
+            } else {
+                legacyAggregateID = nil
+            }
+            let relativeOutputPath = legacyAggregateID.map { "legacy_aggregates/\($0.rawValue).sud" } ?? (name + ".sud")
+            let output = destination.appendingPathComponent(relativeOutputPath)
             try FileManager.default.createDirectory(at: output.deletingLastPathComponent(), withIntermediateDirectories: true)
             try SumireDictionarySourceConverter.write(source, to: output)
-            converted.append(name + ".sud")
+            converted.append(relativeOutputPath)
+            if let legacyAggregateID {
+                legacyAggregateOverlays[legacyAggregateID] = output
+            } else {
+                importedFiles[relativeOutputPath] = output
+            }
         }
 
         guard !converted.isEmpty else { throw PersonalDataError("変換できる辞書グループがありません") }
         completed = true
-        return DictionarySourceImportReport(outputDirectory: destination, convertedFiles: converted.sorted(),
+        return DictionarySourceImportReport(outputDirectory: destination,
+                                            importedFiles: importedFiles,
+                                            legacyAggregateOverlays: legacyAggregateOverlays,
+                                            convertedFiles: converted.sorted(),
                                             skippedGroups: skipped.sorted(), diagnostics: diagnostics,
                                             entries: plan.entryResults)
     }

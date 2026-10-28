@@ -402,13 +402,18 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             archiveAt: URL(fileURLWithPath: archivePath), into: output
         )
 
-        XCTAssertEqual(report.convertedFiles.count, 34)
+        let supportFilesNotProducedFromTheSourceArchive: Set<String> = [
+            "standalone.sud", "system_ngram.dat", "system_ngram_unigram.dat",
+            "mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat"
+        ]
+        XCTAssertEqual(Set(report.convertedFiles),
+                       Set(manifest.outputSHA256.keys).subtracting(supportFilesNotProducedFromTheSourceArchive))
         XCTAssertTrue(report.skippedGroups.isEmpty)
         for name in report.convertedFiles {
             let data = try Data(contentsOf: output.appendingPathComponent(name), options: .mappedIfSafe)
             let actual = SHA256.hash(data: data).map { String(format: "%02x", $0) }.joined()
             XCTAssertEqual(actual, manifest.outputSHA256[name], "Native binary differs for \(name)")
         }
-        print("Converted real Android source ZIP to all 34 pinned native files byte-for-byte")
+        print("Converted every source-archive output to its pinned native hash")
     }
 }
