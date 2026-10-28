@@ -203,6 +203,48 @@ final class DictionaryArchiveImportAcceptanceTests: XCTestCase {
         XCTAssertTrue(outcome.succeeded, outcome.message)
     }
 
+    func testTypedAndNoncategoryImportsUsePreviousAfterManifestedMarkerCorruption() throws {
+        for typedOverlay in [false, true] {
+            let root = try makeRoot()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let support = try makeSupportDictionary(at: root)
+            try Data("v1.7.277\n".utf8).write(to: support.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker))
+            let oldAddress = Data("previous release address".utf8)
+            try oldAddress.write(to: support.appendingPathComponent("address.sud"))
+            let container = root.appendingPathComponent("app-group", isDirectory: true)
+            try FileManager.default.createDirectory(at: container, withIntermediateDirectories: false)
+            let store = makeStore(container: container)
+            let previous = try store.publish(importedFiles: [:], from: support, supportFallback: support)
+            let replacement = root.appendingPathComponent("replacement.sud")
+            try Data("current release address".utf8).write(to: replacement)
+            let current = try store.publish(importedFiles: ["address.sud": replacement], from: previous.directory)
+            try Data("corrupted marker".utf8).write(to: current.directory.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker))
+            let archive = root.appendingPathComponent("archive.zip")
+            try Data("synthetic input".utf8).write(to: archive)
+            var firstValidated: URL?
+            let outcome = DictionaryArchiveImporter.perform(archive: archive, sharedContainer: container,
+                categoryInterpretation: .legacyAggregate, storeImportMode: .typedLegacyAggregate,
+                bundledSupport: support, converter: { _, destination, _ in
+                    try self.makeOutputDirectory(at: destination)
+                    let file = destination.appendingPathComponent("incoming.sud")
+                    try Data("new imported bytes".utf8).write(to: file)
+                    return DictionaryArchiveImportConversion(outputDirectory: destination,
+                        importedFiles: typedOverlay ? [:] : ["english.sud": file],
+                        legacyAggregateOverlays: typedOverlay ? [.init(rawValue: "address"): file] : [:],
+                        convertedFiles: [typedOverlay ? "legacy_aggregates/address.sud" : "english.sud"])
+                }, validator: { directory in
+                    if firstValidated == nil { firstValidated = directory }
+                })
+            XCTAssertTrue(outcome.succeeded, outcome.message)
+            XCTAssertEqual(firstValidated, previous.directory)
+            let loaded = try XCTUnwrap(store.loadCurrent())
+            XCTAssertTrue(loaded.hasVerifiedReleaseMarker)
+            XCTAssertEqual(try Data(contentsOf: loaded.directory.appendingPathComponent("address.sud")), oldAddress)
+            if typedOverlay { XCTAssertEqual(loaded.legacyAggregateOverlayIDs.map(\.rawValue), ["address"]) }
+            else { XCTAssertEqual(try Data(contentsOf: loaded.directory.appendingPathComponent("english.sud")), Data("new imported bytes".utf8)) }
+        }
+    }
+
     func testReleaseLeafImportPublishesReleaseTaxonomyGeneration() throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }

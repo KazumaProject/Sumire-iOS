@@ -577,7 +577,10 @@ public struct DictionaryGenerationStore {
         let hasVerifiedReleaseMarker: Bool
         if let expected = manifest.outputSHA256[releaseMarkerFile],
            let markerURL = verifiedFiles[releaseMarkerFile] {
-            hasVerifiedReleaseMarker = try Self.sha256(of: markerURL) == expected
+            guard try Self.sha256(of: markerURL) == expected else {
+                throw PersonalDataError("辞書世代の分類マーカーのチェックサムが一致しません")
+            }
+            hasVerifiedReleaseMarker = true
         } else {
             hasVerifiedReleaseMarker = false
         }

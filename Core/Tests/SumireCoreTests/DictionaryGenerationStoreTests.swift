@@ -1095,4 +1095,23 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertEqual(selection.legacyAggregateSources, [])
         XCTAssertEqual(selection.unavailableCategoryIDs, [selectedLeaf])
     }
+    func testManifestedReleaseMarkerCorruptionFallsBackToPreviousGeneration() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        let base = root.appendingPathComponent("base", isDirectory: true)
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        for file in ["system.sud", "connection.sud", DictionaryCategoryCatalog.releaseMarker] {
+            try Data(file.utf8).write(to: base.appendingPathComponent(file))
+        }
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("store", isDirectory: true))
+        let previous = try store.publish(importedFiles: [:], from: base, supportFallback: base)
+        let current = try store.publish(importedFiles: [:], from: previous.directory)
+        XCTAssertTrue(try XCTUnwrap(store.loadCurrent()).hasVerifiedReleaseMarker)
+        try Data("corrupted marker".utf8).write(to: current.directory.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker))
+        let recovered = try XCTUnwrap(store.loadCurrent())
+        XCTAssertEqual(recovered.generation, previous.generation)
+        XCTAssertTrue(recovered.recoveredPrevious)
+        XCTAssertTrue(recovered.hasVerifiedReleaseMarker)
+        XCTAssertEqual(store.loadCandidates().map(\.generation), [previous.generation])
+    }
 }
