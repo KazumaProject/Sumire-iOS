@@ -13,11 +13,56 @@
 static int same_string(sumire_string a, sumire_string b) {
   return a.size == b.size && (!a.size || memcmp(a.data, b.data, a.size) == 0);
 }
+static void test_bunsetsu_metadata_invalid_arguments(void) {
+  uint32_t boundary = 1234;
+  int has_pattern = 1234;
+  CHECK(sumire_result_bunsetsu_split_pattern_count(NULL) == 0);
+  CHECK(sumire_result_bunsetsu_split_pattern_boundary_count(NULL, 0) == 0);
+  CHECK(sumire_result_bunsetsu_split_pattern_boundary(NULL, 0, 0, &boundary) == -1);
+  CHECK(boundary == 1234);
+  CHECK(sumire_result_primary_bunsetsu_boundary_count(NULL) == 0);
+  CHECK(sumire_result_primary_bunsetsu_boundary(NULL, 0, &boundary) == -1);
+  CHECK(boundary == 1234);
+  CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(NULL, 0, &has_pattern) == -1);
+  CHECK(has_pattern == 1234);
+  CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(NULL, 0, NULL) == -1);
+}
 static void compare_results(sumire_result *actual, sumire_result *fresh) {
   sumire_metrics actual_metrics, fresh_metrics;
   CHECK(sumire_result_metrics(actual,&actual_metrics) == 0 && sumire_result_metrics(fresh,&fresh_metrics) == 0);
   CHECK(actual_metrics.complete == fresh_metrics.complete && actual_metrics.generation == fresh_metrics.generation);
   CHECK(sumire_result_count(actual) == sumire_result_count(fresh));
+  size_t split_pattern_count = sumire_result_bunsetsu_split_pattern_count(actual);
+  CHECK(split_pattern_count == sumire_result_bunsetsu_split_pattern_count(fresh));
+  for (size_t i = 0; i < split_pattern_count; ++i) {
+    size_t boundary_count = sumire_result_bunsetsu_split_pattern_boundary_count(actual, i);
+    CHECK(boundary_count == sumire_result_bunsetsu_split_pattern_boundary_count(fresh, i));
+    for (size_t j = 0; j < boundary_count; ++j) {
+      uint32_t a, b;
+      CHECK(sumire_result_bunsetsu_split_pattern_boundary(actual, i, j, &a) == 0);
+      CHECK(sumire_result_bunsetsu_split_pattern_boundary(fresh, i, j, &b) == 0);
+      CHECK(a == b);
+    }
+  }
+  size_t primary_count = sumire_result_primary_bunsetsu_boundary_count(actual);
+  CHECK(primary_count == sumire_result_primary_bunsetsu_boundary_count(fresh));
+  for (size_t i = 0; i < primary_count; ++i) {
+    uint32_t a, b;
+    CHECK(sumire_result_primary_bunsetsu_boundary(actual, i, &a) == 0);
+    CHECK(sumire_result_primary_bunsetsu_boundary(fresh, i, &b) == 0);
+    CHECK(a == b);
+  }
+  uint32_t invalid_boundary = 1234;
+  int invalid_mapping = 1234;
+  CHECK(sumire_result_bunsetsu_split_pattern_boundary(actual, split_pattern_count, 0,
+                                                      &invalid_boundary) == -1);
+  CHECK(invalid_boundary == 1234);
+  CHECK(sumire_result_primary_bunsetsu_boundary(actual, primary_count,
+                                                &invalid_boundary) == -1);
+  CHECK(invalid_boundary == 1234);
+  CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(
+      actual, sumire_result_count(actual), &invalid_mapping) == -1);
+  CHECK(invalid_mapping == 1234);
   for (size_t i = 0; i < sumire_result_count(actual); ++i) {
     uint32_t actual_flags, fresh_flags;
     CHECK(sumire_result_candidate_flags(actual,i,&actual_flags) == 0);
@@ -27,6 +72,12 @@ static void compare_results(sumire_result *actual, sumire_result *fresh) {
     CHECK(sumire_result_candidate_presentation_kind(actual,i,&actual_kind) == 0);
     CHECK(sumire_result_candidate_presentation_kind(fresh,i,&fresh_kind) == 0);
     CHECK(actual_kind == fresh_kind);
+    int actual_has_pattern = -1, fresh_has_pattern = -1;
+    CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(actual, i,
+                                                            &actual_has_pattern) == 0);
+    CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(fresh, i,
+                                                            &fresh_has_pattern) == 0);
+    CHECK(actual_has_pattern == fresh_has_pattern);
     sumire_candidate a, b;
     CHECK(sumire_result_candidate(actual, i, &a) == 0 && sumire_result_candidate(fresh, i, &b) == 0);
     CHECK(a.candidate_id == b.candidate_id && a.score == b.score && same_string(a.text,b.text));
@@ -81,6 +132,48 @@ static void test_edit_reuse(const char *directory) {
   }
   CHECK(hits > 0);
   sumire_session_destroy(reused); sumire_engine_close(engine);
+}
+static void test_bunsetsu_snapshot_metadata(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  sumire_result *result = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory, 0, 1, &engine,
+                                             error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "あい", strlen("あい"), 0, 20, 200000, 16};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+
+  size_t pattern_count = sumire_result_bunsetsu_split_pattern_count(result);
+  CHECK(pattern_count > 0);
+  int found_empty_pattern = 0;
+  for (size_t i = 0; i < pattern_count; ++i) {
+    if (sumire_result_bunsetsu_split_pattern_boundary_count(result, i) == 0)
+      found_empty_pattern = 1;
+  }
+  CHECK(found_empty_pattern);
+
+  int found_whole_path_mapping = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (!same_string(candidate.text, (sumire_string){"Whole", 5})) continue;
+    int has_pattern = 0;
+    CHECK(sumire_result_candidate_has_bunsetsu_split_pattern(result, i,
+                                                             &has_pattern) == 0);
+    CHECK(has_pattern == 1);
+    CHECK(sumire_result_bunsetsu_count(result, i) == 0);
+    found_whole_path_mapping = 1;
+  }
+  CHECK(found_whole_path_mapping);
+  CHECK(sumire_result_primary_bunsetsu_boundary_count(result) == 0);
+  uint32_t untouched = 4321;
+  CHECK(sumire_result_primary_bunsetsu_boundary(result, 0, &untouched) == -1);
+  CHECK(untouched == 4321);
+
+  sumire_result_destroy(result);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
 }
 static void test_candidate_origin_flags(const char *directory) {
   char error[256];
@@ -371,6 +464,7 @@ static void test_release_categories(const char *directory) {
   CHECK(sumire_engine_open_with_category_ids(directory, NULL, 0, 0, NULL, error, sizeof error) < 0);
 }
 int main(int argc, char **argv) {
+  test_bunsetsu_metadata_invalid_arguments();
   if (argc == 3 && strcmp(argv[2], "--release-categories") == 0) {
     test_release_categories(argv[1]); return 0;
   }
@@ -384,6 +478,7 @@ int main(int argc, char **argv) {
   }
   CHECK(argc == 2);
   test_edit_reuse(argv[1]);
+  test_bunsetsu_snapshot_metadata(argv[1]);
   test_candidate_origin_flags(argv[1]);
   test_category_prediction(argv[1]);
   test_pathless_kana_ranges(argv[1]);

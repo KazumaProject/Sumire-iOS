@@ -305,6 +305,49 @@ int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidat
   *out_utf16 = result->snapshot->value.candidates[candidate].bunsetsu_boundaries[index];
   return 0;
 }
+size_t sumire_result_bunsetsu_split_pattern_count(const sumire_result *result) {
+  return result ? result->snapshot->value.bunsetsu_split_patterns.size() : 0;
+}
+size_t sumire_result_bunsetsu_split_pattern_boundary_count(const sumire_result *result,
+                                                           size_t pattern_index) {
+  const auto count = sumire_result_bunsetsu_split_pattern_count(result);
+  return pattern_index < count
+      ? result->snapshot->value.bunsetsu_split_patterns[pattern_index].size() : 0;
+}
+int sumire_result_bunsetsu_split_pattern_boundary(const sumire_result *result,
+                                                  size_t pattern_index,
+                                                  size_t boundary_index,
+                                                  uint32_t *out_utf16) {
+  if (!out_utf16 || boundary_index >=
+      sumire_result_bunsetsu_split_pattern_boundary_count(result, pattern_index))
+    return -1;
+  *out_utf16 = result->snapshot->value.bunsetsu_split_patterns[pattern_index][boundary_index];
+  return 0;
+}
+size_t sumire_result_primary_bunsetsu_boundary_count(const sumire_result *result) {
+  return result ? result->snapshot->value.primary_bunsetsu_split_positions.size() : 0;
+}
+int sumire_result_primary_bunsetsu_boundary(const sumire_result *result,
+                                            size_t boundary_index,
+                                            uint32_t *out_utf16) {
+  if (!out_utf16 || boundary_index >= sumire_result_primary_bunsetsu_boundary_count(result))
+    return -1;
+  *out_utf16 = result->snapshot->value.primary_bunsetsu_split_positions[boundary_index];
+  return 0;
+}
+int sumire_result_candidate_has_bunsetsu_split_pattern(const sumire_result *result,
+                                                       size_t candidate_index,
+                                                       int *out_has_pattern) {
+  if (!result || !out_has_pattern || candidate_index >= sumire_result_count(result))
+    return -1;
+  const auto &surface = result->snapshot->value.candidates[candidate_index].text;
+  const auto &mappings = result->snapshot->value.split_pattern_by_candidate;
+  *out_has_pattern = std::any_of(mappings.begin(), mappings.end(),
+      [&surface](const sumire::CandidateSplitPattern &mapping) {
+        return mapping.surface == surface;
+      }) ? 1 : 0;
+  return 0;
+}
 int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched) {
   if (!result || !reused || !searched) return -1;
   *reused = result->snapshot->value.reused_search_rows;
