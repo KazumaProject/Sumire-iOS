@@ -4,6 +4,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <set>
 #include <stdexcept>
 #include <unistd.h>
 using namespace sumire;
@@ -28,6 +29,24 @@ int main() {
     check(resolve_category_names(dir, {"character"}).size() == 9);
     check(resolve_category_names(dir, {"character"}, false) == std::vector<std::string>{"character"});
     check(resolve_category_names(dir, {"work_anime", "character"}).size() == 10);
+    const std::set<std::string> demographic_leaves = {
+        "media_demographic/audience/shonen",
+        "media_demographic/audience/seinen",
+        "media_demographic/audience/shojo",
+        "media_demographic/audience/josei",
+        "media_demographic/audience/kids",
+        "media_demographic/audience/mixed",
+        "media_demographic/audience/unspecified",
+        "media_demographic/resolution/source_unverified",
+    };
+    for (const auto &family : legacy) {
+      std::set<std::string> resolved_demographics;
+      for (const auto &id : resolve_category_names(dir, {family})) {
+        if (id.starts_with("media_demographic/")) resolved_demographics.insert(id);
+      }
+      const bool expands_demographics = family == "character" || family.starts_with("work_");
+      check(resolved_demographics == (expands_demographics ? demographic_leaves : std::set<std::string>{}));
+    }
     auto all = resolve_category_names(dir, legacy);
     auto release = release_category_names();
     std::sort(all.begin(), all.end()); std::sort(release.begin(), release.end());

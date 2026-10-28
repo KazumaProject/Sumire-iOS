@@ -6,10 +6,128 @@ import Darwin
 /// The containing app writes a generation; the keyboard extension can read the
 /// current one without mutating the shared container.
 public struct DictionaryGenerationStore {
+    public enum ImportMode: Equatable, Sendable {
+        /// Compatibility for existing callers that publish pre-classified files.
+        case legacyCompatible
+        /// Files were interpreted as release-leaf IDs by the archive converter.
+        case releaseLeaf
+        /// Old family dictionaries are stored only under their typed overlay IDs.
+        case typedLegacyAggregate
+    }
+
     public struct Loaded {
+        public struct LegacyAggregateSource: Equatable, Sendable {
+            public let id: DictionaryCategoryCatalog.LegacyAggregateID
+            public let fileURL: URL
+        }
+
+        /// Typed source request for a future native consumer. It identifies
+        /// release leaves and aggregate files separately; it does not load or
+        /// convert either source itself.
+        public struct SourceSelection: Equatable, Sendable {
+            public let releaseLeafIDs: [String]
+            public let legacyAggregateSources: [LegacyAggregateSource]
+            public let unavailableCategoryIDs: [String]
+        }
+
         public let directory: URL
         public let generation: String
         public let recoveredPrevious: Bool
+        /// True only when the release marker is a checksum-matched manifest member.
+        public let hasVerifiedReleaseMarker: Bool
+        /// Old aggregate dictionaries retained beside a dictionary generation.
+        /// They are not yet consumed by the native-engine path.
+        public let legacyAggregateOverlayIDs: [DictionaryCategoryCatalog.LegacyAggregateID]
+        fileprivate let legacyAggregateOverlaySHA256: [DictionaryCategoryCatalog.LegacyAggregateID: String]
+        fileprivate let releaseLeafSHA256: [String: String]
+        /// Category-named files carried forward from an unmarked generation.
+        /// Their taxonomy is not inferable from the old manifest, so they remain
+        /// preserved but inactive until explicitly re-imported with known provenance.
+        public let preservedUnclassifiedCategoryIDs: [String]
+        /// Flat category files inferred from a pre-marker generation. These remain
+        /// in their original location until a release-taxonomy transition quarantines them.
+        public let unclassifiedLegacyRootCategoryIDs: [String]
+        fileprivate let unclassifiedCategorySources: [String: URL]
+
+        /// Resolves selected taxonomy IDs against this already-verified immutable
+        /// generation. Only a release-marked generation can supply release leaves
+        /// or typed aggregate overlays; ambiguous pre-marker files remain inactive.
+        public func resolveSourceSelection(for selectedIDs: [String], allowingLegacyAggregates: Bool = true) -> SourceSelection {
+            let requested = DictionaryCategoryCatalog.normalize(selectedIDs)
+            let requestedSet = Set(requested)
+            let knownCategoryIDs = Set(DictionaryCategoryCatalog.ids)
+            let unknownIDs = Set(selectedIDs).subtracting(knownCategoryIDs).sorted()
+            let allRequestedIDs = requested + unknownIDs
+            guard hasVerifiedReleaseMarker else {
+                return SourceSelection(releaseLeafIDs: [], legacyAggregateSources: [],
+                                      unavailableCategoryIDs: allRequestedIDs)
+            }
+
+            func isRegularFile(_ url: URL) -> Bool {
+                guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path) else {
+                    return false
+                }
+                return attributes[.type] as? FileAttributeType == .typeRegular
+            }
+
+            let selectedFamilies = Set(DictionaryCategoryCatalog.categories
+                .filter { requestedSet.contains($0.id) }
+                .flatMap(\.legacyFamilies))
+            // Import validation checks the newly published leaf bytes, independently
+            // of the optional aggregate-substitution plan for a future consumer.
+            let eligibleOverlayIDs = allowingLegacyAggregates ? legacyAggregateOverlayIDs : []
+            let completeFamilyCandidates = eligibleOverlayIDs.filter { id in
+                guard selectedFamilies.contains(id.rawValue) else { return false }
+                let familyLeaves = DictionaryCategoryCatalog.categories
+                    .filter { $0.legacyFamilies.contains(id.rawValue) }
+                return !familyLeaves.isEmpty && familyLeaves.allSatisfy { requestedSet.contains($0.id) }
+            }
+            // Recheck only overlays that could participate in this selection. Generations
+            // are immutable after publication, but this prevents a replaced file from being
+            // planned for the native consumer after the pointer was loaded.
+            let availableAggregates = Set(completeFamilyCandidates.filter { id in
+                let url = directory.appendingPathComponent("legacy_aggregates/\(id.rawValue).sud")
+                guard isRegularFile(url),
+                      let expected = legacyAggregateOverlaySHA256[id],
+                      let actual = try? DictionaryGenerationStore.sha256(of: url) else {
+                    return false
+                }
+                return actual == expected
+            })
+            let resolved = DictionaryCategoryCatalog.resolveLegacyOverlaySelection(
+                selectedIDs: requested,
+                availableLegacyAggregateIDs: availableAggregates
+            )
+            let aggregateSources = resolved.legacyAggregateIDs.compactMap { id -> LegacyAggregateSource? in
+                guard availableAggregates.contains(id) else { return nil }
+                return LegacyAggregateSource(
+                    id: id,
+                    fileURL: directory.appendingPathComponent("legacy_aggregates/\(id.rawValue).sud")
+                )
+            }
+            let aggregateIDs = Set(aggregateSources.map(\.id))
+            let aggregateCoveredLeafIDs = Set(DictionaryCategoryCatalog.categories.compactMap { category -> String? in
+                guard !category.legacyFamilies.isEmpty,
+                      Set(category.legacyFamilies).isSubset(of: aggregateIDs.map(\.rawValue)) else {
+                    return nil
+                }
+                return category.id
+            })
+            let releaseLeafIDs = resolved.releaseLeafIDs.filter { id in
+                let url = directory.appendingPathComponent(id + ".sud")
+                guard isRegularFile(url),
+                      let expected = releaseLeafSHA256[id + ".sud"],
+                      let actual = try? DictionaryGenerationStore.sha256(of: url) else {
+                    return false
+                }
+                return actual == expected
+            }
+            let covered = Set(releaseLeafIDs).union(aggregateCoveredLeafIDs)
+            let unavailable = requested.filter { !covered.contains($0) } + unknownIDs
+            return SourceSelection(releaseLeafIDs: releaseLeafIDs,
+                                   legacyAggregateSources: aggregateSources,
+                                   unavailableCategoryIDs: unavailable)
+        }
     }
     private struct Pointer: Codable {
         let formatVersion: Int
@@ -21,18 +139,43 @@ public struct DictionaryGenerationStore {
             case manifestSHA256 = "manifest_sha256"
         }
     }
+    private struct VerifiedPointer {
+        let pointer: Pointer
+        let hasVerifiedReleaseMarker: Bool
+        let legacyAggregateOverlayIDs: [DictionaryCategoryCatalog.LegacyAggregateID]
+        let legacyAggregateOverlaySHA256: [DictionaryCategoryCatalog.LegacyAggregateID: String]
+        let releaseLeafSHA256: [String: String]
+        let preservedUnclassifiedCategoryIDs: [String]
+        let unclassifiedLegacyRootCategoryIDs: [String]
+        let unclassifiedCategorySources: [String: URL]
+    }
     private struct Manifest: Codable {
         let formatVersion: Int
         let generation: String
         let sourceRevision: String
         let importedFiles: [String]
         let outputSHA256: [String: String]
+        let legacyAggregateOverlayIDs: [String]?
+        let preservedUnclassifiedCategoryIDs: [String]?
         enum CodingKeys: String, CodingKey {
             case formatVersion = "format_version"
             case generation
             case sourceRevision = "source_revision"
             case importedFiles = "imported_files"
             case outputSHA256 = "output_sha256"
+            case legacyAggregateOverlayIDs = "legacy_aggregate_overlay_ids"
+            case preservedUnclassifiedCategoryIDs = "preserved_unclassified_category_ids"
+        }
+        init(formatVersion: Int, generation: String, sourceRevision: String,
+             importedFiles: [String], outputSHA256: [String: String],
+             legacyAggregateOverlayIDs: [String], preservedUnclassifiedCategoryIDs: [String]) {
+            self.formatVersion = formatVersion
+            self.generation = generation
+            self.sourceRevision = sourceRevision
+            self.importedFiles = importedFiles
+            self.outputSHA256 = outputSHA256
+            self.legacyAggregateOverlayIDs = legacyAggregateOverlayIDs
+            self.preservedUnclassifiedCategoryIDs = preservedUnclassifiedCategoryIDs
         }
     }
 
@@ -41,6 +184,12 @@ public struct DictionaryGenerationStore {
 
     private var currentPointer: URL { directory.appendingPathComponent("current.json") }
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
+    private static let releaseReplacementFiles = Set((DictionaryCategoryCatalog.ids + [
+        "system", "english", "english_reading", "connection", "reading_correction",
+        "single_kanji", "emoji", "emoticon", "symbol"
+    ]).map { $0 + ".sud" })
+    private static let releaseCategoryFiles = Set(DictionaryCategoryCatalog.ids.map { $0 + ".sud" })
+    // Older, unmarked generations can still receive legacy family filenames.
     private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + DictionaryCategoryCatalog.ids + [
         "system", "english", "english_reading", "connection", "reading_correction",
         "single_kanji", "emoji", "emoticon", "symbol"
@@ -53,11 +202,29 @@ public struct DictionaryGenerationStore {
         ["single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"]
     ]
     private static let supportFiles = Set(supportGroups.flatMap { $0 }).union([DictionaryCategoryCatalog.releaseMarker])
-    private static let knownFiles = replacementFiles.union(supportFiles)
+    private static let legacyAggregateDirectory = "legacy_aggregates"
+    private static let unclassifiedCategoryDirectory = "unclassified_categories"
+    private static let legacyAggregateIDs = Set(DictionaryCategoryCatalog.legacyIDs.map {
+        DictionaryCategoryCatalog.LegacyAggregateID(rawValue: $0)
+    })
+    private static let legacyAggregateRootFiles = Set(DictionaryCategoryCatalog.legacyIDs.map { $0 + ".sud" })
+    private static func legacyAggregateFile(_ id: DictionaryCategoryCatalog.LegacyAggregateID) -> String {
+        "\(legacyAggregateDirectory)/\(id.rawValue).sud"
+    }
+    private static func unclassifiedCategoryFile(_ id: String) -> String {
+        "\(unclassifiedCategoryDirectory)/\(id).sud"
+    }
+    private static let knownFiles = replacementFiles.union(supportFiles).union(
+        Set(DictionaryCategoryCatalog.legacyIDs.map {
+            "\(legacyAggregateDirectory)/\($0).sud"
+        })
+    ).union(Set(DictionaryCategoryCatalog.legacyIDs.map {
+        "\(unclassifiedCategoryDirectory)/\($0).sud"
+    }))
 
-    /// Reads only pointer/manifest metadata and verifies all referenced files
-    /// exist as regular files. Native file checksums are verified by the C++
-    /// loader when it maps a selected dictionary.
+    /// Verifies pointer/manifest metadata and referenced regular files. The C++
+    /// loader verifies selected native dictionaries; typed overlays are not
+    /// consumed by that loader yet, so verify their recorded hashes here.
     public func loadCurrent() -> Loaded? {
         if let loaded = try? load(currentPointer, recoveredPrevious: false) { return loaded }
         return try? load(previousPointer, recoveredPrevious: true)
@@ -83,8 +250,17 @@ public struct DictionaryGenerationStore {
     /// its manifest have been written and synced. Missing support groups can be
     /// restored from the trusted bundled fallback without replacing base user
     /// dictionaries. Partial groups are rejected rather than mixed silently.
+    /// On a marked release generation, `importedFiles` names are release output IDs.
+    /// Legacy family aggregates must be supplied separately with typed IDs. Overlapping
+    /// raw names are therefore valid release IDs here, never an aggregate identity.
+    /// Typed overlays can be stored beside either generation taxonomy, but remain
+    /// metadata-only until a native-engine consumer is implemented. Callers importing
+    /// converter output must pass its interpretation so release leaves cannot overwrite
+    /// an unmarked legacy generation merely because their filenames overlap.
     @discardableResult
     public func publish(importedFiles: [String: URL], from baseDirectory: URL, supportFallback: URL? = nil,
+                        legacyAggregateOverlays: [DictionaryCategoryCatalog.LegacyAggregateID: URL] = [:],
+                        importMode: ImportMode = .legacyCompatible,
                         validate: ((URL) throws -> Void)? = nil) throws -> Loaded {
         guard directory.isFileURL, baseDirectory.isFileURL,
               importedFiles.keys.allSatisfy(Self.replacementFiles.contains) else {
@@ -92,16 +268,77 @@ public struct DictionaryGenerationStore {
         }
         let manager = FileManager.default
         try Self.requireDirectory(baseDirectory)
-        if try Self.existingFile(DictionaryCategoryCatalog.releaseMarker, in: baseDirectory) != nil {
-            let replacedLegacy = importedFiles.keys.filter { file in
-                guard file.hasSuffix(".sud") else { return false }
-                let id = String(file.dropLast(4))
-                return DictionaryArchivePlan.categoryIDs.contains(id) && !DictionaryCategoryCatalog.idSet.contains(id)
+        let existingGenerations = loadCandidates()
+        let storedBaseGeneration = existingGenerations.first {
+            $0.directory.standardizedFileURL == baseDirectory.standardizedFileURL
+        }
+        let isBundledBootstrap = storedBaseGeneration == nil &&
+            supportFallback?.standardizedFileURL == baseDirectory.standardizedFileURL
+        let releaseMarkerSource = try Self.existingFile(DictionaryCategoryCatalog.releaseMarker, in: baseDirectory)
+        let hasVerifiedReleaseMarker = storedBaseGeneration?.hasVerifiedReleaseMarker == true
+        let hasTrustedReleaseMarker = hasVerifiedReleaseMarker || (isBundledBootstrap && releaseMarkerSource != nil)
+        let importsReleaseCategories = importedFiles.keys.contains {
+            Self.releaseCategoryFiles.contains($0)
+        }
+        let incomingOverlayIDs = Set(legacyAggregateOverlays.keys)
+        guard incomingOverlayIDs.isSubset(of: Self.legacyAggregateIDs) else {
+            throw PersonalDataError("旧分類辞書の集約IDが分類カタログにありません")
+        }
+        switch importMode {
+        case .legacyCompatible:
+            break
+        case .releaseLeaf:
+            guard legacyAggregateOverlays.isEmpty,
+                  importedFiles.keys.allSatisfy(Self.releaseReplacementFiles.contains) else {
+                throw PersonalDataError("release分類の取り込みにはrelease辞書IDだけを指定してください")
             }
-            guard replacedLegacy.isEmpty else {
-                throw PersonalDataError("この旧分類辞書は新しい分類へ安全に分割できないため取り込めません: " + replacedLegacy.sorted().joined(separator: ", "))
+            guard hasTrustedReleaseMarker || isBundledBootstrap || !importsReleaseCategories else {
+                throw PersonalDataError("release分類の取り込みにはrelease世代または同梱辞書が必要です")
+            }
+        case .typedLegacyAggregate:
+            let forbiddenFlatCategories = Self.releaseCategoryFiles.union(Self.legacyAggregateRootFiles)
+            let untypedCategoryFiles = Set(importedFiles.keys).intersection(forbiddenFlatCategories).sorted()
+            guard untypedCategoryFiles.isEmpty else {
+                throw PersonalDataError("分類辞書は旧分類集約モードで通常世代へ取り込めません: " + untypedCategoryFiles.joined(separator: ", "))
             }
         }
+        let publishedLegacyOverlays: [DictionaryCategoryCatalog.LegacyAggregateID]
+        let retainedLegacyOverlays: Set<DictionaryCategoryCatalog.LegacyAggregateID>
+        if hasTrustedReleaseMarker {
+            guard importedFiles.keys.allSatisfy(Self.releaseReplacementFiles.contains) else {
+                let legacyOnlyFiles = Set(DictionaryArchivePlan.categoryIDs
+                    .filter { !DictionaryCategoryCatalog.idSet.contains($0) }
+                    .map { $0 + ".sud" })
+                let untypedLegacyFiles = Set(importedFiles.keys).intersection(legacyOnlyFiles).sorted()
+                if !untypedLegacyFiles.isEmpty {
+                    throw PersonalDataError("新分類辞書にない旧集約IDは型付きで取り込む必要があります: " + untypedLegacyFiles.joined(separator: ", "))
+                }
+                throw PersonalDataError("release世代にはrelease辞書IDのみ取り込めます")
+            }
+        }
+        var retainedOverlaySources: [DictionaryCategoryCatalog.LegacyAggregateID: URL] = [:]
+        for generation in existingGenerations {
+            for id in generation.legacyAggregateOverlayIDs where retainedOverlaySources[id] == nil {
+                let file = Self.legacyAggregateFile(id)
+                guard let source = try Self.existingFile(file, in: generation.directory) else {
+                    throw PersonalDataError("保存済みの旧分類辞書が見つかりません: \(id.rawValue)")
+                }
+                retainedOverlaySources[id] = source
+            }
+        }
+        retainedLegacyOverlays = Set(retainedOverlaySources.keys).subtracting(incomingOverlayIDs)
+        publishedLegacyOverlays = (retainedLegacyOverlays.union(incomingOverlayIDs)).sorted { $0.rawValue < $1.rawValue }
+        var retainedUnclassifiedCategorySources: [String: URL] = [:]
+        for generation in existingGenerations {
+            for (id, source) in generation.unclassifiedCategorySources where retainedUnclassifiedCategorySources[id] == nil {
+                retainedUnclassifiedCategorySources[id] = source
+            }
+        }
+        let publishesReleaseTaxonomy = hasTrustedReleaseMarker ||
+            (importMode == .releaseLeaf && importsReleaseCategories && isBundledBootstrap)
+        let publishedUnclassifiedCategoryIDs = publishesReleaseTaxonomy
+            ? retainedUnclassifiedCategorySources.keys.sorted()
+            : []
         if let supportFallback {
             guard supportFallback.isFileURL else { throw PersonalDataError("補助辞書の保存先が不正です") }
             try Self.requireDirectory(supportFallback)
@@ -127,6 +364,8 @@ public struct DictionaryGenerationStore {
         var totalBytes: Int64 = 0
         let importedNames = Set(importedFiles.keys)
         var sources: [String: URL] = [:]
+        var unclassifiedCategorySources: [String: URL] = [:]
+        var overlaySources: [String: URL] = [:]
         for file in Self.replacementFiles.subtracting(Self.supportFiles) where !importedNames.contains(file) {
             let source = try Self.existingFile(file, in: baseDirectory)
             if let source { sources[file] = source }
@@ -139,7 +378,8 @@ public struct DictionaryGenerationStore {
             }
             let selected: [URL?]
             if present == group.count { selected = existing }
-            else if let supportFallback {
+            else if let supportFallback,
+                    supportFallback.standardizedFileURL != baseDirectory.standardizedFileURL {
                 selected = try group.map { try Self.existingFile($0, in: supportFallback) }
                 guard selected.allSatisfy({ $0 != nil }) else {
                     throw PersonalDataError("同梱の補助辞書が不足しています")
@@ -149,8 +389,24 @@ public struct DictionaryGenerationStore {
                 if let source { sources[file] = source }
             }
         }
-        if let marker = try Self.existingFile(DictionaryCategoryCatalog.releaseMarker, in: baseDirectory) {
+        if hasTrustedReleaseMarker, let marker = releaseMarkerSource {
             sources[DictionaryCategoryCatalog.releaseMarker] = marker
+        }
+        for id in retainedLegacyOverlays {
+            let file = Self.legacyAggregateFile(id)
+            guard let source = retainedOverlaySources[id] else {
+                throw PersonalDataError("保存済みの旧分類辞書が見つかりません: \(id.rawValue)")
+            }
+            overlaySources[file] = source
+        }
+        for (id, source) in legacyAggregateOverlays {
+            overlaySources[Self.legacyAggregateFile(id)] = source
+        }
+        for id in publishedUnclassifiedCategoryIDs {
+            guard let source = retainedUnclassifiedCategorySources[id] else {
+                throw PersonalDataError("分類を判定できない既存辞書が見つかりません: \(id)")
+            }
+            unclassifiedCategorySources[Self.unclassifiedCategoryFile(id)] = source
         }
         for (file, source) in sources.sorted(by: { $0.key < $1.key }) {
             let destination = final.appendingPathComponent(file)
@@ -162,6 +418,20 @@ public struct DictionaryGenerationStore {
             try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
             if manager.fileExists(atPath: destination.path) { try manager.removeItem(at: destination) }
             try Self.copyRegularFile(source, to: destination, totalBytes: &totalBytes)
+        }
+        for (file, source) in overlaySources.sorted(by: { $0.key < $1.key }) {
+            let destination = final.appendingPathComponent(file)
+            try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.copyRegularFile(source, to: destination, totalBytes: &totalBytes)
+        }
+        for (file, source) in unclassifiedCategorySources.sorted(by: { $0.key < $1.key }) {
+            let destination = final.appendingPathComponent(file)
+            try manager.createDirectory(at: destination.deletingLastPathComponent(), withIntermediateDirectories: true)
+            try Self.copyRegularFile(source, to: destination, totalBytes: &totalBytes)
+        }
+        if importMode == .releaseLeaf && importsReleaseCategories && !hasTrustedReleaseMarker {
+            let markerURL = final.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker)
+            try Data().write(to: markerURL, options: .atomic)
         }
 
         guard manager.fileExists(atPath: final.appendingPathComponent("system.sud").path),
@@ -181,7 +451,9 @@ public struct DictionaryGenerationStore {
         }
         let manifest = Manifest(formatVersion: 1, generation: generation,
                                 sourceRevision: "unknown-or-mixed",
-                                importedFiles: importedFiles.keys.sorted(), outputSHA256: hashes)
+                                importedFiles: importedFiles.keys.sorted(), outputSHA256: hashes,
+                                legacyAggregateOverlayIDs: publishedLegacyOverlays.map(\.rawValue),
+                                preservedUnclassifiedCategoryIDs: publishedUnclassifiedCategoryIDs)
         let encoder = JSONEncoder()
         encoder.outputFormatting = [.sortedKeys]
         let manifestData = try encoder.encode(manifest)
@@ -195,7 +467,7 @@ public struct DictionaryGenerationStore {
                               manifestSHA256: Self.digest(manifestData))
         let pointerData = try encoder.encode(pointer)
 
-        let previous = (try? readPointer(currentPointer)) ?? (try? readPointer(previousPointer))
+        let previous = (try? readPointer(currentPointer).pointer) ?? (try? readPointer(previousPointer).pointer)
         if let previous {
             try encoder.encode(previous).write(to: previousPointer, options: .atomic)
             try Self.synchronize(previousPointer)
@@ -206,16 +478,37 @@ public struct DictionaryGenerationStore {
         try? Self.synchronize(directory)
 
         Self.removeUnreferencedGenerations(in: directory, keeping: [name, previous?.generation].compactMap { $0 })
-        return Loaded(directory: final, generation: name, recoveredPrevious: false)
+        return Loaded(directory: final, generation: name, recoveredPrevious: false,
+                      hasVerifiedReleaseMarker: hashes[DictionaryCategoryCatalog.releaseMarker] != nil,
+                      legacyAggregateOverlayIDs: publishedLegacyOverlays,
+                      legacyAggregateOverlaySHA256: Dictionary(uniqueKeysWithValues:
+                        publishedLegacyOverlays.compactMap { id in
+                            hashes[Self.legacyAggregateFile(id)].map { (id, $0) }
+                        }),
+                      releaseLeafSHA256: hashes.filter { Self.releaseCategoryFiles.contains($0.key) },
+                      preservedUnclassifiedCategoryIDs: publishedUnclassifiedCategoryIDs,
+                      unclassifiedLegacyRootCategoryIDs: [],
+                      unclassifiedCategorySources: Dictionary(uniqueKeysWithValues:
+                        publishedUnclassifiedCategoryIDs.map { id in
+                            (id, final.appendingPathComponent(Self.unclassifiedCategoryFile(id)))
+                        }))
     }
 
     private func load(_ pointerURL: URL, recoveredPrevious: Bool) throws -> Loaded {
-        let pointer = try readPointer(pointerURL)
+        let verified = try readPointer(pointerURL)
+        let pointer = verified.pointer
         let target = directory.appendingPathComponent(pointer.generation, isDirectory: true)
-        return Loaded(directory: target, generation: pointer.generation, recoveredPrevious: recoveredPrevious)
+        return Loaded(directory: target, generation: pointer.generation, recoveredPrevious: recoveredPrevious,
+                      hasVerifiedReleaseMarker: verified.hasVerifiedReleaseMarker,
+                      legacyAggregateOverlayIDs: verified.legacyAggregateOverlayIDs,
+                      legacyAggregateOverlaySHA256: verified.legacyAggregateOverlaySHA256,
+                      releaseLeafSHA256: verified.releaseLeafSHA256,
+                      preservedUnclassifiedCategoryIDs: verified.preservedUnclassifiedCategoryIDs,
+                      unclassifiedLegacyRootCategoryIDs: verified.unclassifiedLegacyRootCategoryIDs,
+                      unclassifiedCategorySources: verified.unclassifiedCategorySources)
     }
 
-    private func readPointer(_ url: URL) throws -> Pointer {
+    private func readPointer(_ url: URL) throws -> VerifiedPointer {
         let manager = FileManager.default
         let pointerAttributes = try manager.attributesOfItem(atPath: url.path)
         guard pointerAttributes[.type] as? FileAttributeType == .typeRegular,
@@ -245,19 +538,84 @@ public struct DictionaryGenerationStore {
             throw PersonalDataError("辞書世代マニフェストのチェックサムが一致しません")
         }
         let manifest = try JSONDecoder().decode(Manifest.self, from: manifestData)
+        let legacyAggregateOverlayRawValues = manifest.legacyAggregateOverlayIDs ?? []
+        let legacyAggregateOverlayIDs = legacyAggregateOverlayRawValues.map {
+            DictionaryCategoryCatalog.LegacyAggregateID(rawValue: $0)
+        }
+        let preservedUnclassifiedCategoryRawValues = manifest.preservedUnclassifiedCategoryIDs ?? []
+        let unclassifiedCategoryIDs = Set(preservedUnclassifiedCategoryRawValues)
         guard manifest.formatVersion == 1, manifest.generation == String(pointer.generation.dropFirst("generation-".count)),
               manifest.outputSHA256.keys.allSatisfy(Self.knownFiles.contains),
               manifest.outputSHA256.values.allSatisfy(Self.isSHA256),
               manifest.importedFiles.allSatisfy(Self.replacementFiles.contains),
+              Set(legacyAggregateOverlayRawValues).count == legacyAggregateOverlayRawValues.count,
+              Set(legacyAggregateOverlayIDs).isSubset(of: Self.legacyAggregateIDs),
+              Set(preservedUnclassifiedCategoryRawValues).count == preservedUnclassifiedCategoryRawValues.count,
+              unclassifiedCategoryIDs.isSubset(of: Set(DictionaryCategoryCatalog.legacyIDs)),
+              legacyAggregateOverlayIDs.allSatisfy({
+                  let file = Self.legacyAggregateFile($0)
+                  return manifest.outputSHA256[file] != nil
+              }),
               manifest.outputSHA256["system.sud"] != nil, manifest.outputSHA256["connection.sud"] != nil else {
             throw PersonalDataError("辞書世代マニフェストの形式が不正です")
         }
+        var verifiedFiles: [String: URL] = [:]
         for file in manifest.outputSHA256.keys {
-            guard try Self.existingFile(file, in: target) != nil else {
+            guard let url = try Self.existingFile(file, in: target) else {
                 throw PersonalDataError("辞書世代ファイルがありません: \(file)")
             }
+            verifiedFiles[file] = url
         }
-        return pointer
+        for id in legacyAggregateOverlayIDs {
+            let file = Self.legacyAggregateFile(id)
+            guard let expected = manifest.outputSHA256[file], let url = verifiedFiles[file],
+                  try Self.sha256(of: url) == expected else {
+                throw PersonalDataError("保存された旧分類辞書のチェックサムが一致しません: \(id.rawValue)")
+            }
+        }
+        let releaseMarkerFile = DictionaryCategoryCatalog.releaseMarker
+        let hasVerifiedReleaseMarker: Bool
+        if let expected = manifest.outputSHA256[releaseMarkerFile],
+           let markerURL = verifiedFiles[releaseMarkerFile] {
+            hasVerifiedReleaseMarker = try Self.sha256(of: markerURL) == expected
+        } else {
+            hasVerifiedReleaseMarker = false
+        }
+        var unclassifiedCategorySources: [String: URL] = [:]
+        for id in preservedUnclassifiedCategoryRawValues {
+            let file = Self.unclassifiedCategoryFile(id)
+            guard let expected = manifest.outputSHA256[file], let url = verifiedFiles[file],
+                  try Self.sha256(of: url) == expected else {
+                throw PersonalDataError("分類未判定の既存辞書のチェックサムが一致しません: \(id)")
+            }
+            unclassifiedCategorySources[id] = url
+        }
+        // Before the release marker was introduced, the manifest recorded flat
+        // category filenames but not their taxonomy. Treat these bytes as opaque
+        // sources: they may be legacy aggregates or newer release leaves.
+        var unclassifiedLegacyRootCategoryIDs: [String] = []
+        if !hasVerifiedReleaseMarker {
+            for id in DictionaryCategoryCatalog.legacyIDs {
+                let file = id + ".sud"
+                guard manifest.outputSHA256[file] != nil,
+                      let url = try Self.existingFile(file, in: target) else { continue }
+                unclassifiedLegacyRootCategoryIDs.append(id)
+                if unclassifiedCategorySources[id] == nil { unclassifiedCategorySources[id] = url }
+            }
+        }
+        return VerifiedPointer(pointer: pointer,
+                              hasVerifiedReleaseMarker: hasVerifiedReleaseMarker,
+                              legacyAggregateOverlayIDs: legacyAggregateOverlayIDs.sorted { $0.rawValue < $1.rawValue },
+                              legacyAggregateOverlaySHA256: Dictionary(uniqueKeysWithValues:
+                                legacyAggregateOverlayIDs.compactMap { id in
+                                    manifest.outputSHA256[Self.legacyAggregateFile(id)].map { (id, $0) }
+                                }),
+                              releaseLeafSHA256: manifest.outputSHA256.filter {
+                                  Self.releaseCategoryFiles.contains($0.key)
+                              },
+                              preservedUnclassifiedCategoryIDs: preservedUnclassifiedCategoryRawValues.sorted(),
+                              unclassifiedLegacyRootCategoryIDs: unclassifiedLegacyRootCategoryIDs.sorted(),
+                              unclassifiedCategorySources: unclassifiedCategorySources)
     }
 
     private static func requireDirectory(_ url: URL) throws {
