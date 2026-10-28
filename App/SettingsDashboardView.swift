@@ -39,12 +39,12 @@ enum SettingsCategory: String, CaseIterable, Identifiable {
 }
 
 enum SettingsDestination: String, CaseIterable, Identifiable {
-    case keyboards, toolbar, customKeyboard, romaji, specialKeys, conversion, touchFeedback, flickStyle, appearance, theme, candidates
+    case keyboards, toolbar, customKeyboard, romaji, specialKeys, physicalShortcuts, conversion, touchFeedback, flickStyle, appearance, theme, candidates
     case personalDictionary, textMacros, dictionaries, dictionaryBrowser, learning, symbols, clipboard, backup, setup, licenses
     var id: String { rawValue }
     var category: SettingsCategory {
         switch self {
-        case .keyboards, .toolbar, .customKeyboard, .romaji, .specialKeys, .conversion, .touchFeedback, .flickStyle: return .input
+        case .keyboards, .toolbar, .customKeyboard, .romaji, .specialKeys, .physicalShortcuts, .conversion, .touchFeedback, .flickStyle: return .input
         case .appearance, .theme, .candidates: return .appearance
         case .personalDictionary, .textMacros, .dictionaries, .dictionaryBrowser, .learning: return .dictionaries
         case .symbols, .clipboard, .backup: return .data
@@ -58,6 +58,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .customKeyboard: return "Custom Keyboard"
         case .romaji: return "カスタムローマ字"
         case .specialKeys: return "Sumire の特殊キー操作"
+        case .physicalShortcuts: return "物理キーボードのショートカット"
         case .conversion: return "入力と変換"
         case .flickStyle: return "スミレ入力のスタイル"
         case .touchFeedback: return "入力の操作と表示"
@@ -83,6 +84,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .customKeyboard: return "自分だけの配列を作成・編集"
         case .romaji: return "ローマ字からかなへの変換ルール"
         case .specialKeys: return "タップ・フリック・長押しの動作"
+        case .physicalShortcuts: return "外付けキーボードのキー割り当て"
         case .flickStyle: return "二段・三段・ドーナツとガイドの操作"
         case .conversion: return "ライブ変換、文節ごとの変換、修飾キー省略、削除の区切り"
         case .touchFeedback: return "ポップアップ・二本指・長押し時間"
@@ -108,6 +110,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .customKeyboard: return "square.grid.3x3"
         case .romaji: return "textformat.abc"
         case .specialKeys: return "hand.draw"
+        case .physicalShortcuts: return "keyboard.badge.ellipsis"
         case .flickStyle: return "hand.point.up.left"
         case .conversion: return "character.cursor.ibeam"
         case .touchFeedback: return "hand.point.up.left"
