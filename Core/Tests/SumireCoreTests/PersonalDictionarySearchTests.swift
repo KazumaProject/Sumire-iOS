@@ -27,16 +27,21 @@ final class PersonalDictionarySearchTests: XCTestCase {
         XCTAssertEqual(PersonalDictionarySearch.results(for: entries, query: "AND").map(\.sourceIndex), [1])
     }
 
-    func testEmptyOrWhitespaceQueryPreservesOriginalOrderAndIndexes() {
+    func testEmptyOrWhitespaceQueryUsesAndroidReadingOrderAndPreservesTies() {
         let entries = [
-            PersonalWord(word: "二番目", reading: "にばんめ"),
-            PersonalWord(word: "一番目", reading: "いちばんめ")
+            PersonalWord(word: "supplementary", reading: "\u{10000}"),
+            PersonalWord(word: "later", reading: "とう"),
+            PersonalWord(word: "bmp-first", reading: "\u{E000}"),
+            PersonalWord(word: "earlier", reading: "あい"),
+            PersonalWord(word: "bmp-second", reading: "\u{E000}")
         ]
 
         let results = PersonalDictionarySearch.results(for: entries, query: "  \n ")
 
-        XCTAssertEqual(results.map(\.sourceIndex), [0, 1])
-        XCTAssertEqual(results.map(\.word), entries)
+        // SQLite BINARY UTF-8 order puts the BMP private-use scalar before U+10000;
+        // ties retain source order as a deterministic fallback.
+        XCTAssertEqual(results.map(\.sourceIndex), [3, 1, 2, 4, 0])
+        XCTAssertEqual(results.map(\.word.word), ["earlier", "later", "bmp-first", "bmp-second", "supplementary"])
     }
 
     func testNoMatchesReturnsEmptyResults() {

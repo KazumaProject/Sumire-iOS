@@ -14,8 +14,9 @@ public struct PersonalDictionarySearchResult: Equatable, Identifiable {
     }
 }
 
-/// Android user-dictionary search: case-insensitive prefix matches on the surface
-/// or reading, with exact matches first, then shorter matching text.
+/// Android user-dictionary ordering and search: an unfiltered list is ordered by
+/// SQLite's binary reading order; a query matches case-insensitive prefixes on
+/// the surface or reading, with exact matches first, then shorter matching text.
 public enum PersonalDictionarySearch {
     private struct RankedResult {
         let result: PersonalDictionarySearchResult
@@ -26,7 +27,13 @@ public enum PersonalDictionarySearch {
     public static func results(for entries: [PersonalWord], query rawQuery: String) -> [PersonalDictionarySearchResult] {
         let query = rawQuery.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !query.isEmpty else {
-            return entries.enumerated().map { PersonalDictionarySearchResult(sourceIndex: $0.offset, word: $0.element) }
+            return entries.enumerated()
+                .map { PersonalDictionarySearchResult(sourceIndex: $0.offset, word: $0.element) }
+                .sorted { lhs, rhs in
+                    let readingOrder = compareSQLiteBinary(lhs.word.reading, rhs.word.reading)
+                    if readingOrder != .orderedSame { return readingOrder == .orderedAscending }
+                    return lhs.sourceIndex < rhs.sourceIndex
+                }
         }
 
         let ranked = entries.enumerated().compactMap { index, word -> RankedResult? in
@@ -69,5 +76,12 @@ public enum PersonalDictionarySearch {
     private static func compareUTF16(_ lhs: String, _ rhs: String) -> ComparisonResult {
         if lhs.utf16.elementsEqual(rhs.utf16) { return .orderedSame }
         return lhs.utf16.lexicographicallyPrecedes(rhs.utf16) ? .orderedAscending : .orderedDescending
+    }
+
+    /// Android's Room query uses `ORDER BY reading ASC` without a collation,
+    /// which is SQLite BINARY ordering over the stored UTF-8 text.
+    private static func compareSQLiteBinary(_ lhs: String, _ rhs: String) -> ComparisonResult {
+        if lhs.utf8.elementsEqual(rhs.utf8) { return .orderedSame }
+        return lhs.utf8.lexicographicallyPrecedes(rhs.utf8) ? .orderedAscending : .orderedDescending
     }
 }

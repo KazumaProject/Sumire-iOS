@@ -30,11 +30,24 @@ final class PersonalDictionarySearchUITests: XCTestCase {
         surfaceMatch.tap()
         XCTAssertEqual(app.textFields["personalReading"].value as? String, surfaceMatchReading)
         XCTAssertEqual(app.textFields["personalText"].value as? String, surfaceMatchSurface)
+        let scoreField = app.textFields["personalScore"]
+        scoreField.coordinate(withNormalizedOffset: CGVector(dx: 0.95, dy: 0.5)).tap()
+        scoreField.typeText(String(repeating: XCUIKeyboardKey.delete.rawValue, count: 6) + "-20001")
+        app.buttons["保存"].tap()
+
+        let savedSurfaceMatch = entryButton(surfaceMatchSurface, in: app)
+        XCTAssertTrue(savedSurfaceMatch.waitForExistence(timeout: 5))
+        savedSurfaceMatch.tap()
+        XCTAssertEqual(app.textFields["personalScore"].value as? String, "-20001")
         app.buttons["キャンセル"].tap()
 
-        entryButton(surfaceMatchSurface, in: app).tap()
-        app.buttons["この登録を削除"].tap()
-        waitForAbsence(of: entryButton(surfaceMatchSurface, in: app))
+        savedSurfaceMatch.swipeLeft()
+        let deleteButton = app.buttons.matching(
+            NSPredicate(format: "label == %@ OR label == %@", "削除", "Delete")
+        ).firstMatch
+        XCTAssertTrue(deleteButton.waitForExistence(timeout: 5))
+        deleteButton.tap()
+        waitForAbsence(of: savedSurfaceMatch)
         XCTAssertTrue(entryButton(readingMatchSurface, in: app).exists)
 
         entryButton(readingMatchSurface, in: app).tap()
