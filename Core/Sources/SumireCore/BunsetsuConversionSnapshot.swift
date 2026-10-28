@@ -205,10 +205,26 @@ public struct BunsetsuConversionSnapshot {
         }
 
         return try safeBoundaryPatterns.map { boundaries in
-            try BunsetsuSplitPattern(
+            var projectionPaths = candidatePaths
+            // Android preserves the first plain whole-input candidate for an
+            // unsplit interval even when it has no lattice path. Native snapshot
+            // candidates have no source/presentation override; commit is surface.
+            if boundaries.isEmpty, !reading.isEmpty, hasValidNativeIndices,
+               let first = candidates.first, first.nativeIndex == 0,
+               first.identity.readingUTF16Length == readingUTF16Length {
+                projectionPaths = [BunsetsuCandidatePath(
+                    reading: reading,
+                    candidate: first.identity.surface,
+                    tokens: [BunsetsuToken(
+                        readingRange: NSRange(location: 0, length: readingUTF16Length),
+                        text: first.identity.surface
+                    )]
+                )]
+            }
+            return try BunsetsuSplitPattern(
                 reading: reading,
                 boundaries: boundaries,
-                candidatePaths: candidatePaths
+                candidatePaths: projectionPaths
             )
         }
     }

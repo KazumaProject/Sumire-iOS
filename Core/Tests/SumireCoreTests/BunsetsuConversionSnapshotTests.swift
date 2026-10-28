@@ -2,6 +2,47 @@ import XCTest
 @testable import SumireCore
 
 final class BunsetsuConversionSnapshotTests: XCTestCase {
+    func testUnsplitProjectionPreservesFirstWholeCandidateWithoutTokenPath() throws {
+        let first = BunsetsuCandidateDisplayIdentity(surface: "甲", readingUTF16Length: 4)
+        let snapshot = BunsetsuConversionSnapshot(
+            requestGeneration: 1, reading: "abcd", splitPatterns: [[2]],
+            primarySplitPositions: [2], candidates: [
+                .init(nativeIndex: 0, candidateID: 1, score: 2, identity: first,
+                      tokenPath: nil, mappedSplitPositions: []),
+                .init(nativeIndex: 1, candidateID: 2, score: 1,
+                      identity: .init(surface: "乙丙", readingUTF16Length: 4),
+                      tokenPath: [
+                          .init(readingRange: NSRange(location: 0, length: 2), text: "乙"),
+                          .init(readingRange: NSRange(location: 2, length: 2), text: "丙")
+                      ], mappedSplitPositions: [2])
+            ]
+        )
+        let patterns = try snapshot.projectedSplitPatterns(
+            reading: "abcd", requestGeneration: 1, orderedDisplayCandidates: [first])
+        XCTAssertEqual(patterns.map(\.boundaries), [[], [2]])
+        XCTAssertEqual(patterns[0].sourceCandidate, "甲")
+        XCTAssertEqual(patterns[0].segments.map(\.text), ["甲"])
+        XCTAssertEqual(patterns[0].segments.map(\.hasConvertedDisplay), [true])
+        XCTAssertEqual(patterns[1].segments.map(\.text), ["乙", "丙"])
+    }
+
+    func testUnsplitProjectionPreservesPathlessWholeCandidateAndSplitReadingFallback() throws {
+        let first = BunsetsuCandidateDisplayIdentity(surface: "甲", readingUTF16Length: 4)
+        let snapshot = BunsetsuConversionSnapshot(
+            requestGeneration: 1, reading: "abcd", splitPatterns: [[2]],
+            primarySplitPositions: [], candidates: [
+                .init(nativeIndex: 0, candidateID: 1, score: 1, identity: first,
+                      tokenPath: nil, mappedSplitPositions: [])
+            ])
+        let patterns = try snapshot.projectedSplitPatterns(
+            reading: "abcd", requestGeneration: 1, orderedDisplayCandidates: [first])
+        XCTAssertEqual(patterns[0].segments.map(\.text), ["甲"])
+        XCTAssertEqual(patterns[0].segments.map(\.hasConvertedDisplay), [true])
+        XCTAssertNil(patterns[1].sourceCandidate)
+        XCTAssertEqual(patterns[1].segments.map(\.text), ["ab", "cd"])
+        XCTAssertEqual(patterns[1].segments.map(\.hasConvertedDisplay), [false, false])
+    }
+
     func testSnapshotRetainsNativeCandidateOrderPathsAndMappingPresence() throws {
         let snapshot = BunsetsuConversionSnapshot(
             requestGeneration: 1,
