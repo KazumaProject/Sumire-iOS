@@ -161,6 +161,25 @@ int sumire_result_category(const sumire_result *result, size_t candidate_index,
 /* Returns 0 on success, -1 for invalid arguments/index. Copies an offset. */
 int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidate_index,
                                    size_t boundary_index, uint32_t *out_utf16);
+/* Android bunsetsu snapshot metadata. Result-level patterns preserve their
+ * engine order; the primary positions may be absent from that bounded list.
+ * Candidate presence distinguishes an explicitly empty pattern from no mapping.
+ * Counts return zero for a null result or invalid index; boundary reads return
+ * -1 and leave the output untouched when arguments are invalid. */
+size_t sumire_result_bunsetsu_split_pattern_count(const sumire_result *result);
+size_t sumire_result_bunsetsu_split_pattern_boundary_count(const sumire_result *result,
+                                                           size_t pattern_index);
+int sumire_result_bunsetsu_split_pattern_boundary(const sumire_result *result,
+                                                  size_t pattern_index,
+                                                  size_t boundary_index,
+                                                  uint32_t *out_utf16);
+size_t sumire_result_primary_bunsetsu_boundary_count(const sumire_result *result);
+int sumire_result_primary_bunsetsu_boundary(const sumire_result *result,
+                                            size_t boundary_index,
+                                            uint32_t *out_utf16);
+int sumire_result_candidate_has_bunsetsu_split_pattern(const sumire_result *result,
+                                                       size_t candidate_index,
+                                                       int *out_has_pattern);
 /* Diagnostics: immutable dictionary-search rows only, not Viterbi/A* reuse. */
 int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched);
 int sumire_result_metrics(const sumire_result *result, sumire_metrics *out);
