@@ -23,6 +23,10 @@ final class KeyboardSurface: UIInputView {
             guard oldValue != liveConversion else { return }
             beforeInput?()
             guard hasComposition else { return }
+            if currentBunsetsuSession != nil {
+                renderBunsetsuSession()
+                return
+            }
             if liveConversion && !englishComposition && composition.cursorUTF16 == composition.reading.utf16.count, let first = converted.first {
                 selectedCandidate = 0
                 updateMarkedText?(first.text)

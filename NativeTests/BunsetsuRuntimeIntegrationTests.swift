@@ -69,6 +69,21 @@ final class BunsetsuRuntimeIntegrationTests: XCTestCase {
         XCTAssertFalse(surface.hasComposition)
     }
 
+    func testLivePreferenceChangeKeepsActiveSessionPreview() throws {
+        let surface = makeSurface()
+        var marked = ""
+        surface.updateMarkedText = { marked = $0 }
+        surface.updateMarkedSelection = { text, _ in marked = text }
+        try enter("わたしはとうきょうにいきます", in: surface)
+        try key("gojuon-space", in: surface).sendActions(for: .touchUpInside)
+        ready(surface)
+        let preview = marked
+        XCTAssertEqual(preview, "私は東京に行きます")
+        surface.liveConversion = true
+        XCTAssertEqual(marked, preview, "A live preference change must not replace the active session display with raw reading")
+        surface.invalidateComposition()
+    }
+
     func testPendingBunsetsuResponseCannotReviveInvalidatedComposition() throws {
         let surface = makeSurface()
         var commits: [String] = []
