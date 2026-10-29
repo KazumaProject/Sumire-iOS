@@ -306,4 +306,26 @@ final class LearningStoreTests: XCTestCase {
         sqlite3_finalize(statement)
     }
 
+    func testCandidateReadRejectsInvalidTextAndReadingFromDatabase() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let longReading = String(repeating: "x", count: 8193)
+        let cases: [(String, String, String)] = [
+            ("empty-text", "あ", "'あ',''"),
+            ("empty-reading", "", "'','語'"),
+            ("nul-text", "あ", "'あ','A'||char(0)||'B'"),
+            ("long-text", "あ", "'あ',replace(hex(zeroblob(32769)),'0','x')"),
+            ("long-reading", longReading, "'\(longReading)','語'")
+        ]
+        for (name, reading, values) in cases {
+            let url = directory.appendingPathComponent(name + ".sqlite")
+            let store = try LearningStore(url: url)
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+            XCTAssertEqual(sqlite3_exec(db, "INSERT INTO learned(reading,text,frequency,last_used,byte_count) VALUES(\(values),1,1,1)", nil, nil, nil), SQLITE_OK, name)
+            sqlite3_close(db)
+            XCTAssertThrowsError(try store.candidates(reading: reading), name)
+        }
+    }
+
 }

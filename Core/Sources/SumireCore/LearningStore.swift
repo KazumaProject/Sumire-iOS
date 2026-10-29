@@ -290,6 +290,7 @@ public final class LearningStore {
         guard result == SQLITE_OK else { throw failure() }
     }
     private func decodeEntry(reading: String, text: String, statement: OpaquePointer, countColumn: Int32, metadataColumn: Int32) throws -> Entry {
+        try PersonalWord(word: text, reading: reading).validate()
         let count = sqlite3_column_int64(statement, countColumn)
         let rawScore = sqlite3_column_int64(statement, metadataColumn)
         let rawUsageCount = sqlite3_column_int64(statement, metadataColumn + 3)
