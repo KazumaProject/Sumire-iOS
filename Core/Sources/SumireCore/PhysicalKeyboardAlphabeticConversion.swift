@@ -108,11 +108,12 @@ public enum PhysicalKeyboardAlphabeticConversion {
 
     /// Mirrors Android's reverse map: omit blank outputs and sokuon entries,
     /// select the shortest romaji alias for each kana sequence. Android
-    /// persists these keys through Gson JsonObject and reloads them in natural
-    /// String order, so equal-length aliases use Java's UTF-16 lexical order.
+    /// persists these keys through Gson JsonObject and Room restores their
+    /// insertion order, so equal-length aliases use Android's first map entry.
     private static func kanaAliases(using converter: RomajiConverter) -> [String: String] {
         var aliases: [String: String] = [:]
-        for (romaji, rule) in converter.rules {
+        for romaji in converter.ruleOrder {
+            guard let rule = converter.rules[romaji] else { continue }
             let kana = rule.first
             guard kana != "っ", !kana.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             guard let current = aliases[kana] else {
@@ -122,19 +123,11 @@ public enum PhysicalKeyboardAlphabeticConversion {
 
             let candidateLength = romaji.utf16.count
             let currentLength = current.utf16.count
-            if candidateLength < currentLength
-                || (candidateLength == currentLength && precedesInUTF16(romaji, current)) {
+            if candidateLength < currentLength {
                 aliases[kana] = romaji
             }
         }
         return aliases
-    }
-
-    private static func precedesInUTF16(_ lhs: String, _ rhs: String) -> Bool {
-        for (left, right) in zip(lhs.utf16, rhs.utf16) where left != right {
-            return left < right
-        }
-        return lhs.utf16.count < rhs.utf16.count
     }
 
     private static func romaji(from hiragana: String, using converter: RomajiConverter) -> String {

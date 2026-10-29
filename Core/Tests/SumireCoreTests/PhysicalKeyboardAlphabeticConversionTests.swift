@@ -88,11 +88,19 @@ final class PhysicalKeyboardAlphabeticConversionTests: XCTestCase {
 
     func testAndroidDefaultAliasOrderAndSmallTsuFallback() throws {
         let converter = try converter()
-        // Android persists its map through Gson JsonObject, whose keys are
-        // sorted; the shortest equal-length alias for か is therefore "ca".
+        // Android's Room map preserves insertion order; ca precedes ka in the
+        // pinned default map and hu precedes fu for ふ.
         XCTAssertEqual(
             PhysicalKeyboardAlphabeticConversion.convert("かな", to: .half, using: converter),
             "cana"
+        )
+        XCTAssertEqual(
+            PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .half, using: converter),
+            "hu"
+        )
+        XCTAssertEqual(
+            PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .full, using: converter),
+            "ｈｕ"
         )
         XCTAssertEqual(
             PhysicalKeyboardAlphabeticConversion.convert("っあ", to: .half, using: converter),
