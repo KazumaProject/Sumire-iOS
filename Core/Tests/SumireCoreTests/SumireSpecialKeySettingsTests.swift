@@ -135,17 +135,19 @@ final class SumireSpecialKeySettingsTests: XCTestCase {
 
     func testUnavailableActionsRetainTheirMeaningInsteadOfFallback() throws {
         var settings = SumireSpecialKeySettings()
-        for action in [SumireSpecialKeyAction.selectAll, .cursorUp, .cursorDown, .copy, .cut, .undoDelete, .deleteAfterCursorUntilBoundary] {
+        for action in [SumireSpecialKeyAction.selectAll, .cursorUp, .cursorDown, .copy, .cut] {
             XCTAssertNotNil(action.unavailabilityReason(for: .delete, gesture: .up))
             try settings.set(action, for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese)
             let decoded = try SumireSpecialKeySettings.decode(JSONEncoder().encode(settings))
             XCTAssertEqual(decoded.action(for: .delete, gesture: .up, arrangement: .toggle, mode: .japanese), action)
         }
         XCTAssertNil(SumireSpecialKeyAction.keyboardMenu.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress))
+        XCTAssertNil(SumireSpecialKeyAction.undoDelete.unavailabilityReason(for: .delete, gesture: .down))
         XCTAssertNotNil(SumireSpecialKeyAction.deleteBackward.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress))
         XCTAssertNotNil(SumireSpecialKeyAction.paste.unavailabilityReason(for: .keyboardSwitch, gesture: .right))
         XCTAssertNil(SumireSpecialKeyAction.cursorRight.unavailabilityReason(for: .cursorLeft, gesture: .right))
         XCTAssertNil(SumireSpecialKeyAction.deleteUntilBoundary.unavailabilityReason(for: .delete, gesture: .left))
+        XCTAssertNil(SumireSpecialKeyAction.deleteAfterCursorUntilBoundary.unavailabilityReason(for: .delete, gesture: .up))
     }
     func testSymbolPanelActionIsAvailableAndPersists() throws {
         XCTAssertNil(SumireSpecialKeyAction.openSymbols.unavailabilityReason(for: .delete, gesture: .up))

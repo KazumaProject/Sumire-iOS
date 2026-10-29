@@ -17,13 +17,20 @@ final class CustomInputTextActionTests: XCTestCase {
         var inserted = ""
         var selection = NSRange(location: 0, length: 0)
         var rawParts: [(left: String, tail: String)] = []
-        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false) throws {
+        var deleteForwardCalls = 0
+        init(actions: [(String, String)], direct: Bool = false, romaji: Bool = false, flickToggle: Bool = false,
+             flickMappings: [LayoutJSON]? = nil, flickType: String = "PETAL_FLICK",
+             flickField: String = "flicks") throws {
             defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
             var editor = CustomLayoutEditor(name: "InputText fixture", rows: 1, columns: actions.count)
             editor.setInputMode(romaji: romaji, direct: direct)
             for (index, item) in actions.enumerated() {
                 editor.putKey(id: item.0, label: item.0, action: item.1, special: true,
                               row: 0, column: index * 2, height: 2, width: 2)
+            }
+            if let flickMappings, let keyID = actions.first?.0 {
+                try editor.setKeyType(id: keyID, type: flickType)
+                try editor.setGestureMappings(id: keyID, field: flickField, mappings: flickMappings)
             }
             if flickToggle {
                 try editor.setKeyType(id: "toggle", type: "STANDARD_FLICK")
@@ -39,9 +46,13 @@ final class CustomInputTextActionTests: XCTestCase {
             try KeyboardSelection(ids: [id]).save(defaults: defaults)
             defaults.set(id, forKey: "keyboard.lastUsed")
             surface.settingsDefaults = defaults
-            surface.updateMarkedText = { [weak self] in self?.reading = $0 }
-            surface.updateMarkedSelection = { [weak self] text, selection in self?.reading = text; self?.selection = selection }
+            surface.updateMarkedText = { [weak self] text, _ in self?.reading = text }
+            surface.updateMarkedSelection = { [weak self] text, selection, _ in
+                self?.reading = text
+                self?.selection = selection
+            }
             surface.insert = { [weak self] in self?.inserted += $0 }
+            surface.deleteForward = { [weak self] in self?.deleteForwardCalls += 1 }
             surface.commitMarkedText = { [weak self] text in
                 self?.inserted += text
                 self?.reading = ""
@@ -102,6 +113,149 @@ final class CustomInputTextActionTests: XCTestCase {
             XCTAssertEqual(fixture.reading, "あ👩‍💻aい")
             XCTAssertEqual(fixture.inserted, "")
         }
+    }
+
+    func testCustomDeleteAfterCursorUsesComposingTailAndHostForwardDelete() throws {
+        let fixture = try Fixture(actions: [
+            ("text", "Text:a👩‍💻い"),
+            ("left", "MoveCursorLeft"),
+            ("forward", "DeleteAfterCursor")
+        ])
+        try fixture.tap("text")
+        try fixture.tap("left")
+        try fixture.tap("forward")
+        XCTAssertEqual(fixture.reading, "a👩‍💻")
+        XCTAssertEqual(fixture.deleteForwardCalls, 0)
+
+        let committedTextFixture = try Fixture(actions: [("forward", "DeleteAfterCursor")])
+        try committedTextFixture.tap("forward")
+        XCTAssertEqual(committedTextFixture.deleteForwardCalls, 1)
+    }
+
+    func testCustomDeleteAfterCursorUntilSymbolMatchesComposingCaretRules() throws {
+        let startActions = [
+            ("text", "Text:👩‍💻かな。後"),
+            ("left1", "MoveCursorLeft"),
+            ("left2", "MoveCursorLeft"),
+            ("left3", "MoveCursorLeft"),
+            ("left4", "MoveCursorLeft"),
+            ("left5", "MoveCursorLeft"),
+            ("boundary", "DeleteAfterCursorUntilSymbol")
+        ]
+        let atStart = try Fixture(actions: startActions)
+        try atStart.tap("text")
+        for id in ["left1", "left2", "left3", "left4", "left5"] { try atStart.tap(id) }
+        try atStart.tap("boundary")
+        XCTAssertEqual(atStart.reading, "。後")
+        XCTAssertEqual(atStart.selection, NSRange(location: 0, length: 0))
+
+        let inside = try Fixture(actions: [
+            ("text", "Text:👩‍💻かな。後"),
+            ("left", "MoveCursorLeft"),
+            ("boundary", "DeleteAfterCursorUntilSymbol")
+        ])
+        try inside.tap("text")
+        try inside.tap("left")
+        let originalSelection = inside.selection
+        XCTAssertEqual(originalSelection, NSRange(location: 8, length: 0))
+        try inside.tap("boundary")
+        XCTAssertEqual(inside.reading, "👩‍💻かな。後")
+        XCTAssertEqual(inside.selection, originalSelection)
+    }
+
+    func testCustomDeleteAfterCursorFlickIsTapOnlyWhenHeld() throws {
+        let directional = try Fixture(actions: [("forward", "DoNothing")], flickMappings: [
+            .object(["flickDirection": .string("TAP"), "actionType": .string("DELETE_AFTER_CURSOR")])
+        ])
+        let directionalKey = try XCTUnwrap(directional.find("custom-forward") as? Sumire.MultiStageFlickKey)
+        let directionalCallback = try XCTUnwrap(directionalKey.onCommit)
+        directionalCallback(.init(output: .text(""), isTap: false, wasFlick: false, isLongPress: true,
+                                  direction: .tap, secondDirection: nil, circularSlot: nil))
+        XCTAssertEqual(directional.deleteForwardCalls, 0)
+        directionalCallback(.init(output: .text(""), isTap: true, wasFlick: false, isLongPress: false,
+                                  direction: .tap, secondDirection: nil, circularSlot: nil))
+        XCTAssertEqual(directional.deleteForwardCalls, 1)
+
+        let circular = try Fixture(actions: [("forward", "DoNothing")], flickMappings: [
+            .object(["circularDirection": .string("TAP"), "actionType": .string("DELETE_AFTER_CURSOR")])
+        ], flickType: "CIRCULAR_FLICK", flickField: "circularFlicks")
+        let circularKey = try XCTUnwrap(circular.find("custom-forward") as? Sumire.MultiStageFlickKey)
+        let circularCallback = try XCTUnwrap(circularKey.onCommit)
+        let output = SumireCore.CircularFlickOutput.action("DELETE_AFTER_CURSOR", value: nil, label: "")
+        circularCallback(.init(output: output, isTap: false, wasFlick: false, isLongPress: true,
+                               direction: nil, secondDirection: nil, circularSlot: .tap))
+        XCTAssertEqual(circular.deleteForwardCalls, 0)
+        circularCallback(.init(output: output, isTap: true, wasFlick: false, isLongPress: false,
+                               direction: nil, secondDirection: nil, circularSlot: .tap))
+        XCTAssertEqual(circular.deleteForwardCalls, 1)
+    }
+
+    func testCustomNormalDeleteAfterCursorLongPressConsumesRelease() throws {
+        let fixture = try Fixture(actions: [("forward", "DeleteAfterCursor")])
+        let key = try XCTUnwrap(fixture.find("custom-forward") as? Sumire.RepeatingKey)
+        XCTAssertFalse(key.repeatEnabled ?? true)
+        XCTAssertTrue(key.longPressCancelsTap)
+        let hold = try XCTUnwrap(key.gestureRecognizers?.first)
+        XCTAssertTrue(key.gestureRecognizerShouldBegin(hold))
+        let callback = try XCTUnwrap(key.onCommittedPress)
+        callback(false)
+        XCTAssertEqual(fixture.deleteForwardCalls, 0)
+        callback(true)
+        XCTAssertEqual(fixture.deleteForwardCalls, 1)
+    }
+
+    func testInputHarnessForwardDeleteRemovesNextComposedCharacter() {
+        let text = UITextView()
+        text.text = "a👩‍💻い"
+        text.selectedRange = NSRange(location: 1, length: 0)
+
+        let surface = Sumire.KeyboardSurface()
+        let coordinator = InputHarness.Coordinator()
+        coordinator.textView = text
+        InputHarness.configureForwardDelete(surface: surface, text: text, coordinator: coordinator)
+        surface.deleteForward?()
+
+        XCTAssertEqual(text.text, "aい")
+        XCTAssertEqual(text.selectedRange, NSRange(location: 1, length: 0))
+    }
+
+    func testForwardDeleteUsesUTF16OffsetsAndDeletesComposedCharactersInUITextViewHarness() throws {
+        let nextCharacters = ["日", "か\u{3099}", "🇯🇵", "👍🏽", "👩‍💻"]
+        for nextCharacter in nextCharacters {
+            let plan = ForwardDeletePlanner.plan(
+                selectedText: nil,
+                contextAfterInput: nextCharacter + "z"
+            )
+            XCTAssertEqual(plan, .deleteAfterCursor(characterOffset: nextCharacter.utf16.count), nextCharacter)
+
+            let text = UITextView()
+            text.text = "x" + nextCharacter + "z"
+            text.selectedRange = NSRange(location: 1, length: 0)
+            let start = try XCTUnwrap(text.selectedTextRange?.start)
+            let destination = try XCTUnwrap(text.position(from: start, offset: nextCharacter.utf16.count))
+            XCTAssertEqual(text.offset(from: start, to: destination), nextCharacter.utf16.count)
+
+            InputHarness.deleteForward(in: text)
+
+            XCTAssertEqual(text.text, "xz", nextCharacter)
+            XCTAssertEqual(text.selectedRange, NSRange(location: 1, length: 0), nextCharacter)
+        }
+    }
+
+    func testForwardDeletePrefersSelectionAndDoesNothingWithoutTrailingContext() {
+        XCTAssertEqual(
+            ForwardDeletePlanner.plan(selectedText: "選択", contextAfterInput: "後続"),
+            .deleteSelection
+        )
+        XCTAssertEqual(ForwardDeletePlanner.plan(selectedText: "", contextAfterInput: nil), .noOp)
+        XCTAssertEqual(ForwardDeletePlanner.plan(selectedText: nil, contextAfterInput: ""), .noOp)
+
+        let text = UITextView()
+        text.text = "前選択後"
+        text.selectedRange = NSRange(location: 1, length: ("選択" as NSString).length)
+        InputHarness.deleteForward(in: text)
+        XCTAssertEqual(text.text, "前後")
+        XCTAssertEqual(text.selectedRange, NSRange(location: 1, length: 0))
     }
 
     func testCustomShiftConsumesTextButNotCommandsOrInputTextWithoutRebuilding() throws {
@@ -546,8 +700,12 @@ final class CustomInputTextActionTests: XCTestCase {
         let fixture = try Fixture(actions: [("word", "Text:にほんご"), ("convert", "Convert"),
             ("direct", "SwitchDirectMode"), ("x", "Text:x")])
         let field = UITextView()
-        fixture.surface.updateMarkedSelection = { [weak field] in field?.setMarkedText($0, selectedRange: $1) }
-        fixture.surface.updateMarkedText = { [weak field] in field?.setMarkedText($0, selectedRange: NSRange(location: $0.utf16.count, length: 0)) }
+        fixture.surface.updateMarkedSelection = { [weak field] text, selection, _ in
+            field?.setMarkedText(text, selectedRange: selection)
+        }
+        fixture.surface.updateMarkedText = { [weak field] text, _ in
+            field?.setMarkedText(text, selectedRange: NSRange(location: text.utf16.count, length: 0))
+        }
         fixture.surface.finishMarkedText = { [weak field] in field?.unmarkText() }
         fixture.surface.insert = { [weak field] in field?.insertText($0) }
         try fixture.tap("word")
@@ -660,5 +818,16 @@ final class CustomInputTextActionTests: XCTestCase {
         }
     }
 
+    func testRejectedInputPreflightDoesNotMutateLocalComposition() throws {
+        let fixture = try Fixture(actions: [("a", "Text:あ")])
+        fixture.surface.beforeInput = { false }
+
+        try fixture.tap("a")
+
+        XCTAssertEqual(fixture.reading, "")
+        XCTAssertEqual(fixture.inserted, "")
+        XCTAssertFalse(fixture.surface.hasComposition,
+                       "A touch that discovers a disconnected proxy must not leave an unowned local reading")
+    }
 }
 #endif

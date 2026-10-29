@@ -12,4 +12,15 @@ final class DeletionBoundaryTests: XCTestCase {
         XCTAssertEqual(DeletionBoundary.backwardCount(context: "", symbols: ""), 0)
         XCTAssertEqual(DeletionBoundary.backwardCount(context: String(repeating: "あ", count: 500), symbols: ""), 100)
     }
+
+    func testForwardBoundariesAndUnicode() {
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "単語。後", symbols: DeletionBoundary.defaultSymbols), 2)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "。後", symbols: DeletionBoundary.defaultSymbols), 1)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "/単語", symbols: "/"), 1)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "👩‍💻か\u{3099} 後", symbols: ""), 2)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "\n前", symbols: ""), 1)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "\t前", symbols: ""), 0)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: "", symbols: ""), 0)
+        XCTAssertEqual(DeletionBoundary.forwardCount(context: String(repeating: "あ", count: 500), symbols: ""), 100)
+    }
 }

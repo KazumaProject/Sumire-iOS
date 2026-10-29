@@ -4,20 +4,39 @@ import SumireCore
 /// Shared native surface used in the app's diagnostic harness and extension.
 /// Reading and selection survive layout changes; conversion runs off the main thread.
 final class KeyboardSurface: UIInputView {
+    private struct CompositionDeleteUndoState: Equatable {
+        let reading: String
+        let cursor: Int
+        let generation: UInt64
+        let containsRomaji: Bool
+    }
+    private struct CompositionDeleteUndoEntry {
+        let before: CompositionDeleteUndoState
+        var after: CompositionDeleteUndoState
+    }
+
     var insert: ((String) -> Void)?
     var delete: (() -> Void)?
+    var deleteForward: (() -> Void)?
+    var deleteAfterCursorUntilBoundary: (() -> Void)?
+    var undoDelete: (() -> Bool)?
     var deleteUntilBoundary: (() -> Void)?
+    var canRecordDeletionHistory: (() -> Bool)?
     var nextKeyboard: (() -> Void)?
     private var specialKeySettings = SumireSpecialKeySettings()
     private var katakanaCycle = SumireKatakanaCycle()
+    private var compositionDeleteUndoHistory: [CompositionDeleteUndoEntry] = []
+    private let maximumCompositionDeleteUndoEntries = 64
+    private let maximumCompositionDeleteUndoUTF16Units = 16_384
     var moveCursorRight: (() -> Void)?
     var moveCursorLeft: (() -> Void)?
-    var beforeInput: (() -> Void)?
-    var updateMarkedText: ((String) -> Void)?
-    var updateMarkedSelection: ((String, NSRange) -> Void)?
+    var beforeInput: (() -> Bool)?
+    var updateMarkedText: ((String, UInt64) -> Void)?
+    var updateMarkedSelection: ((String, NSRange, UInt64) -> Void)?
     var commitMarkedText: ((String) -> Void)?
     var commitRawTextAndSpace: ((String, String) -> Void)?
     var finishMarkedText: (() -> Void)?
+    @discardableResult private func prepareInput() -> Bool { beforeInput?() ?? true }
     var liveConversion = false {
         didSet {
             guard oldValue != liveConversion else { return }
@@ -25,7 +44,7 @@ final class KeyboardSurface: UIInputView {
             guard hasComposition else { return }
             if liveConversion && !englishComposition && composition.cursorUTF16 == composition.reading.utf16.count, let first = converted.first {
                 selectedCandidate = 0
-                updateMarkedText?(first.text)
+                updateMarkedText?(first.text, composition.generation)
             } else {
                 selectedCandidate = nil
                 markReading()
@@ -256,6 +275,7 @@ final class KeyboardSurface: UIInputView {
     }
     func showDataNotice(_ text: String) { status.text = text }
     private let converter = ConversionService()
+    private var conversionRequestEpoch: UInt64 = 0
     private var symbolPanel: SymbolKeyboardView?
     private let clipboardHistory = ClipboardHistoryController()
     func configureClipboard(accessAllowed: Bool, allowShared: Bool, localReset: LocalDataReset? = nil) {
@@ -279,7 +299,8 @@ final class KeyboardSurface: UIInputView {
             panel.onClose = { [weak self] in self?.closeSymbolKeyboard() }
             panel.onInsert = { [weak self] value in
                 guard let self else { return }
-                self.beforeInput?(); self.commitComposition(); self.insert?(value)
+                guard self.prepareInput() else { return }
+                self.commitComposition(); self.insert?(value)
             }
             panel.onDelete = { [weak self] in self?.pressed("⌫") }
             clipboardHistory.attach(panel)
@@ -340,7 +361,14 @@ final class KeyboardSurface: UIInputView {
         converter.setLearningPaused(learningPausedForSession)
         return learningPausedForSession
     }
-    private var composition = CompositionState()
+    private let compositionSession: KeyboardCompositionSession
+#if DEBUG
+    var debugCompositionTrace: ((String) -> Void)?
+#endif
+    private var composition: CompositionState {
+        get { compositionSession.composition }
+        set { compositionSession.composition = newValue }
+    }
     private var converted: [ConversionCandidate] = []
     private var presentedCandidates: [ConversionCandidate] = []
     private var bunsetsuActionHandled = false
@@ -400,7 +428,8 @@ final class KeyboardSurface: UIInputView {
     private var customNumberVisible: Bool { customProxyVisible && customPresentation == .number }
     private var displayedInputMode: InputMode { customEnglishVisible ? .english : inputMode }
     private func setCustomEnglishPresentation(_ visible: Bool) {
-        beforeInput?(); tapCycle.reset()
+        guard prepareInput() else { return }
+        tapCycle.reset()
         if !visible { customShift = .off }
         customPresentationOwner = visible ? activeCustomID : nil
         if visible { customPresentation = .english }
@@ -408,7 +437,8 @@ final class KeyboardSurface: UIInputView {
         rebuild()
     }
     private func showCustomNumberPresentation() {
-        beforeInput?(); tapCycle.reset()
+        guard prepareInput() else { return }
+        tapCycle.reset()
         customPresentationOwner = activeCustomID
         customPresentation = .number
         refreshCustomPresentationLanguage()
@@ -515,7 +545,10 @@ final class KeyboardSurface: UIInputView {
         }
         catch { showDataNotice("ローマ字設定: " + error.localizedDescription) }
     }
-    private var containsRomaji = false
+    private var containsRomaji: Bool {
+        get { compositionSession.containsRomaji }
+        set { compositionSession.containsRomaji = newValue }
+    }
     private var shifted = false
     private var qwertyCapsLock = false
     private var qwertyLastShiftTap: TimeInterval = 0
@@ -526,14 +559,91 @@ final class KeyboardSurface: UIInputView {
     private let touchRouter = KeyTouchRouter()
     private var touchFeedback = TouchFeedbackSettings()
     private let stack = UIStackView()
-    private let status = UILabel()
+    private let status: UILabel = {
+        let label = UILabel()
+#if DEBUG
+        label.accessibilityLabel = "sumire-debug-composition-trace=trace-pending"
+#endif
+        return label
+    }()
+#if DEBUG
+    private var debugCompositionTraceValue = "trace-pending"
+    private let lifecycleDiagnosticLabel = UILabel()
+    private let lifecycleSwitchButton = UIButton(type: .system)
+    private let stableFocusFinalizeButton = UIButton(type: .system)
+    private let retainedOwnerFinalizeButton = UIButton(type: .system)
+    /// Debug-only accessibility channel for lifecycle diagnostics. It carries
+    /// fixed event names and booleans, never input text or document identifiers.
+    var lifecycleDiagnostics: String? {
+        didSet { lifecycleDiagnosticLabel.accessibilityLabel = lifecycleDiagnostics }
+    }
+
+    func exposeLifecycleSwitcherForDiagnostics(action: @escaping () -> Void) {
+        lifecycleSwitchButton.translatesAutoresizingMaskIntoConstraints = false
+        lifecycleSwitchButton.alpha = 1
+        lifecycleSwitchButton.accessibilityIdentifier = "sumire-debug-advance-ime"
+        lifecycleSwitchButton.accessibilityLabel = "Debug keyboard lifecycle switch"
+        lifecycleSwitchButton.isUserInteractionEnabled = true
+        lifecycleSwitchButton.setTitle("IME", for: .normal)
+        lifecycleSwitchButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        lifecycleSwitchButton.backgroundColor = .systemOrange
+        lifecycleSwitchButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(lifecycleSwitchButton)
+        NSLayoutConstraint.activate([
+            lifecycleSwitchButton.topAnchor.constraint(equalTo: topAnchor),
+            lifecycleSwitchButton.trailingAnchor.constraint(equalTo: trailingAnchor),
+            lifecycleSwitchButton.widthAnchor.constraint(equalToConstant: 44),
+            lifecycleSwitchButton.heightAnchor.constraint(equalToConstant: 44)
+        ])
+    }
+
+    func exposeStableFocusFinalizationForDiagnostics(action: @escaping () -> Void) {
+        stableFocusFinalizeButton.translatesAutoresizingMaskIntoConstraints = false
+        stableFocusFinalizeButton.accessibilityIdentifier = "sumire-debug-finish-marked-text"
+        stableFocusFinalizeButton.accessibilityLabel = "trace-pending"
+        stableFocusFinalizeButton.isUserInteractionEnabled = true
+        stableFocusFinalizeButton.setTitle("Finish", for: .normal)
+        stableFocusFinalizeButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        stableFocusFinalizeButton.backgroundColor = .systemOrange
+        stableFocusFinalizeButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(stableFocusFinalizeButton)
+        NSLayoutConstraint.activate([
+            stableFocusFinalizeButton.topAnchor.constraint(equalTo: topAnchor),
+            stableFocusFinalizeButton.leadingAnchor.constraint(equalTo: leadingAnchor),
+            stableFocusFinalizeButton.widthAnchor.constraint(equalToConstant: 52),
+            stableFocusFinalizeButton.heightAnchor.constraint(equalToConstant: 32)
+        ])
+    }
+
+    func exposeRetainedOwnerFinalizationForDiagnostics(action: @escaping () -> Void) {
+        retainedOwnerFinalizeButton.translatesAutoresizingMaskIntoConstraints = false
+        retainedOwnerFinalizeButton.accessibilityIdentifier = "sumire-debug-finish-retained-owner-marked-text"
+        retainedOwnerFinalizeButton.accessibilityLabel = "Debug finalize retained owner mark without changing focus"
+        retainedOwnerFinalizeButton.isUserInteractionEnabled = true
+        retainedOwnerFinalizeButton.setTitle("Owner", for: .normal)
+        retainedOwnerFinalizeButton.titleLabel?.font = .systemFont(ofSize: 10, weight: .bold)
+        retainedOwnerFinalizeButton.backgroundColor = .systemOrange
+        retainedOwnerFinalizeButton.addAction(UIAction { _ in action() }, for: .touchUpInside)
+        addSubview(retainedOwnerFinalizeButton)
+        NSLayoutConstraint.activate([
+            retainedOwnerFinalizeButton.topAnchor.constraint(equalTo: topAnchor),
+            retainedOwnerFinalizeButton.leadingAnchor.constraint(equalTo: stableFocusFinalizeButton.trailingAnchor, constant: 4),
+            retainedOwnerFinalizeButton.widthAnchor.constraint(equalToConstant: 64),
+            retainedOwnerFinalizeButton.heightAnchor.constraint(equalToConstant: 32)
+        ])
+    }
+#endif
     private var expandedCandidates: UIView?
     var textMacroContextAllowed = false
     var textMacroSelectionAvailable = false
     var executeTextMacro: ((String, String?) -> Void)?
 
 
-    init(frame: CGRect = .zero) {
+    convenience init(frame: CGRect = .zero) {
+        self.init(frame: frame, session: KeyboardCompositionSession())
+    }
+    init(frame: CGRect, session: KeyboardCompositionSession) {
+        compositionSession = session
         super.init(frame: frame, inputViewStyle: .keyboard)
         NotificationCenter.default.addObserver(self, selector: #selector(purgeConversionCache),
             name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
@@ -545,6 +655,15 @@ final class KeyboardSurface: UIInputView {
         stack.spacing = geometry.rowSpacing
         stack.translatesAutoresizingMaskIntoConstraints = false
         addSubview(stack)
+#if DEBUG
+        lifecycleDiagnosticLabel.frame = CGRect(x: 0, y: 0, width: 1, height: 1)
+        lifecycleDiagnosticLabel.alpha = 1
+        lifecycleDiagnosticLabel.isUserInteractionEnabled = false
+        lifecycleDiagnosticLabel.isAccessibilityElement = true
+        lifecycleDiagnosticLabel.accessibilityIdentifier = "sumire-lifecycle-diagnostic"
+        lifecycleDiagnosticLabel.accessibilityLabel = "diagnostic-pending"
+        addSubview(lifecycleDiagnosticLabel)
+#endif
         stackLeading = stack.leadingAnchor.constraint(equalTo: safeAreaLayoutGuide.leadingAnchor, constant: geometry.horizontalInset)
         stackTrailing = stack.trailingAnchor.constraint(equalTo: safeAreaLayoutGuide.trailingAnchor, constant: -geometry.horizontalInset)
         NSLayoutConstraint.activate([
@@ -558,12 +677,13 @@ final class KeyboardSurface: UIInputView {
         status.heightAnchor.constraint(equalToConstant: 27).isActive = true
         candidateBar.onPasteText = { [weak self] text in
             guard let self else { return }
-            self.beforeInput?()
+            guard self.prepareInput() else { return }
             self.commitComposition()
             self.insert?(text)
         }
         clipboardHistory.onInsertText = { [weak self] text in
-            guard let self else { return }; self.beforeInput?(); self.commitComposition(); self.insert?(text)
+            guard let self, self.prepareInput() else { return }
+            self.commitComposition(); self.insert?(text)
         }
         clipboardHistory.onNotice = { [weak self] text in self?.symbolPanel?.showNotice(text); self?.showDataNotice(text) }
         clipboardHistory.onHistoryEnabledChanged = { [weak self] enabled in self?.candidateBar.captureClipboardHistory = enabled }
@@ -645,6 +765,9 @@ final class KeyboardSurface: UIInputView {
         view.subviews.forEach { configureTouchInput(in: $0) }
     }
     private func rebuild() {
+#if DEBUG
+        defer { updateDebugCompositionTraceAccessibilityLabel() }
+#endif
         var customNotice: String?
         if inputMode == .custom, !customEnglishVisible,
            let layout = customLayouts.first(where: { $0.id == activeCustomID }) {
@@ -765,7 +888,8 @@ final class KeyboardSurface: UIInputView {
                     guard let self else { return }
                     if definition.action == .modifier && !self.hasComposition { self.pressed("🌐") }
                     else if definition.action == .modifier && self.tenKeyMode == .english {
-                        self.beforeInput?(); self.tapCycle.reset()
+                        guard self.prepareInput() else { return }
+                        self.tapCycle.reset()
                         if let last = self.composition.characterBeforeCursor, last.isASCII, last.isLetter {
                             let text = String(last)
                             _ = self.composition.replaceLast(last.isUppercase ? text.lowercased() : text.uppercased())
@@ -773,16 +897,18 @@ final class KeyboardSurface: UIInputView {
                         }
                     }
                     else if definition.id == "tenkey-mode" {
-                        self.beforeInput?(); self.tapCycle.reset()
+                        guard self.prepareInput() else { return }
+                        self.tapCycle.reset()
                         self.tenKeyMode = self.tenKeyMode.next; self.rebuild()
                     }
                     else if definition.id == "tenkey-previous" {
-                        self.beforeInput?(); self.tapCycle.reset()
+                        guard self.prepareInput() else { return }
+                        self.tapCycle.reset()
                         if let last = self.composition.characterBeforeCursor, let previous = self.tenKeyMode.previous(last) {
                             _ = self.composition.replaceLast(String(previous)); self.refreshConversion()
                         }
                     } else if definition.id == "tenkey-right" {
-                        self.beforeInput?(); self.moveCompositionCursor(by: 1)
+                        self.moveCompositionCursor(by: 1)
                     } else if definition.id == "tenkey-symbols" { self.showSymbolKeyboard() }
                     else if definition.action == .changeMode { self.showDataNotice("この操作は移植中です") }
                     else { self.sumireAction(definition.action) }
@@ -809,7 +935,7 @@ final class KeyboardSurface: UIInputView {
         updateSumireKeys()
     }
     private func tenKeyFlick(_ index: Int, direction: FlickDirection) {
-        beforeInput?()
+        guard prepareInput() else { return }
         let outputs = tenKeyMode.keys[index]
         guard outputs.indices.contains(direction.rawValue), !outputs[direction.rawValue].isEmpty else {
             tapCycle.reset(); return
@@ -920,15 +1046,16 @@ final class KeyboardSurface: UIInputView {
                 if definition.action == .nextKeyboard { return }
                 if definition.action == .text { self.pressed(definition.label == "「」" ? "「" : definition.label) }
                 else if definition.id == "gojuon-right" {
-                    self.beforeInput?(); self.moveCompositionCursor(by: 1)
+                    self.moveCompositionCursor(by: 1)
                 } else if definition.id == "gojuon-previous" {
-                    self.beforeInput?()
+                    guard self.prepareInput() else { return }
                     if let last = self.composition.characterBeforeCursor, let previous = GojuonInput.previous(last, mode: self.gojuonMode) {
                         _ = self.composition.replaceLast(String(previous)); self.refreshConversion()
                     }
                 } else if definition.id == "gojuon-symbols" { self.showSymbolKeyboard()
                 } else if definition.id == "gojuon-mode" {
-                    self.beforeInput?(); self.tapCycle.reset()
+                    guard self.prepareInput() else { return }
+                    self.tapCycle.reset()
                     self.gojuonMode = self.gojuonMode.next
                     self.gojuonShift = false; self.gojuonCapsLock = false; self.gojuonFullWidth = false
                     self.gojuonLastShiftTap = 0; self.rebuild()
@@ -941,7 +1068,7 @@ final class KeyboardSurface: UIInputView {
                     else { self.gojuonShift.toggle() }
                     self.gojuonLastShiftTap = now; self.rebuild()
                 } else if definition.id == "gojuon-4-3" && self.gojuonMode == .english {
-                    self.beforeInput?()
+                    guard self.prepareInput() else { return }
                     if let last = self.composition.characterBeforeCursor {
                         let text = String(last), lower = String(last).lowercased()
                         _ = self.composition.replaceLast(text == lower ? text.uppercased() : lower)
@@ -959,7 +1086,8 @@ final class KeyboardSurface: UIInputView {
         stack.addArrangedSubview(grid)
     }
     private func insertGojuon(_ text: String, direction: FlickDirection) {
-        beforeInput?(); tapCycle.reset()
+        guard prepareInput() else { return }
+        tapCycle.reset()
         if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
         containsRomaji = false
         composition.append(text); refreshConversion()
@@ -1073,7 +1201,8 @@ final class KeyboardSurface: UIInputView {
             let output = outputs[direction.rawValue]
             if (direction == .up && up || direction == .down && down) && output.isEmpty { return }
             guard direction != .tap && !output.isEmpty else { self.pressed(outputs[0]); return }
-            self.beforeInput?(); self.tapCycle.reset()
+            guard self.prepareInput() else { return }
+            self.tapCycle.reset()
             if self.displayedInputMode == .english {
                 self.insertEnglish(output)
             } else {
@@ -1206,6 +1335,7 @@ final class KeyboardSurface: UIInputView {
                 repeating.exclusiveTouchAction = needsExclusiveTouch
                 repeating.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 repeating.repeatEnabled = [.command(.delete), .command(.backspace), .command(.cursorLeft), .command(.cursorRight)].contains(normalAction)
+                repeating.longPressCancelsTap = normalAction == .command(.deleteAfterCursor)
                 switch normalAction {
                 case .switchLayout, .command(.changeMode), .command(.switchKana), .command(.switchEnglish), .command(.switchNumber), .command(.switchDirect), .command(.switchRomaji), .command(.moveCustomKeyboardTab): repeating.exclusiveTouchAction = true
                 case .command(.nextKeyboard): repeating.exclusiveTouchAction = true; repeating.blocksSequentialTouches = true
@@ -1214,7 +1344,13 @@ final class KeyboardSurface: UIInputView {
                 repeating.onCommittedPress = { isTap in
                     if isTap {
                         tapController.committedTap(keyIdentity: placement.id, action: normalAction, binding: doubleTap)
-                    } else { tapController.committedGesture(normalAction) }
+                    } else if normalAction == .command(.deleteAfterCursor) {
+                        // The long press is consumed without an action, but it still
+                        // separates any pending double-tap sequence from later taps.
+                        tapController.interrupt()
+                    } else {
+                        tapController.committedGesture(normalAction)
+                    }
                 }
             } else if let flick = key as? MultiStageFlickKey, let runtime {
                 flick.definition = runtime.gesture
@@ -1223,9 +1359,13 @@ final class KeyboardSurface: UIInputView {
                 flick.blocksSequentialTouches = actions.contains(.command(.nextKeyboard))
                 flick.configureGuides(visible: appearance.guidesVisible,
                                       fontSize: appearance.guideFontSize, color: palette.foreground)
-                flick.onCommit = { [weak self] event in
-                    guard let self else { return }
-                    guard let action = Self.customAction(for: event, runtime: runtime, targets: targets) else { return }
+                flick.onCommit = { event in
+                    var suppressesPendingTap = false
+                    guard let action = Self.customAction(for: event, runtime: runtime, targets: targets,
+                                                         suppressesPendingTap: &suppressesPendingTap) else {
+                        if suppressesPendingTap { tapController.interrupt() }
+                        return
+                    }
                     if event.isPureTap {
                         let binding = CustomDoubleTapBinding.effective(definition: definition, normalAction: action, targets: targets)
                         tapController.committedTap(keyIdentity: placement.id, action: action, binding: binding)
@@ -1250,22 +1390,29 @@ final class KeyboardSurface: UIInputView {
 
     private static func customAction(for event: MultiStageFlickKey.CommitEvent,
                                      runtime: CustomMultiStageFlick.RuntimeDefinition,
-                                     targets: CustomLayoutTargets) -> CustomKeyAction? {
+                                     targets: CustomLayoutTargets,
+                                     suppressesPendingTap: inout Bool) -> CustomKeyAction? {
+        func tapOnly(_ action: CustomKeyAction?) -> CustomKeyAction? {
+            guard event.isLongPress, action == .command(.deleteAfterCursor) else { return action }
+            suppressesPendingTap = true
+            return nil
+        }
         if event.circularSlot != nil {
             switch event.output {
             case .text(let text, _): return .text(text)
-            case .action(let type, let value, _): return .flick(type: type, value: value, targets: targets)
+            case .action(let type, let value, _):
+                return tapOnly(.flick(type: type, value: value, targets: targets))
             case .referenceAction(let action, _):
                 // The same pinned action vocabulary is used by built-in reference maps.
                 let type = action["type"]?.string ?? ""
                 let value = action["text"]?.string
-                return .flick(type: type, value: value, targets: targets)
+                return tapOnly(.flick(type: type, value: value, targets: targets))
             case .mapSwitch: return .command(.moveCustomKeyboardTab)
             }
         }
         if let direction = event.direction {
-            if event.isLongPress, let alternate = runtime.longPressActions[direction] { return alternate }
-            if let action = runtime.actions[direction] { return action }
+            if event.isLongPress, let alternate = runtime.longPressActions[direction] { return tapOnly(alternate) }
+            if let action = runtime.actions[direction] { return tapOnly(action) }
         }
         if case .text(let text, _) = event.output, !text.isEmpty { return .text(text) }
         return nil
@@ -1295,7 +1442,8 @@ final class KeyboardSurface: UIInputView {
     }
 
     private func customAction(_ action: CustomKeyAction, layout: ImportedCustomLayout) {
-        beforeInput?(); tapCycle.reset()
+        guard prepareInput() else { return }
+        tapCycle.reset()
         switch action {
         case .unsupported(_, let reason): status.text = reason
         case .switchLayout(let id):
@@ -1319,6 +1467,17 @@ final class KeyboardSurface: UIInputView {
             case .shift: customShift.tapShift(); refreshCustomShiftDisplay()
             case .capsLock: customShift.tapCapsLock(); refreshCustomShiftDisplay()
             case .delete, .backspace: pressed("⌫")
+            case .deleteAfterCursor:
+                if hasComposition {
+                    deleteCompositionForward(count: 1)
+                } else { deleteForward?() }
+            case .deleteAfterCursorUntilBoundary:
+                if hasComposition {
+                    guard composition.cursor == 0 else { return }
+                    deleteCompositionForward(untilBoundarySymbols: deletionBoundarySymbols)
+                } else { deleteAfterCursorUntilBoundary?() }
+            case .undoDelete:
+                executeSpecialAction(.undoDelete, key: .delete)
             case .space, .convert:
                 if customInputMode(for: layout).direct { insertCustomDirect(" ") } else { pressed("空白") }
             case .enter, .newLine, .confirm:
@@ -1520,7 +1679,8 @@ final class KeyboardSurface: UIInputView {
                 key.addAction(UIAction { [weak self] _ in
                     guard let self else { return }
                     if definition.action == .modifier && self.sumireMode == .english {
-                        self.beforeInput?(); self.tapCycle.reset()
+                        guard self.prepareInput() else { return }
+                        self.tapCycle.reset()
                         if let last = self.composition.characterBeforeCursor, last.isASCII, last.isLetter {
                             let text = String(last)
                             _ = self.composition.replaceLast(last.isUppercase ? text.lowercased() : text.uppercased())
@@ -1541,7 +1701,8 @@ final class KeyboardSurface: UIInputView {
         switch output {
         case .text(let text, _):
             guard !text.isEmpty else { tapCycle.reset(); return }
-            beforeInput?(); katakanaCycle.reset()
+            guard prepareInput() else { return }
+            katakanaCycle.reset()
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
             containsRomaji = false
             let cycle = sumireMode.tapCycle(at: index)
@@ -1563,7 +1724,8 @@ final class KeyboardSurface: UIInputView {
     private func dispatchFlickReferenceAction(_ action: LayoutJSON) {
         let type = action["type"]?.string ?? "不明な操作"
         if type == "InputText", let text = action["text"]?.string {
-            beforeInput?(); tapCycle.reset(); katakanaCycle.reset()
+            guard prepareInput() else { return }
+            tapCycle.reset(); katakanaCycle.reset()
             if let marker = SumireFlickMarker(rawValue: text) {
                 if let previous = composition.characterBeforeCursor, let changed = marker.applying(to: previous) {
                     _ = composition.replaceLast(String(changed)); refreshConversion()
@@ -1643,7 +1805,7 @@ final class KeyboardSurface: UIInputView {
     private static let specialGuideDirections: [(FlickDirection, SumireSpecialKeyGesture)] = [
         (.left, .left), (.up, .up), (.right, .right), (.down, .down)]
     private static let specialGuideLabels: [SumireSpecialKeyAction: String] = [
-            .deleteBackward: "削除", .deleteAfterCursorUntilBoundary: "後削除",
+            .deleteBackward: "削除", .deleteAfterCursorUntilBoundary: "後区切",
             .undoDelete: "戻す", .cursorLeft: "←", .cursorRight: "→", .cursorUp: "↑", .cursorDown: "↓",
             .paste: "貼付", .copy: "コピー", .cut: "切取", .selectAll: "全選択", .space: "空白",
             .convert: "変換", .enter: "改行", .confirm: "確定", .nextKeyboard: "次配列",
@@ -1673,14 +1835,14 @@ final class KeyboardSurface: UIInputView {
 
     private func executeSpecialKey(_ key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture,
                                    arrangement: SumireKeyArrangement) {
-        beforeInput?()
+        guard prepareInput() else { return }
         let action = specialKeySettings.action(for: key, gesture: gesture,
             arrangement: arrangement, mode: sumireMode, hasComposition: hasComposition)
         executeSpecialAction(action, key: key, gesture: gesture, prepareInput: false)
     }
     private func executeSpecialAction(_ action: SumireSpecialKeyAction, key: SumireSpecialKeyID = .paste,
                                       gesture: SumireSpecialKeyGesture = .tap, prepareInput: Bool = true) {
-        if prepareInput { beforeInput?() }
+        if prepareInput, !self.prepareInput() { return }
         if let reason = action.unavailabilityReason(for: key, gesture: gesture) {
             showDataNotice(reason); return
         }
@@ -1695,6 +1857,13 @@ final class KeyboardSurface: UIInputView {
                 refreshConversion()
             } else if let deleteUntilBoundary { deleteUntilBoundary() }
             else { showDataNotice("この入力先では区切りまでの削除を実行できません") }
+        case .deleteAfterCursorUntilBoundary:
+            if hasComposition {
+                guard composition.cursor == 0 else { return }
+                deleteCompositionForward(untilBoundarySymbols: deletionBoundarySymbols)
+            } else if let deleteAfterCursorUntilBoundary {
+                deleteAfterCursorUntilBoundary()
+            } else { showDataNotice("この入力先ではカーソル後の区切り削除を実行できません") }
         case .cursorLeft: moveCompositionCursor(by: -1)
         case .cursorRight: moveCompositionCursor(by: 1)
         case .paste:
@@ -1712,7 +1881,7 @@ final class KeyboardSurface: UIInputView {
             composition.select()
             if !converted.isEmpty {
                 selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
-                updateMarkedText?(previewText(converted[selectedCandidate!]))
+                updateMarkedText?(previewText(converted[selectedCandidate!]), composition.generation)
             }
         case .enter: pressed("改行")
         case .confirm: commitComposition()
@@ -1736,7 +1905,12 @@ final class KeyboardSurface: UIInputView {
             // The globe's UIKit menu handles this gesture without invoking a
             // second action or synthesizing private context-menu events.
             break
-        case .deleteAfterCursorUntilBoundary, .undoDelete, .cursorUp, .cursorDown, .copy, .cut, .selectAll:
+        case .undoDelete:
+            guard undoDelete?() == true else {
+                showDataNotice("復元できる削除履歴がありません")
+                return
+            }
+        case .cursorUp, .cursorDown, .copy, .cut, .selectAll:
             // The shared availability table rejects these before any edit.
             break
         }
@@ -1749,7 +1923,7 @@ final class KeyboardSurface: UIInputView {
         rebuild()
     }
     private func sumireAction(_ action: KeyboardLayout.Action) {
-        beforeInput?()
+        guard prepareInput() else { return }
         switch action {
         case .paste:
             // Read only following an explicit tap; iOS controls paste permission.
@@ -1798,7 +1972,7 @@ final class KeyboardSurface: UIInputView {
         keyRows.append(row)
     }
     private func flick(_ values: String, direction: FlickDirection) {
-        beforeInput?()
+        guard prepareInput() else { return }
         if values == "゛" { pressed("゛"); return }
         if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
         containsRomaji = false
@@ -1840,6 +2014,10 @@ final class KeyboardSurface: UIInputView {
         keyRows.append(row)
     }
     func invalidateComposition() {
+#if DEBUG
+        debugCompositionTrace?("surface.invalidate.begin")
+#endif
+        conversionRequestEpoch &+= 1
         customTapController?.cancel()
         closeSymbolKeyboard()
         katakanaCycle.reset()
@@ -1857,7 +2035,44 @@ final class KeyboardSurface: UIInputView {
         englishComposition = false
         updateSumireKeys()
         converter.reset()
+#if DEBUG
+        debugCompositionTrace?("surface.invalidate.end")
+#endif
+        clearCompositionDeletionHistory()
     }
+    func suspendCompositionDisplay() {
+        // A result started for the previous editor must not preview text after
+        // the extension reconnects to a potentially different document.
+        conversionRequestEpoch &+= 1
+        guard hasComposition else { return }
+        selectedCandidate = nil
+        candidateBar.isUpdating = false
+        candidateBar.candidates = []
+        status.text = "Sumire · C++変換"
+    }
+    func restoreCompositionAfterControllerRecreation(reapplyHostMark: Bool = false) {
+        guard hasComposition else { return }
+        // Reapply only when ownership explicitly reports that the host dropped
+        // its mark and the controller validated the original insertion context.
+        refreshConversion(updateHostMarkedText: reapplyHostMark)
+    }
+#if DEBUG
+    private func updateDebugCompositionTraceAccessibilityLabel() {
+        status.accessibilityLabel =
+            "\(status.text ?? "") | sumire-debug-composition-trace=\(debugCompositionTraceValue)"
+    }
+
+    func setDebugCompositionTrace(_ value: String) {
+        // The session keeps up to 96 fixed-name/boolean events. Preserve the
+        // full ring so XCTest can compare a post-focus-switch sequence baseline
+        // without losing early events to accessibility-label truncation.
+        debugCompositionTraceValue = String(value.suffix(32_768))
+        // XCTest already discovers this real, visible status label as a
+        // static-text element. Keep its rendered text/layout unchanged, and
+        // expose the sanitized trace only through DEBUG accessibility metadata.
+        updateDebugCompositionTraceAccessibilityLabel()
+    }
+#endif
     private func closeExpandedCandidates() {
         expandedCandidates?.removeFromSuperview()
         expandedCandidates = nil
@@ -1877,7 +2092,7 @@ final class KeyboardSurface: UIInputView {
                                            hasSelection: textMacroSelectionAvailable)
         panel.onClose = { [weak self] in self?.closeExpandedCandidates() }
         panel.onSelect = { [weak self] id, clipboard in
-            guard let self else { return }
+            guard let self, self.prepareInput() else { return }
             self.closeExpandedCandidates()
             self.executeTextMacro?(id, clipboard)
         }
@@ -1927,15 +2142,88 @@ final class KeyboardSurface: UIInputView {
         expandedCandidates = panel
     }
     private func moveCompositionCursor(by offset: Int) {
+        guard prepareInput() else { return }
         if composition.moveCursor(by: offset) {
             tapCycle.reset()
             refreshConversion()
         } else if offset < 0 { moveCursorLeft?() } else { moveCursorRight?() }
     }
+    private var deletionBoundarySymbols: String {
+        settingsDefaults.string(forKey: DeletionBoundary.settingsKey) ?? DeletionBoundary.defaultSymbols
+    }
+    private func compositionDeleteUndoState() -> CompositionDeleteUndoState {
+        CompositionDeleteUndoState(reading: composition.reading, cursor: composition.cursor,
+                                   generation: composition.generation, containsRomaji: containsRomaji)
+    }
+    private func compositionDeleteUndoCost(_ entry: CompositionDeleteUndoEntry) -> Int {
+        entry.before.reading.utf16.count + entry.after.reading.utf16.count
+    }
+    private func deleteCompositionForward(count: Int? = nil, untilBoundarySymbols: String? = nil) {
+        let before = compositionDeleteUndoState()
+        let removed: String?
+        if let untilBoundarySymbols {
+            removed = composition.deleteForward(untilBoundarySymbols: untilBoundarySymbols)
+        } else {
+            removed = composition.deleteForward(count: count ?? 1)
+        }
+        guard removed != nil else { return }
+
+        tapCycle.reset()
+        refreshConversion()
+        let after = compositionDeleteUndoState()
+        guard canRecordDeletionHistory?() == true else {
+            clearCompositionDeletionHistory()
+            return
+        }
+        if let prior = compositionDeleteUndoHistory.last, prior.after != before {
+            clearCompositionDeletionHistory()
+        }
+        let entry = CompositionDeleteUndoEntry(before: before, after: after)
+        let cost = compositionDeleteUndoCost(entry)
+        guard cost <= maximumCompositionDeleteUndoUTF16Units else {
+            clearCompositionDeletionHistory()
+            return
+        }
+        while !compositionDeleteUndoHistory.isEmpty &&
+                (compositionDeleteUndoHistory.count >= maximumCompositionDeleteUndoEntries ||
+                 compositionDeleteUndoHistory.reduce(0, { $0 + compositionDeleteUndoCost($1) }) + cost >
+                    maximumCompositionDeleteUndoUTF16Units) {
+            compositionDeleteUndoHistory.removeFirst()
+        }
+        compositionDeleteUndoHistory.append(entry)
+    }
+    func clearCompositionDeletionHistory() {
+        compositionDeleteUndoHistory.removeAll(keepingCapacity: true)
+    }
+    func undoCompositionDeletion() -> Bool {
+        guard let entry = compositionDeleteUndoHistory.last else { return false }
+        guard compositionDeleteUndoState() == entry.after else {
+            clearCompositionDeletionHistory()
+            return false
+        }
+        compositionDeleteUndoHistory.removeLast()
+        composition.restore(reading: entry.before.reading, cursor: entry.before.cursor)
+        containsRomaji = entry.before.containsRomaji
+        tapCycle.reset()
+        refreshConversion()
+        let restored = compositionDeleteUndoState()
+        if let priorIndex = compositionDeleteUndoHistory.indices.last {
+            let prior = compositionDeleteUndoHistory[priorIndex].after
+            if prior.reading == entry.before.reading && prior.cursor == entry.before.cursor &&
+                prior.containsRomaji == entry.before.containsRomaji {
+                compositionDeleteUndoHistory[priorIndex].after = restored
+            } else {
+                clearCompositionDeletionHistory()
+            }
+        }
+        return true
+    }
     private func markReading() {
         if let updateMarkedSelection {
-            updateMarkedSelection(composition.reading, NSRange(location: composition.cursorUTF16, length: 0))
-        } else { updateMarkedText?(composition.reading) }
+            updateMarkedSelection(composition.reading,
+                                  NSRange(location: composition.cursorUTF16, length: 0),
+                                  composition.generation)
+        } else { updateMarkedText?(composition.reading, composition.generation) }
     }
     /// Adopt a host caret in the unchanged reading, never in a converted
     /// preview surface or an externally modified marked range.
@@ -1946,7 +2234,7 @@ final class KeyboardSurface: UIInputView {
         if composition.generation != generation { refreshConversion() }
         return true
     }
-    private func refreshConversion() {
+    private func refreshConversion(updateHostMarkedText: Bool = true) {
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
         selectedCandidate = nil
@@ -1960,12 +2248,13 @@ final class KeyboardSurface: UIInputView {
         candidateBar.isUpdating = !reading.isEmpty
         if reading.isEmpty { candidateBar.candidates = [] }
         updateSumireKeys()
-        markReading()
+        if updateHostMarkedText { markReading() }
         status.text = reading.isEmpty ? "Sumire · C++変換" : reading
         guard !reading.isEmpty else { englishComposition = false; converter.reset(); return }
         let generation = composition.generation
         let query = containsRomaji ? (romaji?.flush(reading) ?? reading) : reading
-        requestConversion(query: query, generation: generation)
+        requestConversion(query: query, generation: generation,
+                          updateHostMarkedText: updateHostMarkedText)
     }
     private func startBunsetsuConversion() {
         if containsRomaji, let romaji {
@@ -1986,11 +2275,14 @@ final class KeyboardSurface: UIInputView {
         markReading()
         status.text = reading + " · 文節を探索中"
         let generation = composition.generation
+        conversionRequestEpoch &+= 1
+        let requestEpoch = conversionRequestEpoch
         converter.convert(reading, generation: generation, editStart: 0,
                           omission: omissionSearch, includeBunsetsu: true, bunsetsuSearch: true) { [weak self] response in
             guard let self else { return }
-            self.beforeInput?()
-            guard self.composition.accepts(generation) else { return }
+            guard self.prepareInput() else { return }
+            guard self.conversionRequestEpoch == requestEpoch,
+                  self.composition.accepts(generation) else { return }
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
@@ -2017,14 +2309,18 @@ final class KeyboardSurface: UIInputView {
         bunsetsuActionHandled = true
         requestConversion(query: query, generation: composition.generation, statusNote: statusNote)
     }
-    private func requestConversion(query: String, generation: UInt64, statusNote: String = "") {
+    private func requestConversion(query: String, generation: UInt64, statusNote: String = "",
+                                   updateHostMarkedText: Bool = true) {
         let reading = composition.reading
+        conversionRequestEpoch &+= 1
+        let requestEpoch = conversionRequestEpoch
         converter.convert(query, generation: generation, editStart: 0,
                           omission: englishComposition ? false : omissionSearch,
                           english: englishComposition) { [weak self] response in
             guard let self else { return }
-            self.beforeInput?()
-            guard self.composition.accepts(generation) else { return }
+            guard self.prepareInput() else { return }
+            guard self.conversionRequestEpoch == requestEpoch,
+                  self.composition.accepts(generation) else { return }
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
@@ -2047,7 +2343,9 @@ final class KeyboardSurface: UIInputView {
                 self.candidateBar.isUpdating = false
                 if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
-                    if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
+                    if updateHostMarkedText, let first = result.candidates.first {
+                        self.updateMarkedText?(self.previewText(first), generation)
+                    }
                 }
                 self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "") + statusNote
             case .failure(let error):
@@ -2071,7 +2369,7 @@ final class KeyboardSurface: UIInputView {
         return candidate.text + preview.reading
     }
     private func chooseCandidate(_ index: Int) {
-        beforeInput?()
+        guard prepareInput() else { return }
         guard let generation = resultGeneration, composition.accepts(generation),
               presentedCandidates.indices.contains(index) else { return }
         if let macroID = presentedCandidates[index].textMacroID {
@@ -2106,6 +2404,7 @@ final class KeyboardSurface: UIInputView {
     }
 
     private func commitComposition() {
+        guard prepareInput() else { return }
         if selectedCandidate == nil, containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
         }
@@ -2166,7 +2465,8 @@ final class KeyboardSurface: UIInputView {
         onSettingsWritten?(["keyboard.lastUsed"])
     }
     private func selectKeyboard(_ mode: InputMode, customID: String?) {
-        beforeInput?(); tapCycle.reset()
+        guard prepareInput() else { return }
+        tapCycle.reset()
         let previousEnglishComposition = englishComposition
         customShift = .off
         customPresentationOwner = nil
@@ -2193,7 +2493,8 @@ final class KeyboardSurface: UIInputView {
                 self?.selectKeyboard(choice.mode, customID: choice.customID)
             }
         } + [UIAction(title: "次のシステムキーボード") { [weak self] _ in
-            self?.commitComposition(); self?.nextKeyboard?()
+            guard let self, self.prepareInput() else { return }
+            self.commitComposition(); self.nextKeyboard?()
         }])
         key.showsMenuAsPrimaryAction = false
         guard cycleOnTap else { return }
@@ -2210,8 +2511,8 @@ final class KeyboardSurface: UIInputView {
         selectKeyboard(next.mode, customID: next.customID)
     }
     private func pressed(_ value: String) {
+        guard prepareInput() else { return }
         customTapController?.interrupt()
-        beforeInput?()
         katakanaCycle.reset()
         tapCycle.reset()
         switch value {
@@ -2255,7 +2556,7 @@ final class KeyboardSurface: UIInputView {
                 composition.select()
                 if !converted.isEmpty {
                     selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
-                    updateMarkedText?(previewText(converted[selectedCandidate!]))
+                    updateMarkedText?(previewText(converted[selectedCandidate!]), composition.generation)
                 }
             }
         case "改行":

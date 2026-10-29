@@ -70,6 +70,40 @@ public struct CompositionState {
         phase = reading.isEmpty ? .idle : .editing
         return true
     }
+    /// Delete one extended grapheme after the composing caret.
+    @discardableResult public mutating func deleteForward() -> Bool {
+        deleteForward(count: 1) != nil
+    }
+    /// Delete complete extended graphemes after the composing caret and return
+    /// the removed text. Callers can retain it only in bounded, in-memory undo.
+    public mutating func deleteForward(count: Int) -> String? {
+        guard count > 0, cursor < reading.count, count <= reading.count - cursor else { return nil }
+        let start = reading.index(reading.startIndex, offsetBy: cursor)
+        let end = reading.index(start, offsetBy: count)
+        let removed = String(reading[start..<end])
+        reading.removeSubrange(start..<end)
+        generation += 1
+        phase = reading.isEmpty ? .idle : .editing
+        return removed
+    }
+    /// Delete forward to the next configured boundary, using the same bounded
+    /// grapheme-aware policy as committed-text deletion.
+    public mutating func deleteForward(untilBoundarySymbols symbols: String) -> String? {
+        guard cursor < reading.count else { return nil }
+        let start = reading.index(reading.startIndex, offsetBy: cursor)
+        let suffix = String(reading[start...])
+        let count = DeletionBoundary.forwardCount(context: suffix, symbols: symbols)
+        return deleteForward(count: count)
+    }
+    /// Restore a local undo snapshot while keeping generation monotonic so any
+    /// asynchronous conversion result for the deleted version is rejected.
+    public mutating func restore(reading: String, cursor: Int) {
+        guard cursor >= 0, cursor <= reading.count else { return }
+        self.reading = reading
+        self.cursor = cursor
+        generation += 1
+        phase = reading.isEmpty ? .idle : .editing
+    }
     /// Cursor keys edit inside marked text; they do not commit the composition.
     @discardableResult public mutating func moveCursor(by offset: Int) -> Bool {
         guard !reading.isEmpty else { return false }

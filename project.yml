@@ -137,6 +137,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.externalinputhost
         INFOPLIST_KEY_CFBundleDisplayName: Sumire Input Host
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
@@ -179,7 +180,8 @@ schemes:
         SumireExternalInputHost: all
         SumireExternalInputTests: [test]
     test:
+      config: Debug
       environmentVariables:
-        SUMIRE_REQUIRE_EXTENSION: "$(SUMIRE_REQUIRE_EXTENSION)"
+        SUMIRE_REQUIRE_EXTENSION: "1"
       targets:
         - SumireExternalInputTests
