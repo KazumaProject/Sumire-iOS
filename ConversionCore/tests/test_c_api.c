@@ -463,6 +463,129 @@ static void test_release_categories(const char *directory) {
   CHECK(sumire_engine_open_with_category_ids(NULL, NULL, 0, 0, &engine, error, sizeof error) < 0);
   CHECK(sumire_engine_open_with_category_ids(directory, NULL, 0, 0, NULL, error, sizeof error) < 0);
 }
+static size_t metadata_candidate(sumire_result *result, const char *text) {
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate c;
+    CHECK(sumire_result_candidate(result, i, &c) == 0);
+    if (c.text.size == strlen(text) && !memcmp(c.text.data, text, c.text.size)) return i;
+  }
+  return (size_t)-1;
+}
+static void test_learning_metadata_overlay(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  sumire_result *owned = NULL, *result = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory, 0, 1, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_personal_entry personal = {{"あいあ", strlen("あいあ")}, {"PERSONAL", 8}, 1, -1000, 0};
+  CHECK(sumire_session_set_personal(session, &personal, 1, error, sizeof error) == 0);
+  char reading[] = "あいあ", text[] = "META";
+  sumire_learning_entry entry = {{reading, strlen(reading)}, {text, 4}, 1, 2, -50000};
+  CHECK(sumire_session_set_learning_entries(session, &entry, 1, error, sizeof error) == 0);
+  memset(reading, 'x', strlen(reading)); memset(text, 'x', 4); // Setter owns both strings.
+  sumire_request request = {1, "あいあ", strlen("あいあ"), 0, 100, 200000, 0};
+  CHECK(sumire_session_update(session, &request, &owned, error, sizeof error) == 0);
+  size_t meta = metadata_candidate(owned, "META"); CHECK(meta != (size_t)-1);
+  sumire_candidate c; sumire_segment segment;
+  CHECK(sumire_result_candidate(owned, meta, &c) == 0 && c.length_utf16 == 3 && c.segment_count == 1);
+  uint16_t left = 99, right = 99;
+  CHECK(sumire_result_segment_context_ids(owned, meta, 0, &left, &right) == 0 && left == 1 && right == 2);
+  sumire_learning_entry invalid = {{"あいあ", strlen("あいあ")}, {"BAD", 3}, 1851, 2, 100};
+  CHECK(sumire_session_set_learning_entries(session, &invalid, 1, error, sizeof error) < 0);
+  invalid.left_id = 1; invalid.right_id = 3;
+  CHECK(sumire_session_set_learning_entries(session, &invalid, 1, error, sizeof error) < 0);
+  CHECK(sumire_session_set_learning_entries(session, &invalid, 10001, error, sizeof error) < 0);
+  CHECK(sumire_session_set_learning_entries(session, NULL, 1, error, sizeof error) < 0);
+  invalid.left_id = 1; invalid.right_id = 2;
+  invalid.reading = (sumire_string){"\xff", 1};
+  CHECK(sumire_session_set_learning_entries(session, &invalid, 1, error, sizeof error) < 0);
+  CHECK(sumire_session_commit(session, 1, c.candidate_id, error, sizeof error) == 0);
+
+  sumire_learning_entry ranked[] = {
+    {{"あいあ", strlen("あいあ")}, {"HIGH", 4}, 1, 2, 8000},
+    {{"あいあ", strlen("あいあ")}, {"LOW", 3}, 1, 2, 100}
+  };
+  CHECK(sumire_session_set_learning_entries(session, ranked, 2, error, sizeof error) == 0);
+  request.generation = 2;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  size_t low = metadata_candidate(result, "LOW"), high = metadata_candidate(result, "HIGH");
+  CHECK(low != (size_t)-1 && high != (size_t)-1 && low < high);
+  sumire_candidate low_candidate, high_candidate;
+  CHECK(sumire_result_candidate(result, low, &low_candidate) == 0);
+  CHECK(sumire_result_candidate(result, high, &high_candidate) == 0);
+  CHECK(high_candidate.score - low_candidate.score == 7900);
+  CHECK(sumire_session_set_learning_entries(session, NULL, 0, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 2, low_candidate.candidate_id, error, sizeof error) < 0);
+  sumire_result_destroy(result); result = NULL;
+
+  sumire_learning_entry middle = {{"😀い", strlen("😀い")}, {"顔伊", strlen("顔伊")}, 1, 2, -50000};
+  CHECK(sumire_session_set_learning_entries(session, &middle, 1, error, sizeof error) == 0);
+  request = (sumire_request){3, "あ😀いあ", strlen("あ😀いあ"), 0, 100, 200000, 0};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    CHECK(sumire_result_candidate(result, i, &c) == 0);
+    for (size_t j = 0; j < c.segment_count; ++j) {
+      CHECK(sumire_result_segment(result, i, j, &segment) == 0);
+      if (segment.dictionary.size == 8 && !memcmp(segment.dictionary.data, "learning", 8)) {
+        CHECK(segment.start_utf16 == 1 && segment.length_utf16 == 3);
+        CHECK(sumire_result_segment_context_ids(result, i, j, &left, &right) == 0 && left == 1 && right == 2);
+        found = 1;
+      }
+    }
+  }
+  CHECK(found);
+  left = 77; right = 88;
+  CHECK(sumire_result_segment_context_ids(NULL, 0, 0, &left, &right) < 0 && left == 77 && right == 88);
+  CHECK(sumire_result_segment_context_ids(result, sumire_result_count(result), 0, &left, &right) < 0 && left == 77 && right == 88);
+  CHECK(sumire_result_segment_context_ids(result, 0, 999, &left, &right) < 0 && left == 77 && right == 88);
+  CHECK(sumire_result_segment_context_ids(result, 0, 0, NULL, &right) < 0);
+  sumire_result_destroy(result); result = NULL;
+
+  sumire_learning_entry many[101];
+  for (size_t i = 0; i < 101; ++i) many[i] = middle;
+  CHECK(sumire_session_set_learning_entries(session, many, 101, error, sizeof error) == 0);
+
+  // The old setter still replaces only learned rows, with exact-input matching.
+  sumire_personal_entry legacy = {{"あい", strlen("あい")}, {"LEGACY", 6}, 0, -90000, 2};
+  CHECK(sumire_session_set_learning(session, &legacy, 1, error, sizeof error) == 0);
+  request = (sumire_request){4, "あいあ", strlen("あいあ"), 0, 100, 200000, 0};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(metadata_candidate(result, "LEGACY") == (size_t)-1);
+  CHECK(metadata_candidate(result, "PERSONAL") != (size_t)-1);
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    CHECK(sumire_result_candidate(result, i, &c) == 0);
+    for (size_t j = 0; j < c.segment_count; ++j) {
+      CHECK(sumire_result_segment(result, i, j, &segment) == 0);
+      CHECK(segment.dictionary.size != 8 || memcmp(segment.dictionary.data, "learning", 8));
+    }
+  }
+  sumire_result_destroy(result); result = NULL;
+  request = (sumire_request){5, "あい", strlen("あい"), 0, 100, 200000, 0};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(metadata_candidate(result, "LEGACY") != (size_t)-1);
+  CHECK(sumire_session_set_learning(session, &legacy, 101, error, sizeof error) < 0);
+  sumire_result_destroy(result); result = NULL;
+  sumire_learning_entry english = {{"hello", 5}, {"SavedEnglish", 12}, 1, 2, 100};
+  CHECK(sumire_session_set_learning_entries(session, &english, 1, error, sizeof error) == 0);
+  request = (sumire_request){6, "hel", 3, 0, 100, 200000, 2};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(metadata_candidate(result, "SavedEnglish") == (size_t)-1);
+  sumire_result_destroy(result); result = NULL;
+  request = (sumire_request){7, "hello", 5, 0, 100, 200000, 2};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  size_t english_index = metadata_candidate(result, "SavedEnglish"); CHECK(english_index != (size_t)-1);
+  CHECK(sumire_result_segment_context_ids(result, english_index, 0, &left, &right) == 0 && left == 1 && right == 2);
+  CHECK(sumire_session_set_learning_entries(session, NULL, 0, error, sizeof error) == 0);
+  sumire_result_destroy(result);
+  sumire_session_destroy(session); sumire_engine_close(engine);
+  // The original result owns text and endpoint metadata after every replacement and close.
+  CHECK(sumire_result_candidate(owned, meta, &c) == 0 && c.text.size == 4 && !memcmp(c.text.data, "META", 4));
+  CHECK(sumire_result_segment_context_ids(owned, meta, 0, &left, &right) == 0 && left == 1 && right == 2);
+  sumire_result_destroy(owned);
+}
+
 int main(int argc, char **argv) {
   test_bunsetsu_metadata_invalid_arguments();
   if (argc == 3 && strcmp(argv[2], "--release-categories") == 0) {
@@ -477,6 +600,7 @@ int main(int argc, char **argv) {
     return 0;
   }
   CHECK(argc == 2);
+  test_learning_metadata_overlay(argv[1]);
   test_edit_reuse(argv[1]);
   test_bunsetsu_snapshot_metadata(argv[1]);
   test_candidate_origin_flags(argv[1]);

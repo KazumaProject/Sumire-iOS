@@ -574,7 +574,9 @@ Result Engine::predict_english(const std::string &input, size_t count, bool case
       if (existing == r.candidates.end() && r.candidates.size() == count && r.candidates.back().score <= word.score) continue;
       std::erase_if(r.candidates, [&](const auto &candidate) { return candidate.text == word.text; });
       const auto source = word.learned ? "learning" : word.exact_only ? "template" : "user";
-      r.candidates.push_back({word.text, word.score, {{word.text, source, 0, uint32_t(inputLength)}}});
+      r.candidates.push_back({word.text, word.score, {{word.text, source, 0, uint32_t(inputLength),
+          word.learned ? word.left_context_id : word.context_id,
+          word.learned ? word.right_context_id : word.context_id}}});
       std::stable_sort(r.candidates.begin(), r.candidates.end(),
           [](const auto &left, const auto &right) { return left.score < right.score; });
       if (r.candidates.size() > count) r.candidates.resize(count);
@@ -590,7 +592,8 @@ PersonalDictionary::PersonalDictionary(std::vector<PersonalEntry> source,
   require(source.size() <= 100000, "too many personal entries");
   size_t bytes = 0;
   for (auto &entry : source) {
-    require(entry.context_id < contexts,
+    require(entry.context_id < contexts && entry.left_context_id < contexts &&
+                entry.right_context_id < contexts,
             "personal context ID outside connection matrix");
     require(!entry.reading.empty() && !entry.text.empty(),
             "empty personal reading or text");
@@ -618,6 +621,7 @@ bool PersonalDictionary::equivalent(const PersonalDictionary &other) const {
   for (size_t i = 0; i < entries.size(); ++i) {
     const auto &a = entries[i].entry, &b = other.entries[i].entry;
     if (a.reading != b.reading || a.text != b.text || a.context_id != b.context_id ||
+        a.left_context_id != b.left_context_id || a.right_context_id != b.right_context_id ||
         a.score != b.score || a.exact_only != b.exact_only || a.learned != b.learned) return false;
   }
   return true;
@@ -916,11 +920,14 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           if (entry.exact_only && (i != 0 || j + 1 != reading.size()))
             continue;
           foundInAnyDictionary = true;
-          uint16_t context = entry.exact_only ? 0 : entry.context_id;
+          const uint16_t leftContext = entry.exact_only ? 0 :
+              (entry.learned ? entry.left_context_id : entry.context_id);
+          const uint16_t rightContext = entry.exact_only ? 0 :
+              (entry.learned ? entry.right_context_id : entry.context_id);
           int64_t cost = entry.score;
           if (entry.exact_only)
             cost -= 2LL * conn.cost(0, 0);
-          Node node{i, j + 1, nullptr, 0, context, context, cost};
+          Node node{i, j + 1, nullptr, 0, leftContext, rightContext, cost};
           node.personal = &entry;
           add(node);
         }
@@ -1123,7 +1130,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
              n.personal ? (n.personal->learned ? "learning" : (n.personal->exact_only ? "template" : "user"))
              : n.dict   ? n.dict->name
                         : "unknown",
-             uint32_t(n.start), uint32_t(n.end - n.start)});
+             uint32_t(n.start), uint32_t(n.end - n.start), n.left, n.right});
         if (bunsetsu_search && impl->system_ngram)
           ngramSurfaces.push_back(std::move(s));
         if (n.dict && n.dict != impl->dictionaries.front().get() &&
@@ -1248,7 +1255,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       // as unsplit, even when an existing lower-cost path remains selected.
       setSplitPattern(exact.text, {}, true);
       exact.score = conn.cost(0, node.left) + search_cost(node) + conn.cost(node.right, 0);
-      exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size())});
+      exact.segments.push_back({exact.text, node.dict->name, 0, uint32_t(reading.size()), node.left, node.right});
       exact.standalone_unigram_matched = impl->standalone && impl->standalone->contains(input) && literal(node);
       if (bunsetsu_search && impl->system_ngram) {
         const std::string surface = exact.text;
