@@ -30,30 +30,11 @@ struct SpecialKeySettingsView: View {
                 }.disabled(!loaded)
                 Section("ジェスチャーごとの動作") {
                     ForEach(SumireSpecialKeyGesture.allCases, id: \.rawValue) { gesture in
-                        Menu {
-                            Button("標準の動作") { setAction(nil, gesture: gesture) }
-                            ForEach(SumireSpecialKeyAction.allCases, id: \.rawValue) { action in
-                                Button(action.title + (action.unavailabilityReason(for: selectedKey, gesture: gesture) == nil ? "" : "（iOS で未対応）")) {
-                                    setAction(action, gesture: gesture)
-                                }
-                                    .disabled(action.unavailabilityReason(for: selectedKey, gesture: gesture) != nil)
-                            }
-                        } label: {
-                            LabeledContent(gesture.title, value: settings.assignedAction(for: selectedKey, gesture: gesture,
-                                arrangement: arrangement, mode: mode)?.title ?? "標準の動作")
-                        }.accessibilityIdentifier("special-key-gesture-" + gesture.rawValue)
-                        let normal = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
-                        let composing = SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode, hasComposition: true)
-                        Text(gesture == .longPress && selectedKey != .keyboardSwitch ? "標準：タップが削除・カーソル操作なら繰り返し、それ以外は何もしない" : normal == composing ? "標準：\(normal.title)" : "標準：未入力時は\(normal.title)、編集中は\(composing.title)")
-                            .font(.caption).foregroundStyle(.secondary)
-                        let selected = settings.action(for: selectedKey, gesture: gesture, arrangement: arrangement, mode: mode)
-                        if let reason = selected.unavailabilityReason(for: selectedKey, gesture: gesture) {
-                            Text(reason).font(.caption).foregroundStyle(.secondary)
-                        }
+                        gestureRow(for: gesture)
                     }
                 }.disabled(!loaded)
                 Section {
-                    Text("配置・入力モード・キーごとに保存します。「何もしない」でその操作を無効にできます。長押しの標準動作は、削除とカーソルの繰り返し、またはキーボード選択メニューです。")
+                    Text("配置・入力モード・キーごとに保存します。「何もしない」でその操作を無効にできます。長押しでは削除・カーソル操作の繰り返し、空白キーでのカーソル移動、キーボード選択メニュー、日本語入力中のひらがな／全角カタカナ切り替え、文節変換中の区切り切り替えを利用できます。")
                         .font(.footnote).foregroundStyle(.secondary)
                     Button("このキーを標準に戻す") {
                         var next = settings
@@ -79,12 +60,72 @@ struct SpecialKeySettingsView: View {
             .accessibilityIdentifier("special-key-settings")
         }
     }
+    @ViewBuilder
+    private func gestureRow(for gesture: SumireSpecialKeyGesture) -> some View {
+        Menu {
+            Button("標準の動作") { setAction(nil, gesture: gesture) }
+            ForEach(SumireSpecialKeyAction.allCases, id: \.rawValue) { action in
+                actionMenuButton(action, gesture: gesture)
+            }
+        } label: {
+            LabeledContent(gesture.title, value: selectedActionTitle(for: gesture))
+        }.accessibilityIdentifier("special-key-gesture-" + gesture.rawValue)
+        Text(defaultActionSummary(for: gesture))
+            .font(.caption).foregroundStyle(.secondary)
+        if let reason = selectedActionUnavailableReason(for: gesture) {
+            Text(reason).font(.caption).foregroundStyle(.secondary)
+        }
+    }
+    private func actionMenuButton(_ action: SumireSpecialKeyAction,
+                                  gesture: SumireSpecialKeyGesture) -> some View {
+        let unavailable = action.unavailabilityReason(for: selectedKey, gesture: gesture, mode: mode) != nil
+        return Button(action.title + (unavailable ? "（iOS で未対応）" : "")) {
+            setAction(action, gesture: gesture)
+        }.disabled(unavailable)
+    }
+    private func selectedActionTitle(for gesture: SumireSpecialKeyGesture) -> String {
+        settings.assignedAction(for: selectedKey, gesture: gesture,
+            arrangement: arrangement, mode: mode)?.title ?? "標準の動作"
+    }
+    private func defaultActionSummary(for gesture: SumireSpecialKeyGesture) -> String {
+        let normal = standardAction(for: gesture, hasComposition: false)
+        let composing = standardAction(for: gesture, hasComposition: true)
+        if gesture == .longPress && selectedKey == .spaceConvert && mode == .japanese
+            && settings.assignedAction(for: selectedKey, gesture: .tap,
+                arrangement: arrangement, mode: mode) == nil {
+            return "標準：未入力中は長押ししながら左右に動かしてカーソル移動、編集中はひらがな／全角カタカナ切替、文節変換中は区切り切替"
+        }
+        if gesture == .longPress && selectedKey != .keyboardSwitch {
+            return normal == composing ? "標準：\(normal.title)" : "標準：未入力時は\(normal.title)、編集中は\(composing.title)"
+        }
+        return normal == composing ? "標準：\(normal.title)" : "標準：未入力時は\(normal.title)、編集中は\(composing.title)"
+    }
+    private func standardAction(for gesture: SumireSpecialKeyGesture,
+                                hasComposition: Bool) -> SumireSpecialKeyAction {
+        guard gesture == .longPress, selectedKey != .keyboardSwitch else {
+            return SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: gesture,
+                arrangement: arrangement, mode: mode, hasComposition: hasComposition)
+        }
+        let assignedTap = settings.assignedAction(for: selectedKey, gesture: .tap,
+            arrangement: arrangement, mode: mode)
+        let tap = assignedTap ?? SumireSpecialKeySettings.defaultAction(for: selectedKey, gesture: .tap,
+            arrangement: arrangement, mode: mode, hasComposition: hasComposition)
+        if selectedKey == .spaceConvert && mode == .japanese && assignedTap == nil {
+            return hasComposition ? .cycleBunsetsuSplitPattern : .cursorMoveMode
+        }
+        return tap.isRepeatable ? tap : .doNothing
+    }
+    private func selectedActionUnavailableReason(for gesture: SumireSpecialKeyGesture) -> String? {
+        let selected = settings.action(for: selectedKey, gesture: gesture,
+            arrangement: arrangement, mode: mode)
+        return selected.unavailabilityReason(for: selectedKey, gesture: gesture, mode: mode)
+    }
     private var keys: [SumireSpecialKeyID] { SumireSpecialKeySettings.keys(arrangement: arrangement, mode: mode) }
     private func ensureSelectedKey() {
         if !keys.contains(selectedKey), let first = keys.first { selectedKey = first }
     }
     private func setAction(_ value: SumireSpecialKeyAction?, gesture: SumireSpecialKeyGesture) {
-        if let reason = value?.unavailabilityReason(for: selectedKey, gesture: gesture) {
+        if let reason = value?.unavailabilityReason(for: selectedKey, gesture: gesture, mode: mode) {
             notice = reason; return
         }
         do {

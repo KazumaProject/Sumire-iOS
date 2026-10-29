@@ -14,6 +14,12 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     var action: ((SumireSpecialKeyGesture) -> Void)?
     var repeats: ((SumireSpecialKeyGesture) -> Bool)?
     var longPressEnabled: (() -> Bool)?
+    /// Opts this key into horizontal dragging after its long-press action starts.
+    /// Movement before the hold threshold keeps the hold alive but does not move
+    /// the text cursor.
+    var longPressDragEnabled: (() -> Bool)?
+    var longPressDrag: ((CGFloat) -> Void)?
+    var longPressDragEnded: (() -> Void)?
     private var guideLabels: [FlickDirection: UILabel] = [:]
     private var guideTitles: [FlickDirection: String] = [:]
     private var originalTitleFont: UIFont?
@@ -127,12 +133,18 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     private var origin = CGPoint.zero
     private var direction = FlickDirection.tap
     private var emitted = false
+    private var longPressDragConfigured = false
+    private var trackingLongPressDrag = false
+    private var lastDragX: CGFloat?
     private var timer: Timer?
     override func touchesBegan(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard isEnabled, touch == nil, let first = touches.first else { return }
         let policy = touchPolicy?() ?? (exclusiveTouchAction, blocksSequentialTouches)
         guard touchRouter?.begin(self, exclusive: policy.0, blocksSequentialTouches: policy.1) != false else { return }
         touch = first; origin = first.location(in: window)
+        longPressDragConfigured = longPressDragEnabled?() == true && longPressDrag != nil
+        trackingLongPressDrag = false
+        lastDragX = origin.x
         direction = .tap; emitted = false; isHighlighted = true
         scheduleInitialHold()
     }
@@ -140,6 +152,18 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
         guard let touch, touches.contains(touch) else { return }
         let point = touch.location(in: window)
         let next = FlickDirection.resolve(dx: point.x - origin.x, dy: point.y - origin.y, shape: .rectangular)
+        if longPressDragConfigured {
+            let previousX = lastDragX ?? point.x
+            lastDragX = point.x
+            if trackingLongPressDrag {
+                longPressDrag?(point.x - previousX)
+                return
+            }
+            // Keep the central hold during small drift, while preserving an
+            // ordinary directional flick started before the hold threshold.
+            if next == .tap { return }
+            longPressDragConfigured = false
+        }
         guard next != direction else { return }
         direction = next; emitted = false
         scheduleInitialHold()
@@ -168,6 +192,12 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
             guard let self, self.touch != nil, self.window != nil, self.isEnabled else { return }
             self.emitted = true
             self.action?(selected)
+            if selected == .longPress && self.longPressDragConfigured {
+                self.trackingLongPressDrag = true
+                if let touch = self.touch, let window = self.window {
+                    self.lastDragX = touch.location(in: window).x
+                }
+            }
             if self.touch != nil && self.window != nil && self.repeats?(selected) == true {
                 self.schedule(selected, after: 0.07)
             }
@@ -196,6 +226,10 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
         resetActiveInput()
     }
     private func resetActiveInput() {
+        if trackingLongPressDrag { longPressDragEnded?() }
+        trackingLongPressDrag = false
+        longPressDragConfigured = false
+        lastDragX = nil
         timer?.invalidate(); timer = nil; touch = nil; isHighlighted = false
     }
     override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { cancel() } }
