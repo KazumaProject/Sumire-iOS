@@ -258,7 +258,7 @@ public struct BunsetsuSegmentCommitPlan: Equatable {
 
     public var learningFragment: BunsetsuLearningFragment {
         BunsetsuLearningFragment(
-            reading: selectedCandidate.reference.learnedPredictionReading ?? committedReading,
+            reading: committedReading,
             output: text,
             candidateScore: Int32(clamping: selectedCandidate.score),
             candidateIndex: Int32(clamping: selectedCandidate.candidateIndex),
@@ -1011,7 +1011,7 @@ public struct BunsetsuConversionSession: Equatable {
         segment: BunsetsuSessionSegment
     ) -> BunsetsuLearningFragment {
         BunsetsuLearningFragment(
-            reading: candidate.reference.learnedPredictionReading ?? segment.reading,
+            reading: segment.reading,
             output: segment.displayText,
             candidateScore: Int32(clamping: candidate.score),
             candidateIndex: Int32(clamping: candidate.candidateIndex),

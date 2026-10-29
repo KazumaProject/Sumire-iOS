@@ -485,7 +485,7 @@ final class BunsetsuConversionSessionTests: XCTestCase {
         XCTAssertFalse(responseSession.segments[0].isLoadingCandidates)
     }
 
-    func testLearnedPredictionReferenceUsesStoredReadingInCommitPlan() throws {
+    func testLearnedPredictionReferenceRetainsStoredReadingButLearningUsesEachSegmentReading() throws {
         var session = try makeSession()
         let token = try XCTUnwrap(beginFocusedLoad(in: &session, conversionRequestGeneration: 96))
         let candidate = BunsetsuSessionCandidate(
@@ -505,10 +505,29 @@ final class BunsetsuConversionSessionTests: XCTestCase {
         XCTAssertTrue(session.cycleFocusedCandidate(by: 1))
         let plan = try XCTUnwrap(session.leadingSegmentCommitPlan())
         XCTAssertEqual(plan.selectedCandidate.reference.candidateID, 960)
-        XCTAssertEqual(plan.learningFragment.reading, "学習読み")
+        XCTAssertEqual(plan.selectedCandidate.reference.learnedPredictionReading, "学習読み")
+        XCTAssertEqual(plan.selectedCandidate.reference.conversionGeneration, 96)
+        XCTAssertEqual(plan.learningFragment.reading, "あ")
+        let focusedFirst = try XCTUnwrap(session.focusedPrefixCommitPlan())
+        XCTAssertEqual(focusedFirst.learningFragments.map(\.reading), ["あ"])
+        XCTAssertEqual(focusedFirst.selectedCandidates.first?.reference.learnedPredictionReading, "学習読み")
         XCTAssertEqual(plan.learningFragment.output, "学習候補")
         XCTAssertEqual(plan.learningFragment.leftID, 31)
         XCTAssertEqual(plan.learningFragment.rightID, 32)
+
+        XCTAssertTrue(session.moveFocus(by: 1))
+        let next = try XCTUnwrap(beginFocusedLoad(in: &session, conversionRequestGeneration: 97))
+        XCTAssertTrue(session.installCandidates([
+            .init(text: "後続", reference: .learnedPrediction(
+                generation: 97, candidateID: 970, reading: "別の保存読み"))
+        ], responseReading: "😀い", responseGeneration: 97, for: next))
+        XCTAssertTrue(session.cycleFocusedCandidate(by: 1))
+        let prefix = try XCTUnwrap(session.focusedPrefixCommitPlan())
+        XCTAssertEqual(prefix.learningFragments.map(\.reading), ["あ", "😀い"])
+        XCTAssertEqual(prefix.learningFragments.map(\.output), ["学習候補", "後続"])
+        XCTAssertEqual(prefix.selectedCandidates.map(\.reference.candidateID), [960, 970])
+        XCTAssertEqual(prefix.selectedCandidates.map(\.reference.conversionGeneration), [96, 97])
+        XCTAssertEqual(prefix.selectedCandidates.map(\.reference.learnedPredictionReading), ["学習読み", "別の保存読み"])
     }
 
     func testFocusedPrefixCommitPlanMatchesAndroidCommitThroughFocusAndRetainsLearningContext() throws {
