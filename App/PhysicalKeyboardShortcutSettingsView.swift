@@ -60,7 +60,7 @@ struct PhysicalKeyboardShortcutSettingsView: View {
         }
 
         Section {
-          Text("割り当てを保存します。現時点では、外付けキーをこの割り当てで実行する処理は未実装です。")
+          Text("保存した割り当ては、外付けキーボードから対応するキーが押されたときに実行します。対応しない操作はアプリに渡します。")
             .font(.footnote)
             .foregroundStyle(.secondary)
         }
