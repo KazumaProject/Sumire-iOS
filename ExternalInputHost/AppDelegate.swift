@@ -3,15 +3,35 @@ import UIKit
 // Deliberately independent of SumireCore/Shared and App Groups: all text is volatile.
 @main
 final class AppDelegate: UIResponder, UIApplicationDelegate {
-    var window: UIWindow?
-
     func application(_ application: UIApplication,
-                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool {
-        let window = UIWindow(frame: UIScreen.main.bounds)
+                     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?) -> Bool { true }
+
+    func application(_ application: UIApplication, configurationForConnecting session: UISceneSession,
+                     options: UIScene.ConnectionOptions) -> UISceneConfiguration {
+        let configuration = UISceneConfiguration(name: "Input Host", sessionRole: session.role)
+        configuration.delegateClass = InputHostSceneDelegate.self
+        return configuration
+    }
+}
+
+final class InputHostSceneDelegate: UIResponder, UIWindowSceneDelegate {
+    var window: UIWindow?
+    func scene(_ scene: UIScene, willConnectTo session: UISceneSession, options: UIScene.ConnectionOptions) {
+        guard let scene = scene as? UIWindowScene else { return }
+        let window = UIWindow(windowScene: scene)
         window.rootViewController = InputHostViewController()
         window.makeKeyAndVisible()
         self.window = window
-        return true
+    }
+}
+
+/// Read the editor at accessibility-query time: unmarkText need not emit an
+/// editing notification. This observer never changes input or marked ranges.
+private final class LiveInputStateLabel: UILabel {
+    var snapshot: (() -> String)?
+    override var accessibilityLabel: String? {
+        get { snapshot?() ?? super.accessibilityLabel }
+        set { super.accessibilityLabel = newValue }
     }
 }
 
@@ -44,7 +64,18 @@ final class InputHostViewController: UIViewController {
         text.accessibilityLabel = "テスト用複数行入力"
         text.autocorrectionType = .no
         text.spellCheckingType = .no
-        let stack = UIStackView(arrangedSubviews: [title, note, fieldLabel, field, textLabel, text])
+        let fieldState = LiveInputStateLabel()
+        fieldState.text = "入力状態"
+        fieldState.font = .preferredFont(forTextStyle: .caption2)
+        fieldState.accessibilityIdentifier = "external-input-field-state"
+        fieldState.isAccessibilityElement = true
+        fieldState.snapshot = { [weak field] in
+            guard let field else { return "unavailable" }
+            let marked = field.markedTextRange
+            let length = marked.map { field.offset(from: $0.start, to: $0.end) }
+            return "marked=\(marked != nil);markedUTF16=\(length.map(String.init) ?? "-");sampleUptime=\(ProcessInfo.processInfo.systemUptime)"
+        }
+        let stack = UIStackView(arrangedSubviews: [title, note, fieldLabel, field, fieldState, textLabel, text])
         stack.axis = .vertical
         stack.spacing = 8
         stack.translatesAutoresizingMaskIntoConstraints = false

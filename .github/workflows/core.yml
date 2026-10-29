@@ -2,7 +2,7 @@ name: Core tests
 
 on:
   pull_request:
-    branches: [dev, main]
+    branches: [dev, main, codex/bunsetsu-session-core]
   push:
     branches: [dev, main]
 
