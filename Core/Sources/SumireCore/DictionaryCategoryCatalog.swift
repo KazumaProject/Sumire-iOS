@@ -2,6 +2,20 @@ import Foundation
 
 /// Distribution taxonomy pinned to the v1.7.277 manifest; identifiers are relative dictionary paths.
 public enum DictionaryCategoryCatalog {
+    /// Namespace wrapper for old archive family IDs. Some raw values such as
+    /// `character` and `work_franchise` also exist as release leaf IDs.
+    public struct LegacyAggregateID: RawRepresentable, Hashable, Sendable {
+        public let rawValue: String
+        public init(rawValue: String) { self.rawValue = rawValue }
+    }
+
+    /// A deterministic family/leaf coverage plan for a future legacy-aggregate engine path.
+    /// This plan does not imply that the current native engine accepts aggregate IDs.
+    public struct LegacyOverlaySelection: Equatable, Sendable {
+        public let legacyAggregateIDs: [LegacyAggregateID]
+        public let releaseLeafIDs: [String]
+    }
+
     public struct Category: Identifiable, Equatable, Sendable {
         public let id: String
         public let label: String
@@ -108,14 +122,16 @@ public enum DictionaryCategoryCatalog {
         .init(id: "work_franchise", label: "作品シリーズ", legacyFamilies: ["work_franchise"]),
         .init(id: "work_manga", label: "漫画作品", legacyFamilies: ["work_manga"]),
         .init(id: "work_anime", label: "アニメ作品", legacyFamilies: ["work_anime"]),
-        .init(id: "media_demographic/audience/shonen", label: "少年向け", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/seinen", label: "青年向け", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/shojo", label: "少女向け", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/josei", label: "女性向け（Josei）", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/kids", label: "子ども向け（Kids）", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/mixed", label: "複数対象層", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/audience/unspecified", label: "対象層の指定なし・一般向け", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
-        .init(id: "media_demographic/resolution/source_unverified", label: "出典未確認・対象層未確定", legacyFamilies: ["character", "work_franchise", "work_manga", "work_anime", "work_film", "work_program", "work_book", "work_game", "work_music", "work_stage", "work_periodical", "work_other"]),
+        // These release-only categories have no matching legacy category in the pinned
+        // Android taxonomy. Keep them directly selectable without inventing old-mask aliases.
+        .init(id: "media_demographic/audience/shonen", label: "少年向け", legacyFamilies: []),
+        .init(id: "media_demographic/audience/seinen", label: "青年向け", legacyFamilies: []),
+        .init(id: "media_demographic/audience/shojo", label: "少女向け", legacyFamilies: []),
+        .init(id: "media_demographic/audience/josei", label: "女性向け（Josei）", legacyFamilies: []),
+        .init(id: "media_demographic/audience/kids", label: "子ども向け（Kids）", legacyFamilies: []),
+        .init(id: "media_demographic/audience/mixed", label: "複数対象層", legacyFamilies: []),
+        .init(id: "media_demographic/audience/unspecified", label: "対象層の指定なし・一般向け", legacyFamilies: []),
+        .init(id: "media_demographic/resolution/source_unverified", label: "出典未確認・対象層未確定", legacyFamilies: []),
         .init(id: "work_film", label: "映画作品", legacyFamilies: ["work_film"]),
         .init(id: "work_program", label: "番組", legacyFamilies: ["work_program"]),
         .init(id: "work_book", label: "書籍作品", legacyFamilies: ["work_book"]),
@@ -174,11 +190,63 @@ public enum DictionaryCategoryCatalog {
         let selected = Set(ids)
         return self.ids.filter(selected.contains)
     }
+
+    /// Substitutes a legacy aggregate only when all mapped release leaves are selected and
+    /// every contributing family for those leaves can be substituted as well. Mixed leaves
+    /// stay on the release path rather than loading the same family from both sources.
+    public static func resolveLegacyOverlaySelection(
+        selectedIDs: [String],
+        availableLegacyAggregateIDs: Set<LegacyAggregateID>
+    ) -> LegacyOverlaySelection {
+        let selected = Set(normalize(selectedIDs))
+        let availableAggregateValues = Set(availableLegacyAggregateIDs.map(\.rawValue))
+        let selectedCategories = categories.filter { selected.contains($0.id) }
+        let leavesByFamily = Dictionary(uniqueKeysWithValues: legacyIDs.map { family in
+            (family, categories.filter { $0.legacyFamilies.contains(family) })
+        })
+
+        var substitutableFamilies = Set(legacyIDs.filter { family in
+            guard availableAggregateValues.contains(family),
+                  let leaves = leavesByFamily[family],
+                  !leaves.isEmpty else { return false }
+            return leaves.allSatisfy { selected.contains($0.id) }
+        })
+
+        // A release leaf can contain more than one legacy family. Remove a candidate family
+        // if any such leaf would still need to be loaded for a family not represented by an
+        // available, complete aggregate. Iterate because removing one family can invalidate
+        // another family through a shared leaf.
+        while true {
+            let invalidFamilies = Set(substitutableFamilies.filter { family in
+                (leavesByFamily[family] ?? []).contains { leaf in
+                    leaf.legacyFamilies.contains { !substitutableFamilies.contains($0) }
+                }
+            })
+            if invalidFamilies.isEmpty { break }
+            substitutableFamilies.subtract(invalidFamilies)
+        }
+
+        let releaseLeafIDs = selectedCategories.compactMap { category -> String? in
+            guard !category.legacyFamilies.isEmpty,
+                  Set(category.legacyFamilies).isSubset(of: substitutableFamilies) else {
+                return category.id
+            }
+            return nil
+        }
+
+        return LegacyOverlaySelection(
+            legacyAggregateIDs: legacyIDs
+                .filter(substitutableFamilies.contains)
+                .map(LegacyAggregateID.init(rawValue:)),
+            releaseLeafIDs: releaseLeafIDs
+        )
+    }
+
     public static func legacyMask(for ids: [String], directory: URL? = nil) -> UInt32 {
         let selected = Set(ids)
         var mask: UInt32 = 0
         for (index, family) in legacyIDs.enumerated() {
-            // Shared demographic leaves do not turn on every legacy work dictionary.
+            // Release-only categories must not be assigned a legacy bit by inference.
             let matches = categories.contains { selected.contains($0.id) && !$0.id.hasPrefix("media_demographic/") && $0.legacyFamilies.contains(family) }
             let exists = directory.map { FileManager.default.fileExists(atPath: $0.appendingPathComponent(family + ".sud").path) } ?? true
             if matches && exists { mask |= 1 << index }

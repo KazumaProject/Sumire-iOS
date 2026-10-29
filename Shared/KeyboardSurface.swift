@@ -24,7 +24,14 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             guard oldValue != liveConversion else { return }
             beforeInput?()
             guard hasComposition else { return }
-            if liveConversion && !englishComposition && composition.cursorUTF16 == composition.reading.utf16.count, let first = converted.first {
+            if currentBunsetsuSession != nil {
+                renderBunsetsuSession()
+                return
+            }
+            if liveConversion && !englishComposition
+                && physicalFunctionKeyPreviewSuppressionGeneration != composition.generation
+                && composition.cursorUTF16 == composition.reading.utf16.count,
+               let first = converted.first {
                 selectedCandidate = 0
                 updateMarkedText?(first.text)
             } else {
@@ -325,6 +332,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         stack.accessibilityElementsHidden = false
     }
     private var learningURL: URL?
+    private var learningRemainder: String?
     private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
     func reloadLearningResults() {
@@ -332,19 +340,51 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
     func configureLearning(url: URL?, localReset: LocalDataReset? = nil) {
         guard learningURL != url || localReset != nil else { return }
+        cancelLearning()
         learningURL = url
         converter.setLearning(url: url, localReset: localReset)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
     func toggleLearningPauseForSession() -> Bool {
+        cancelLearning()
         learningPausedForSession.toggle()
         converter.setLearningPaused(learningPausedForSession)
         return learningPausedForSession
+    }
+    private func cancelLearning() {
+        learningRemainder = nil
+        converter.cancelLearning()
+    }
+    func synchronizeLearning(_ completion: @escaping () -> Void) {
+        converter.synchronizeLearning(completion)
+    }
+    /// Only synchronous input mutations at the old composing end may extend
+    /// a partially committed session. Conversion callbacks never call this.
+    private func mutateLearningInput(_ mutation: () -> Void) {
+        let previous = composition.reading, cursor = composition.cursorUTF16
+        mutation()
+        guard let remainder = learningRemainder else { return }
+        guard cursor == previous.utf16.count,
+              remainder.utf16.elementsEqual(previous.utf16), !composition.reading.isEmpty else {
+            cancelLearning(); return
+        }
+        converter.appendLearningInput(from: previous, to: composition.reading)
+        learningRemainder = composition.reading
+    }
+    private func appendLearningInput(_ text: String) {
+        mutateLearningInput { composition.append(text) }
+    }
+    private func appendLearningRomaji(_ text: String, using processor: RomajiConverter) {
+        mutateLearningInput { composition.appendRomaji(text, using: processor) }
     }
     private var composition = CompositionState()
     private var converted: [ConversionCandidate] = []
     private var presentedCandidates: [ConversionCandidate] = []
     private var bunsetsuActionHandled = false
+    private var bunsetsuSession: BunsetsuConversionSession?
+    private var bunsetsuOwnerGeneration: UInt64?
+    private var bunsetsuCandidateItems: [BunsetsuCandidateBarItem] = []
+    private var bunsetsuRequestGeneration: UInt64 = 0
     private var resultGeneration: UInt64?
     private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
     var hasComposition: Bool { !composition.reading.isEmpty }
@@ -517,6 +557,11 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         catch { showDataNotice("ローマ字設定: " + error.localizedDescription) }
     }
     private var containsRomaji = false
+    private var physicalFunctionKeyConversionSource = PhysicalKeyboardFunctionKeyConversionSource()
+    /// A function-key result stays visible for its composition generation even
+    /// when live conversion returns candidates. Candidate selection remains an
+    /// explicit user action and may still replace it.
+    private var physicalFunctionKeyPreviewSuppressionGeneration: UInt64?
     private var shifted = false
     private var qwertyCapsLock = false
     private var qwertyLastShiftTap: TimeInterval = 0
@@ -855,8 +900,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 generation: composition.generation, time: ProcessInfo.processInfo.systemUptime,
                 enabled: tenKeyToggle && tenKeyMode != .number)
             if choice.replacing { _ = composition.replaceLast(choice.text) }
-            else { composition.append(choice.text) }
-        } else { tapCycle.reset(); composition.append(outputs[direction.rawValue]) }
+            else { appendLearningInput(choice.text) }
+        } else { tapCycle.reset(); appendLearningInput(outputs[direction.rawValue]) }
         refreshConversion()
     }
     private func addGojuonGrid(palette: KeyboardPalette) {
@@ -996,7 +1041,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         beforeInput?(); tapCycle.reset()
         if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
         containsRomaji = false
-        composition.append(text); refreshConversion()
+        appendLearningInput(text); refreshConversion()
         if gojuonMode == .english && direction == .tap && gojuonShift {
             gojuonShift = false; rebuild()
         }
@@ -1113,7 +1158,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             } else {
                 if self.containsRomaji, let romaji = self.romaji { _ = self.composition.flushRomaji(using: romaji) }
                 self.containsRomaji = false
-                self.composition.append(output); self.refreshConversion()
+                self.appendLearningInput(output); self.refreshConversion()
             }
             self.consumeQwertyShift()
         }
@@ -1408,7 +1453,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         } else {
             // InputText punctuation bypasses romaji conversion in the reference.
             // Preserve any pending roman prefix rather than flushing it here.
-            composition.append(text); refreshConversion()
+            appendLearningInput(text); refreshConversion()
         }
     }
     private func refreshCustomShiftDisplay() {
@@ -1424,17 +1469,17 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             containsRomaji = true
             if text.utf16.count == 1 {
                 if isDefaultCustomRomaji && customShift.isActive {
-                    composition.append(text)
+                    appendLearningInput(text)
                     composition.transformPrefix { customShift.applying(to: $0) }
                 } else {
-                    composition.appendRomaji(text, using: romaji)
+                    appendLearningRomaji(text, using: romaji)
                     if !isDefaultCustomRomaji { composition.transformPrefix { customShift.applying(to: $0) } }
                 }
-            } else { composition.appendRomaji(shiftedText, using: romaji) }
+            } else { appendLearningRomaji(shiftedText, using: romaji) }
             refreshConversion()
         } else {
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
-            containsRomaji = false; composition.append(shiftedText); refreshConversion()
+            containsRomaji = false; appendLearningInput(shiftedText); refreshConversion()
         }
     }
     private func addSumireGrid(palette: KeyboardPalette) {
@@ -1584,8 +1629,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 let choice = tapCycle.choose(cycle, direction: .tap,
                     generation: composition.generation, time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
                 if choice.replacing { _ = composition.replaceLast(choice.text) }
-                else { composition.append(choice.text) }
-            } else { tapCycle.reset(); composition.append(text) }
+                else { appendLearningInput(choice.text) }
+            } else { tapCycle.reset(); appendLearningInput(text) }
             refreshConversion()
         case .referenceAction(let action, _): dispatchFlickReferenceAction(action)
         case .action(let action, let value, _):
@@ -1737,13 +1782,13 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 showDataNotice("クリップボードを利用するにはキーボードのフルアクセスが必要です"); return
             }
             if let text = UIPasteboard.general.string, !text.isEmpty {
-                composition.append(text); refreshConversion()
+                appendLearningInput(text); refreshConversion()
             } else { showDataNotice("貼り付けできる文字がありません") }
         case .space:
             commitComposition(); insert?(" ")
         case .convert:
             guard hasComposition else { return }
-            if startBunsetsuConversionIfNeeded() { return }
+            if cycleBunsetsuCandidateIfActive() || startBunsetsuConversionIfNeeded() { return }
             composition.select()
             if !converted.isEmpty {
                 selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
@@ -1761,7 +1806,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             guard hasComposition else { return }
             let oldCursor = composition.cursor
             let text = katakanaCycle.next(composition.reading)
-            composition.invalidate(); composition.append(text)
+            composition.invalidate(); appendLearningInput(text)
             _ = composition.moveCursor(by: min(oldCursor, text.count) - text.count)
             containsRomaji = false; refreshConversion()
         case .openSymbols: showSymbolKeyboard()
@@ -1790,7 +1835,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             // Read only following an explicit tap; iOS controls paste permission.
             if let text = UIPasteboard.general.string {
                 tapCycle.reset()
-                composition.append(text)
+                appendLearningInput(text)
                 refreshConversion()
             }
         case .cursorLeft:
@@ -1840,7 +1885,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         let choice = tapCycle.choose(values, direction: direction, generation: composition.generation,
                                      time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
         if choice.replacing { _ = composition.replaceLast(choice.text) }
-        else { composition.append(choice.text) }
+        else { appendLearningInput(choice.text) }
         refreshConversion()
     }
     private func addRow(_ values: [String], palette: KeyboardPalette, special: Bool) {
@@ -1875,10 +1920,12 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         keyRows.append(row)
     }
     func invalidateComposition() {
+        cancelLearning()
         customTapController?.cancel()
         closeSymbolKeyboard()
         katakanaCycle.reset()
         closeExpandedCandidates()
+        clearBunsetsuSession()
         composition.invalidate()
         containsRomaji = false
         converted = []
@@ -1914,6 +1961,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         panel.onSelect = { [weak self] id, clipboard in
             guard let self else { return }
             self.closeExpandedCandidates()
+            self.cancelLearning()
             self.executeTextMacro?(id, clipboard)
         }
         addSubview(panel)
@@ -1962,6 +2010,14 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         expandedCandidates = panel
     }
     private func moveCompositionCursor(by offset: Int) {
+        if var session = currentBunsetsuSession {
+            if session.moveFocus(by: offset) {
+                bunsetsuSession = session
+                renderBunsetsuSession()
+                loadNextBunsetsuCandidates()
+            }
+            return
+        }
         if composition.moveCursor(by: offset) {
             tapCycle.reset()
             refreshConversion()
@@ -1982,6 +2038,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         return true
     }
     private func refreshConversion() {
+        if let remainder = learningRemainder, !remainder.utf16.elementsEqual(composition.reading.utf16) { cancelLearning() }
+        clearBunsetsuSession()
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
         selectedCandidate = nil
@@ -2003,6 +2061,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         requestConversion(query: query, generation: generation)
     }
     private func startBunsetsuConversion() {
+        clearBunsetsuSession()
         if containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
             containsRomaji = false
@@ -2029,10 +2088,23 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
-                let prefix = result.candidates.first.flatMap {
-                    BunsetsuProjection.firstReadingPrefix(in: $0.bunsetsu, reading: reading)
+                guard let snapshot = result.bunsetsuSnapshot else {
+                    self.requestFollowingBunsetsu(reading, statusNote: " · 文節情報なし")
+                    return
                 }
-                self.requestFollowingBunsetsu(prefix ?? reading, statusNote: prefix == nil ? " · 区切りなし" : "")
+                do {
+                    self.bunsetsuSession = try BunsetsuConversionSession(
+                        rawInput: reading, conversionInput: reading,
+                        wholeDisplayText: result.candidates.first?.text ?? reading,
+                        generation: generation, snapshot: snapshot,
+                        orderedDisplayCandidates: result.orderedDisplayIdentities)
+                    self.bunsetsuOwnerGeneration = generation
+                    self.bunsetsuActionHandled = true
+                    self.renderBunsetsuSession()
+                    self.loadNextBunsetsuCandidates()
+                } catch {
+                    self.requestFollowingBunsetsu(reading, statusNote: " · 文節情報を通常変換に切替")
+                }
             case .failure:
                 // Fall back to the ordinary conversion path without changing the composing text.
                 self.requestFollowingBunsetsu(reading, statusNote: " · 文節検索を通常変換に切替")
@@ -2046,6 +2118,105 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         startBunsetsuConversion()
         return true
     }
+    private var currentBunsetsuSession: BunsetsuConversionSession? {
+        guard let session = bunsetsuSession, let owner = bunsetsuOwnerGeneration,
+              composition.accepts(owner),
+              composition.reading.utf16.elementsEqual(session.rawInput.utf16) else { return nil }
+        return session
+    }
+
+    private func clearBunsetsuSession() {
+        bunsetsuSession = nil
+        bunsetsuOwnerGeneration = nil
+        bunsetsuCandidateItems = []
+    }
+
+    private func renderBunsetsuSession() {
+        guard let session = currentBunsetsuSession else { return }
+        bunsetsuCandidateItems = session.focusedCandidateBarItems
+        candidateBar.setCandidates(bunsetsuCandidateItems.map { CandidateBar.Presentation(text: $0.text) })
+        candidateBar.selectedIndex = session.focusedSegment?.selectedIndex
+        candidateBar.isUpdating = session.focusedSegment?.isLoadingCandidates == true
+        updateMarkedText?(session.displayText)
+        status.text = "文節 \(session.focusedSegmentIndex + 1)/\(session.segments.count) · " + session.focusedSegment!.reading
+    }
+
+    private func loadNextBunsetsuCandidates() {
+        guard var session = currentBunsetsuSession,
+              let index = session.candidatePreparationSegmentIndices.first(where: {
+                  !session.segments[$0].candidatesLoaded && !session.segments[$0].isLoadingCandidates
+              }) else { return }
+        bunsetsuRequestGeneration = max(bunsetsuRequestGeneration, session.generation) &+ 1
+        guard let token = session.beginLoadingCandidates(forSegmentAt: index,
+                    conversionRequestGeneration: bunsetsuRequestGeneration) else { return }
+        let owner = bunsetsuOwnerGeneration
+        bunsetsuSession = session
+        renderBunsetsuSession()
+        converter.convert(token.segmentReading, generation: token.conversionRequestGeneration, editStart: 0,
+                          omission: omissionSearch) { [weak self] response in
+            guard let self else { return }
+            self.beforeInput?()
+            guard var current = self.currentBunsetsuSession,
+                  self.bunsetsuOwnerGeneration == owner,
+                  current.sessionID == token.sessionID else { return }
+            switch response {
+            case let .success(result):
+                // A segment row must consume the complete segment: a normal
+                // prefix candidate cannot replace the segment's unread suffix.
+                let records = result.candidates.filter {
+                    $0.range.location == 0 && $0.range.length == token.segmentReading.utf16.count
+                }.map {
+                    BunsetsuSessionCandidate(text: $0.text,
+                        reference: .conversionResult(generation: result.generation, candidateID: $0.id),
+                        score: $0.score, leftID: $0.leftID, rightID: $0.rightID,
+                        matchedReadingUTF16Length: $0.range.length)
+                }
+                guard current.installCandidates(records, responseReading: token.segmentReading,
+                    responseGeneration: result.generation, for: token) else { return }
+            case .failure:
+                // Empty alternatives retain the projected/reading fallback.
+                guard current.installCandidates([], responseReading: token.segmentReading,
+                    responseGeneration: token.conversionRequestGeneration, for: token) else { return }
+            }
+            self.bunsetsuSession = current
+            self.renderBunsetsuSession()
+            self.loadNextBunsetsuCandidates()
+        }
+    }
+
+    private func cycleBunsetsuCandidateIfActive() -> Bool {
+        guard var session = currentBunsetsuSession else { return false }
+        if session.cycleFocusedCandidate(by: 1) {
+            bunsetsuSession = session
+            renderBunsetsuSession()
+        }
+        loadNextBunsetsuCandidates()
+        return true
+    }
+
+    private func commitBunsetsuPlan(_ plan: BunsetsuFocusedPrefixCommitPlan) {
+        guard currentBunsetsuSession != nil,
+              plan.learningReading.utf16.elementsEqual(composition.reading.utf16) else { return }
+        converter.commitLearningPlan(plan, learnFirst: learnFirstCandidate) { [weak self] message in
+            if self?.hasComposition == false { self?.showDataNotice(message) }
+        }
+        learningRemainder = plan.nextComposingInput.isEmpty ? nil : plan.nextComposingInput
+        // Session plans validate UTF-16/scalar boundaries, including boundaries
+        // inside a combining grapheme. Do not use Character-only commitPrefix,
+        // or reset the composition generation while adopting the remainder.
+        _ = composition.commit()
+        composition.append(plan.nextComposingInput)
+        clearBunsetsuSession()
+        containsRomaji = false
+        converted = []; presentedCandidates = []; resultGeneration = nil; selectedCandidate = nil
+        // Earlier segment references belong to earlier native results. Never
+        // pass those IDs to the native latest-result-only commit API. Fragment
+        // learning persistence is connected separately from this state route.
+        converter.reset()
+        if let commitMarkedText { commitMarkedText(plan.committedText) } else { insert?(plan.committedText) }
+        refreshConversion()
+    }
+
     private func requestFollowingBunsetsu(_ query: String, statusNote: String) {
         composition.optionsChanged()
         composition.select()
@@ -2080,7 +2251,10 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 self.resultGeneration = generation
                 self.candidateBar.setCandidates(candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ") })
                 self.candidateBar.isUpdating = false
-                if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
+                let shouldApplyLivePreview = self.liveConversion && !self.englishComposition
+                    && self.physicalFunctionKeyPreviewSuppressionGeneration != generation
+                    && self.composition.cursorUTF16 == self.composition.reading.utf16.count
+                if shouldApplyLivePreview || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
                 }
@@ -2107,10 +2281,18 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
     private func chooseCandidate(_ index: Int) {
         beforeInput?()
+        if var session = currentBunsetsuSession {
+            guard !candidateBar.isUpdating, bunsetsuCandidateItems.indices.contains(index) else { return }
+            let selection = session.selectFocusedCandidateBarItem(bunsetsuCandidateItems[index])
+            bunsetsuSession = session
+            if case let .segmentCandidateSelected(plan?) = selection { commitBunsetsuPlan(plan) }
+            return
+        }
         guard let generation = resultGeneration, composition.accepts(generation),
               presentedCandidates.indices.contains(index) else { return }
         if let macroID = presentedCandidates[index].textMacroID {
             selectedCandidate = nil
+            cancelLearning()
             executeTextMacro?(macroID, nil)
             return
         }
@@ -2119,6 +2301,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         commitComposition()
     }
     private func commitRawAtCursorAndSpace() {
+        cancelLearning()
+        clearBunsetsuSession()
         guard let commitRawTextAndSpace else {
             showDataNotice("この入力先では読みの確定と空白挿入を実行できません")
             return
@@ -2141,17 +2325,22 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
 
     private func commitComposition() {
+        if var session = currentBunsetsuSession {
+            _ = session.moveFocus(by: session.segments.count)
+            guard let plan = session.focusedPrefixCommitPlan() else { return }
+            commitBunsetsuPlan(plan)
+            return
+        }
         if selectedCandidate == nil, containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
         }
+        let originalInput = composition.reading
+        var learningSelection: (UInt64, ConversionCandidate, Int)?
         var candidate: ConversionCandidate?
         if let generation = resultGeneration, composition.accepts(generation),
            let index = selectedCandidate, converted.indices.contains(index) {
             candidate = converted[index]
-            converter.commit(generation: generation, candidate: converted[index].id,
-                             learn: index > 0 || learnFirstCandidate) { [weak self] message in
-                if self?.hasComposition == false { self?.showDataNotice(message) }
-            }
+            learningSelection = (generation, converted[index], index)
         }
         let text: String?
         if let candidate {
@@ -2159,6 +2348,13 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             text = composition.commitPrefix(candidate.text, readingUTF16Length: candidate.range.length)
         } else { text = composition.commit() }
         guard let text else { return }
+        if let (generation, selected, rank) = learningSelection {
+            converter.commitSelection(generation: generation, candidate: selected, rank: rank,
+                input: originalInput, remaining: composition.reading, learnFirst: learnFirstCandidate) { [weak self] message in
+                if self?.hasComposition == false { self?.showDataNotice(message) }
+            }
+            learningRemainder = composition.reading.isEmpty ? nil : composition.reading
+        } else { cancelLearning() }
         containsRomaji = false
         if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
         converted = []
@@ -2244,7 +2440,213 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         let next = choices[(current + 1) % choices.count]
         selectKeyboard(next.mode, customID: next.customID)
     }
+
+    var physicalKeyboardShortcutContext: PhysicalKeyboardShortcutContext {
+        guard hasComposition else { return .any }
+        return composition.phase == .selecting ? .conversion : .composition
+    }
+
+    /// Executes only actions this keyboard surface can perform without reading host
+    /// text or bypassing the keyboard's existing Full Access clipboard gate. Returning
+    /// false leaves the press in UIKit's responder chain for host-handled edit commands.
+    @discardableResult
+    func performPhysicalKeyboardShortcut(_ action: PhysicalKeyboardShortcutAction) -> Bool {
+        switch action {
+        case .convertToHiragana, .convertToFullKatakana, .convertToHalfWidth,
+             .convertToFullAlphanumeric, .convertToHalfAlphanumeric:
+            break
+        default:
+            physicalFunctionKeyConversionSource.reset()
+        }
+        switch action {
+        case .copy, .cut, .selectAll:
+            return false
+        case .paste:
+            guard candidateBar.clipboardAccessAllowed else { return false }
+            beforeInput?()
+            sumireAction(.paste)
+            return true
+        case .switchToJapanese:
+            beforeInput?()
+            if hasComposition, physicalKeyboardMode == .japanese {
+                pressed("空白")
+            } else {
+                if hasComposition { commitComposition() }
+                setPhysicalKeyboardMode(.japanese)
+            }
+            return true
+        case .switchToEnglish:
+            beforeInput?()
+            if hasComposition { commitComposition() }
+            setPhysicalKeyboardMode(.english)
+            return true
+        case .cycleInputMode:
+            beforeInput?()
+            let next = physicalKeyboardMode.next
+            if hasComposition { commitComposition() }
+            setPhysicalKeyboardMode(next)
+            return true
+        case .convert:
+            guard hasComposition else { return false }
+            pressed("空白")
+            return true
+        case .commit:
+            guard hasComposition else { return false }
+            beforeInput?()
+            commitComposition()
+            return true
+        case .cancel:
+            guard hasComposition else { return false }
+            beforeInput?()
+            if composition.phase == .selecting { cancelPhysicalConversion() }
+            return true
+        case .convertNext:
+            guard composition.phase == .selecting else { return false }
+            beforeInput?()
+            return movePhysicalConversionCandidate(by: 1)
+        case .convertPrevious:
+            guard composition.phase == .selecting else { return false }
+            beforeInput?()
+            return movePhysicalConversionCandidate(by: -1)
+        case .convertToHiragana:
+            return transformPhysicalComposition(.hiragana)
+        case .convertToFullKatakana:
+            return transformPhysicalComposition(.fullKatakana)
+        case .convertToHalfWidth:
+            return transformPhysicalComposition(.halfWidth)
+        case .convertToFullAlphanumeric, .convertToHalfAlphanumeric,
+             .segmentFocusLeft, .segmentFocusRight,
+             .segmentWidthShrink, .segmentWidthExpand:
+            switch action {
+            case .convertToFullAlphanumeric:
+                return transformPhysicalComposition(.fullAlphanumeric)
+            case .convertToHalfAlphanumeric:
+                return transformPhysicalComposition(.halfAlphanumeric)
+            default:
+                // Bunsetsu segment navigation remains unavailable until the iOS
+                // conversion surface has a matching segmented composition model.
+                return false
+            }
+        }
+    }
+
+    private var physicalKeyboardMode: TenKeyMode {
+        switch inputMode {
+        case .sumire: return sumireMode
+        case .tenKey: return tenKeyMode
+        case .kana: return gojuonMode
+        case .custom:
+            if customEnglishVisible { return .english }
+            if customNumberVisible { return .number }
+            return .japanese
+        case .romaji: return romajiLatin ? .english : .japanese
+        case .english: return .english
+        }
+    }
+
+    private func setPhysicalKeyboardMode(_ mode: TenKeyMode) {
+        switch inputMode {
+        case .sumire:
+            setSumireMode(mode)
+        case .tenKey:
+            beforeInput?(); tapCycle.reset(); tenKeyMode = mode; rebuild()
+        case .kana:
+            beforeInput?(); tapCycle.reset(); gojuonMode = mode; rebuild()
+        case .custom:
+            switch mode {
+            case .japanese: setCustomEnglishPresentation(false)
+            case .english: setCustomEnglishPresentation(true)
+            case .number: showCustomNumberPresentation()
+            }
+        case .romaji:
+            if mode == .number {
+                tenKeyMode = .number
+                selectKeyboard(.tenKey, customID: nil)
+            } else {
+                beforeInput?(); tapCycle.reset(); romajiLatin = mode == .english; rebuild()
+            }
+        case .english:
+            if mode != .english {
+                if mode == .number {
+                    tenKeyMode = .number
+                    selectKeyboard(.tenKey, customID: nil)
+                } else {
+                    gojuonMode = .japanese
+                    selectKeyboard(.kana, customID: nil)
+                }
+            }
+        }
+    }
+
+    private func movePhysicalConversionCandidate(by offset: Int) -> Bool {
+        guard !converted.isEmpty else { return false }
+        let current = selectedCandidate ?? (offset > 0 ? -1 : 0)
+        let next = (current + offset + converted.count) % converted.count
+        composition.select()
+        selectedCandidate = next
+        updateMarkedText?(previewText(converted[next]))
+        return true
+    }
+
+    private func cancelPhysicalConversion() {
+        cancelLearning()
+        guard hasComposition else { return }
+        composition.optionsChanged() // Invalidates pending results and returns to editing.
+        containsRomaji = false
+        converted = []
+        presentedCandidates = []
+        resultGeneration = nil
+        selectedCandidate = nil
+        bunsetsuActionHandled = false
+        candidateBar.candidates = []
+        candidateBar.isUpdating = false
+        converter.reset()
+        markReading()
+        status.text = "Sumire · C++変換"
+    }
+
+    private enum PhysicalCompositionTransform {
+        case hiragana, fullKatakana, halfWidth, fullAlphanumeric, halfAlphanumeric
+    }
+
+    private func transformPhysicalComposition(_ transform: PhysicalCompositionTransform) -> Bool {
+        guard hasComposition else {
+            physicalFunctionKeyConversionSource.reset()
+            // Android consumes F6–F10 even when there is no active reading;
+            // there is no composition to mutate, but the function key must
+            // not fall through and trigger a host/system command.
+            return true
+        }
+        beforeInput?()
+        if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
+        containsRomaji = false
+        let currentPrefix = String(composition.reading.prefix(composition.cursor))
+        let source = physicalFunctionKeyConversionSource.source(
+            for: currentPrefix, generation: composition.generation)
+        let scriptSource = PhysicalKeyboardJapaneseScriptConversion.source(source, using: romaji)
+        let output: String
+        switch transform {
+        case .hiragana:
+            output = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: true) ?? scriptSource
+        case .fullKatakana:
+            output = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: false) ?? scriptSource
+        case .halfWidth:
+            let katakana = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: false) ?? scriptSource
+            output = katakana.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? katakana
+        case .fullAlphanumeric:
+            output = PhysicalKeyboardAlphabeticConversion.convert(source, to: .full, using: romaji)
+        case .halfAlphanumeric:
+            output = PhysicalKeyboardAlphabeticConversion.convert(source, to: .half, using: romaji)
+        }
+        composition.transformPrefix { _ in output }
+        physicalFunctionKeyPreviewSuppressionGeneration = composition.generation
+        physicalFunctionKeyConversionSource.record(output: output, generation: composition.generation)
+        refreshConversion()
+        return true
+    }
+
     private func pressed(_ value: String) {
+        physicalFunctionKeyConversionSource.reset()
         customTapController?.interrupt()
         beforeInput?()
         katakanaCycle.reset()
@@ -2281,12 +2683,13 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             }
             updateQwertyCase()
         case "⌫":
+            cancelLearning()
             if composition.deleteBackward() { refreshConversion() } else { delete?() }
         case "空白":
             if englishComposition { commitComposition(); insert?(" "); return }
             if composition.reading.isEmpty { insert?(" ") }
             else {
-                if startBunsetsuConversionIfNeeded() { return }
+                if cycleBunsetsuCandidateIfActive() || startBunsetsuConversionIfNeeded() { return }
                 composition.select()
                 if !converted.isEmpty {
                     selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
@@ -2303,12 +2706,12 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             else if inputMode == .romaji && romajiLatin { commitComposition(); insert?(value) }
             else if inputMode == .romaji, let romaji {
                 containsRomaji = true
-                composition.appendRomaji(value, using: romaji)
+                appendLearningRomaji(value, using: romaji)
                 refreshConversion()
             } else {
                 if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
                 containsRomaji = false
-                composition.append(value)
+                appendLearningInput(value)
                 refreshConversion()
             }
         }
@@ -2331,7 +2734,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         if !englishComposition && !composition.reading.isEmpty { commitComposition() }
         englishComposition = true
         containsRomaji = false
-        composition.append(text)
+        appendLearningInput(text)
         refreshConversion()
     }
     private func consumeQwertyShift() {

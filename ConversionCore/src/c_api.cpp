@@ -115,6 +115,31 @@ int sumire_session_set_learning(sumire_session *session,
     session->latest.reset();
   });
 }
+int sumire_session_set_learning_entries(sumire_session *session,
+                                        const sumire_learning_entry *entries,
+                                        size_t count, char *error, size_t size) {
+  return guarded(error, size, [&] {
+    check(session && (entries || count == 0), "null learning dictionary argument");
+    check(count <= 10000, "too many learning entries");
+    std::vector<sumire::PersonalEntry> words;
+    size_t total = 0;
+    for (size_t i = 0; i < count; ++i) {
+      const auto &entry = entries[i];
+      check(entry.reading.data && entry.text.data, "null learning text");
+      check(entry.reading.size <= 32768 && entry.text.size <= 65536,
+            "learning entry too long");
+      total += entry.reading.size + entry.text.size;
+      check(total <= 16 * 1024 * 1024, "learning text budget exceeded");
+      words.push_back({std::string(entry.reading.data, entry.reading.size),
+                       std::string(entry.text.data, entry.text.size), 0,
+                       entry.score, false, true, entry.left_id, entry.right_id});
+    }
+    auto replacement = session->engine->personal_dictionary(std::move(words));
+    if (!session->learned || !session->learned->equivalent(*replacement))
+      session->learned = std::move(replacement);
+    session->latest.reset();
+  });
+}
 uint32_t sumire_abi_version(void) { return 1; }
 size_t sumire_category_count(void) { return 30; }
 const char *sumire_category_name(size_t index) {
@@ -295,6 +320,17 @@ int sumire_result_category(const sumire_result *result, size_t candidate,
   *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
   return 0;
 }
+int sumire_result_segment_context_ids(const sumire_result *result,
+                                      size_t candidate, size_t index,
+                                      uint16_t *left_id, uint16_t *right_id) {
+  if (!result || !left_id || !right_id || candidate >= sumire_result_count(result))
+    return -1;
+  const auto &segments = result->snapshot->value.candidates[candidate].segments;
+  if (index >= segments.size()) return -1;
+  *left_id = segments[index].left_context_id;
+  *right_id = segments[index].right_context_id;
+  return 0;
+}
 size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidate) {
   return result && candidate < sumire_result_count(result)
       ? result->snapshot->value.candidates[candidate].bunsetsu_boundaries.size() : 0;
@@ -303,6 +339,49 @@ int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidat
                                    size_t index, uint32_t *out_utf16) {
   if (!out_utf16 || index >= sumire_result_bunsetsu_count(result, candidate)) return -1;
   *out_utf16 = result->snapshot->value.candidates[candidate].bunsetsu_boundaries[index];
+  return 0;
+}
+size_t sumire_result_bunsetsu_split_pattern_count(const sumire_result *result) {
+  return result ? result->snapshot->value.bunsetsu_split_patterns.size() : 0;
+}
+size_t sumire_result_bunsetsu_split_pattern_boundary_count(const sumire_result *result,
+                                                           size_t pattern_index) {
+  const auto count = sumire_result_bunsetsu_split_pattern_count(result);
+  return pattern_index < count
+      ? result->snapshot->value.bunsetsu_split_patterns[pattern_index].size() : 0;
+}
+int sumire_result_bunsetsu_split_pattern_boundary(const sumire_result *result,
+                                                  size_t pattern_index,
+                                                  size_t boundary_index,
+                                                  uint32_t *out_utf16) {
+  if (!out_utf16 || boundary_index >=
+      sumire_result_bunsetsu_split_pattern_boundary_count(result, pattern_index))
+    return -1;
+  *out_utf16 = result->snapshot->value.bunsetsu_split_patterns[pattern_index][boundary_index];
+  return 0;
+}
+size_t sumire_result_primary_bunsetsu_boundary_count(const sumire_result *result) {
+  return result ? result->snapshot->value.primary_bunsetsu_split_positions.size() : 0;
+}
+int sumire_result_primary_bunsetsu_boundary(const sumire_result *result,
+                                            size_t boundary_index,
+                                            uint32_t *out_utf16) {
+  if (!out_utf16 || boundary_index >= sumire_result_primary_bunsetsu_boundary_count(result))
+    return -1;
+  *out_utf16 = result->snapshot->value.primary_bunsetsu_split_positions[boundary_index];
+  return 0;
+}
+int sumire_result_candidate_has_bunsetsu_split_pattern(const sumire_result *result,
+                                                       size_t candidate_index,
+                                                       int *out_has_pattern) {
+  if (!result || !out_has_pattern || candidate_index >= sumire_result_count(result))
+    return -1;
+  const auto &surface = result->snapshot->value.candidates[candidate_index].text;
+  const auto &mappings = result->snapshot->value.split_pattern_by_candidate;
+  *out_has_pattern = std::any_of(mappings.begin(), mappings.end(),
+      [&surface](const sumire::CandidateSplitPattern &mapping) {
+        return mapping.surface == surface;
+      }) ? 1 : 0;
   return 0;
 }
 int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched) {

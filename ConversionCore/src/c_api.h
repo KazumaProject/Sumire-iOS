@@ -50,6 +50,15 @@ typedef struct {
   uint32_t start_utf16;
   uint32_t length_utf16;
 } sumire_segment;
+/* Additive ABI v1 layout: score and independent connection IDs from learned
+ * fragment/phrase rows. IDs must be inside the opened connection matrix. */
+typedef struct {
+  sumire_string reading;
+  sumire_string text;
+  uint16_t left_id;
+  uint16_t right_id;
+  int32_t score;
+} sumire_learning_entry;
 typedef struct {
   uint64_t generation;
   double conversion_ms;
@@ -78,6 +87,16 @@ uint16_t sumire_context_id_for_pos(int32_t pos_index);
 int sumire_session_set_learning(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);
+/* Metadata-aware learned overlay, at most 10000 entries/16 MiB total text.
+ * Copies strings and atomically replaces only the learned overlay. Japanese
+ * conversion uses matching reading prefixes as graph segments (including full
+ * phrase rows); English remains exact-input only. Success invalidates latest
+ * commit IDs; failure preserves overlay and latest result. This and the legacy
+ * set_learning API replace the same learned overlay, not the personal one.
+ * Missing endpoint fallback is the caller's policy, never a DB mutation. */
+int sumire_session_set_learning_entries(sumire_session *session,
+                                       const sumire_learning_entry *entries,
+                                       size_t count, char *error, size_t error_size);
 int sumire_session_set_personal(sumire_session *session,
                                 const sumire_personal_entry *entries,
                                 size_t count, char *error, size_t error_size);
@@ -148,6 +167,10 @@ int sumire_result_reading_correction(const sumire_result *result, size_t index,
                                      sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
+/* Copies both path-node endpoints; errors leave outputs unchanged. */
+int sumire_result_segment_context_ids(const sumire_result *result,
+                                     size_t candidate_index, size_t segment_index,
+                                     uint16_t *left_id, uint16_t *right_id);
 /* Interior UTF-16 reading offsets from this candidate's own path. No
  * boundaries for single-word / prediction candidates. Additive ABI v1 API;
  * existing structs are unchanged. Invalid result/candidate returns count 0.
@@ -161,6 +184,25 @@ int sumire_result_category(const sumire_result *result, size_t candidate_index,
 /* Returns 0 on success, -1 for invalid arguments/index. Copies an offset. */
 int sumire_result_bunsetsu_boundary(const sumire_result *result, size_t candidate_index,
                                    size_t boundary_index, uint32_t *out_utf16);
+/* Android bunsetsu snapshot metadata. Result-level patterns preserve their
+ * engine order; the primary positions may be absent from that bounded list.
+ * Candidate presence distinguishes an explicitly empty pattern from no mapping.
+ * Counts return zero for a null result or invalid index; boundary reads return
+ * -1 and leave the output untouched when arguments are invalid. */
+size_t sumire_result_bunsetsu_split_pattern_count(const sumire_result *result);
+size_t sumire_result_bunsetsu_split_pattern_boundary_count(const sumire_result *result,
+                                                           size_t pattern_index);
+int sumire_result_bunsetsu_split_pattern_boundary(const sumire_result *result,
+                                                  size_t pattern_index,
+                                                  size_t boundary_index,
+                                                  uint32_t *out_utf16);
+size_t sumire_result_primary_bunsetsu_boundary_count(const sumire_result *result);
+int sumire_result_primary_bunsetsu_boundary(const sumire_result *result,
+                                            size_t boundary_index,
+                                            uint32_t *out_utf16);
+int sumire_result_candidate_has_bunsetsu_split_pattern(const sumire_result *result,
+                                                       size_t candidate_index,
+                                                       int *out_has_pattern);
 /* Diagnostics: immutable dictionary-search rows only, not Viterbi/A* reuse. */
 int sumire_result_search_rows(const sumire_result *result, size_t *reused, size_t *searched);
 int sumire_result_metrics(const sumire_result *result, sumire_metrics *out);

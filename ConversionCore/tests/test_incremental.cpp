@@ -18,15 +18,50 @@ void equal(const Result &a, const Result &b) {
           x.segments.size() == y.segments.size(), "candidate order/surface/score/path changed");
     for (size_t j = 0; j < x.segments.size(); ++j) {
       const auto &p = x.segments[j], &q = y.segments[j];
-      check(p.text == q.text && p.dictionary == q.dictionary && p.start == q.start && p.length == q.length,
+      check(p.text == q.text && p.dictionary == q.dictionary && p.start == q.start && p.length == q.length &&
+            p.left_context_id == q.left_context_id && p.right_context_id == q.right_context_id,
             "candidate UTF16 range/dictionary changed");
     }
   }
+}
+void learning_metadata(const Engine &engine) {
+  auto a = engine.personal_dictionary({{"あいあ", "AIA", 0, -50000, false, true, 1, 2}});
+  auto b = engine.personal_dictionary({{"あいあ", "AIA", 0, -50000, false, true, 2, 2}});
+  check(!a->equivalent(*b), "endpoint-only changes must replace the overlay");
+  auto copied = engine.personal_dictionary({{"あいあ", "AIA", 0, -50000, false, true, 1, 2}});
+  check(a->equivalent(*copied), "identical metadata overlay not equivalent");
+  Workspace workspace;
+  auto result = engine.convert("あいあ", 100, 200000, false, nullptr, a.get(), &workspace);
+  check(!result.candidates.empty() && result.candidates.front().text == "AIA", "lower-cost learned duplicate did not win");
+  const auto &segments = result.candidates.front().segments;
+  check(segments.size() == 1 && segments[0].dictionary == "learning" &&
+        segments[0].left_context_id == 1 && segments[0].right_context_id == 2,
+        "learned duplicate path lost endpoint metadata");
+  auto changed = engine.convert("あいあ", 100, 200000, false, nullptr, b.get(), &workspace);
+  equal(changed, engine.convert("あいあ", 100, 200000, false, nullptr, b.get()));
+  check(changed.reused_search_rows == 0, "endpoint-only change reused stale graph rows");
+  // Fixture MATRIX[0][2] + MATRIX[2][0] is 60, versus 50 for l=1/r=2.
+  check(changed.candidates.front().score - result.candidates.front().score == 10,
+        "independent endpoint IDs did not affect connection cost");
+  auto costlier = engine.personal_dictionary({{"あいあ", "AIA", 0, 50000, false, true, 1, 2}});
+  auto ordinary = engine.convert("あいあ", 100, 200000, false, nullptr, costlier.get());
+  bool found = false;
+  for (const auto &candidate : ordinary.candidates) if (candidate.text == "AIA") {
+    check(candidate.score < 50000 && candidate.segments.front().dictionary != "learning",
+          "costlier learned row overrode the lower-cost graph path");
+    found = true;
+  }
+  check(found, "ordinary duplicate candidate missing");
+  bool rejected = false;
+  try { engine.personal_dictionary({{"あ", "bad", 0, 1, false, true, 1, 3}}); }
+  catch (const std::exception &) { rejected = true; }
+  check(rejected, "out-of-matrix metadata endpoint accepted");
 }
 int main(int argc, char **argv) {
  try {
   check(argc == 2, "dictionary directory required");
   Engine engine(argv[1], {});
+  learning_metadata(engine);
   Workspace workspace;
   size_t hits = 0;
   auto run = [&](const std::string &reading, bool omission, bool prefix, bool prediction,

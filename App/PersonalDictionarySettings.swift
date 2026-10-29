@@ -32,6 +32,7 @@ struct PersonalDictionarySettings: View {
     @State private var exportDocument: AndroidPersonalListDocument?
     @State private var exportFilename = "user_dictionary_backup"
     @State private var preview: ImportItem?
+    @State private var searchQuery = ""
     @State private var error: String?
     @State private var transferMessage: String?
     private struct EditItem: Identifiable {
@@ -72,6 +73,7 @@ struct PersonalDictionarySettings: View {
     }
     private var entries: [PersonalWord] { template ? library.lexicon.templates : library.lexicon.words }
     var body: some View {
+        let visibleEntries = PersonalDictionarySearch.results(for: entries, query: searchQuery)
         NavigationStack {
             List {
                 Picker("登録先", selection: $template) {
@@ -104,21 +106,28 @@ struct PersonalDictionarySettings: View {
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("\(entries.count)件") {
-                    ForEach(entries.indices, id: \.self) { index in
+                    if visibleEntries.isEmpty, !searchQuery.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+                        Text("一致する登録がありません").foregroundStyle(.secondary)
+                    }
+                    ForEach(visibleEntries) { item in
                         Button {
-                            editing = EditItem(index: index, word: entries[index], template: template)
+                            editing = EditItem(index: item.sourceIndex, word: item.word, template: template)
                         } label: {
                             VStack(alignment: .leading) {
-                                Text(entries[index].word).lineLimit(2)
-                                Text(entries[index].reading).font(.caption).foregroundStyle(.secondary)
+                                Text(item.word.word).lineLimit(2)
+                                Text(item.word.reading).font(.caption).foregroundStyle(.secondary)
                             }
                         }.disabled(!library.writable)
-                    }.onDelete { indices in
-                        do { try library.remove(indices, template: template) }
+                    }.onDelete { offsets in
+                        let sourceIndices = IndexSet(offsets.compactMap { offset in
+                            visibleEntries.indices.contains(offset) ? visibleEntries[offset].sourceIndex : nil
+                        })
+                        do { try library.remove(sourceIndices, template: template) }
                         catch { self.error = error.localizedDescription }
                     }
                 }
             }
+            .searchable(text: $searchQuery, prompt: "表記または読みの先頭")
             .navigationTitle("ユーザー辞書・定型文")
             .toolbar { Button("完了") { dismiss() } }
             .sheet(item: $editing) { item in

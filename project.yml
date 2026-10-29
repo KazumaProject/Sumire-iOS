@@ -41,6 +41,12 @@ targets:
           CFBundlePrimaryIcon:
             CFBundleIconFiles: [SumireLogo]
     settings:
+      configs:
+        Debug:
+          INFOPLIST_FILE: ProjectConfig/Info-Debug.plist
+          INFOPLIST_KEY_LSSupportsOpeningDocumentsInPlace: 'YES'
+        Release:
+          ENABLE_TESTABILITY: YES
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.ios
         CODE_SIGN_ENTITLEMENTS: Shared/Sumire.entitlements
@@ -131,6 +137,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
+        INFOPLIST_KEY_UIApplicationSceneManifest_Generation: YES
         PRODUCT_BUNDLE_IDENTIFIER: com.kazumaproject.sumire.externalinputhost
         INFOPLIST_KEY_CFBundleDisplayName: Sumire Input Host
         INFOPLIST_KEY_UILaunchScreen_Generation: YES
