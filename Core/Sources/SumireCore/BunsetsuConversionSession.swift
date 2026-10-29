@@ -363,7 +363,10 @@ public struct BunsetsuSessionSegment: Equatable {
         reading = projected.reading
         let initialText = initialTextOverride ?? projected.text
         self.initialText = initialText
-        candidateRecords = [BunsetsuSessionCandidate(text: initialText)]
+        let sameProjectedText = bunsetsuStringsMatchUTF16(initialText, projected.text)
+        candidateRecords = [BunsetsuSessionCandidate(text: initialText,
+            leftID: sameProjectedText ? projected.leftID : nil,
+            rightID: sameProjectedText ? projected.rightID : nil)]
         selectedIndex = 0
         displayOverrideCandidate = nil
         candidatesLoaded = false
@@ -384,7 +387,8 @@ public struct BunsetsuSessionSegment: Equatable {
         let firstLocalCandidate = values.first(where: { !$0.text.isEmpty })
         let initialTextKey = Array(initialText.utf16)
         let preferredCandidate = hasConvertedDisplay
-            ? values.first(where: { Array($0.text.utf16) == initialTextKey }) ?? BunsetsuSessionCandidate(text: initialText)
+            ? values.first(where: { Array($0.text.utf16) == initialTextKey }) ??
+                candidateRecords.first(where: { Array($0.text.utf16) == initialTextKey }) ?? BunsetsuSessionCandidate(text: initialText)
             : (firstLocalCandidate ?? BunsetsuSessionCandidate(text: reading))
         var seen = Set<[UInt16]>()
         candidateRecords = ([preferredCandidate] + values)

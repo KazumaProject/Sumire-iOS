@@ -328,4 +328,82 @@ final class LearningStoreTests: XCTestCase {
         }
     }
 
+    func testConversionRowsIncludeEveryInputPositionAndPhraseWithoutPrediction() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try LearningStore(url: dir.appendingPathComponent("learning.sqlite"))
+        try store.upsertLearningEntries([
+            .init(input: "あ", output: "FIRST", score: 100, leftID: 1, rightID: 2, lastUsedAt: 1, isPhrase: false),
+            .init(input: "い", output: "SECOND", score: 200, leftID: 2, rightID: 1, lastUsedAt: 2, isPhrase: false),
+            .init(input: "あい", output: "PHRASE", score: 300, leftID: 1, rightID: 1, lastUsedAt: 3, isPhrase: true),
+            .init(input: "いあ", output: "INSIDE", score: 400, leftID: 2, rightID: 2, lastUsedAt: 4, isPhrase: true),
+            .init(input: "あいう", output: "PREDICTION", score: 500, leftID: nil, rightID: nil, lastUsedAt: 5, isPhrase: false)
+        ])
+        let values = try store.entriesForConversion(reading: "あいあ")
+        XCTAssertEqual(Set(values.map(\.text)), ["FIRST", "SECOND", "PHRASE", "INSIDE"])
+        XCTAssertEqual(values.first { $0.text == "INSIDE" }?.leftID, 2)
+        XCTAssertEqual(values.first { $0.text == "INSIDE" }?.rightID, 2)
+        XCTAssertTrue(try store.candidates(reading: "あいあ").isEmpty)
+        XCTAssertTrue(try store.entriesForConversion(reading: "").isEmpty)
+    }
+
+    func testConversionRowsPreserveExactUnicodeAndSupplementarySuffixBoundaries() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try LearningStore(url: dir.appendingPathComponent("learning.sqlite"))
+        let maxScalar = String(Unicode.Scalar(0x10FFFF)!)
+        for (input, output) in [("😀い", "顔伊"), ("か\u{3099}", "分解"), ("が", "合成"), (maxScalar, "末尾")] {
+            try store.upsertLearningEntries([.init(input: input, output: output, score: 10,
+                leftID: nil, rightID: nil, lastUsedAt: 1, isPhrase: false)])
+        }
+        XCTAssertEqual(Set(try store.entriesForConversion(reading: "あ😀いか\u{3099}" + maxScalar).map(\.text)),
+                       ["顔伊", "分解", "末尾"])
+        XCTAssertThrowsError(try store.entriesForConversion(reading: "あ\0い"))
+        XCTAssertThrowsError(try store.entriesForConversion(reading: String(repeating: "あ", count: 8193)))
+    }
+
+    func testConversionRowsDoNotUseLegacyTwentyRowLimit() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let store = try LearningStore(url: dir.appendingPathComponent("learning.sqlite"))
+        try store.upsertLearningEntries((0..<25).map { index in
+            .init(input: "あ", output: "候補\(index)", score: Int32(index),
+                  leftID: nil, rightID: nil, lastUsedAt: Int64(index), isPhrase: false)
+        })
+        XCTAssertEqual(try store.candidates(reading: "あ").count, 20)
+        XCTAssertEqual(try store.entriesForConversion(reading: "ああ").count, 25)
+    }
+
+    func testConversionRowsRejectMatchedCorruptionAndObserveRepairWithoutCache() throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let url = dir.appendingPathComponent("learning.sqlite")
+        let store = try LearningStore(url: url)
+        try store.record(reading: "あ", text: "亜")
+        var db: OpaquePointer?
+        XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+        defer { sqlite3_close(db) }
+        XCTAssertEqual(sqlite3_exec(db, "UPDATE learned SET text=''", nil, nil, nil), SQLITE_OK)
+        XCTAssertThrowsError(try store.entriesForConversion(reading: "いあ"))
+        XCTAssertEqual(sqlite3_exec(db, "UPDATE learned SET text='亜'", nil, nil, nil), SQLITE_OK)
+        XCTAssertEqual(try store.entriesForConversion(reading: "いあ").map(\.text), ["亜"])
+    }
+
+    func testConversionRowsFailClosedOnCountAndByteBudgetOverflow() throws {
+        for oversizedBytes in [false, true] {
+            let dir = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            defer { try? FileManager.default.removeItem(at: dir) }
+            let url = dir.appendingPathComponent("learning.sqlite")
+            let store = try LearningStore(url: url)
+            var db: OpaquePointer?
+            XCTAssertEqual(sqlite3_open(url.path, &db), SQLITE_OK)
+            defer { sqlite3_close(db) }
+            let count = oversizedBytes ? 300 : 10001
+            let text = oversizedBytes ? "replace(hex(zeroblob(30000)),'0','a')||x" : "'候補'||x"
+            let sql = "WITH RECURSIVE n(x) AS (VALUES(1) UNION ALL SELECT x+1 FROM n WHERE x<\(count)) INSERT INTO learned(reading,text,frequency,last_used,byte_count) SELECT 'あ',\(text),1,x,1 FROM n"
+            XCTAssertEqual(sqlite3_exec(db, sql, nil, nil, nil), SQLITE_OK)
+            XCTAssertThrowsError(try store.entriesForConversion(reading: "いあ"))
+        }
+    }
+
 }

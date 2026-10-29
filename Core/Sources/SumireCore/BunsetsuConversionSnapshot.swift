@@ -37,6 +37,8 @@ public struct BunsetsuSnapshotCandidate {
     /// token surfaces and ranges, not a second copy of the source reading.
     public let tokenPath: [BunsetsuToken]?
     public let mappedSplitPositions: [Int]?
+    public let leftID: Int16?
+    public let rightID: Int16?
 
     public init(
         nativeIndex: Int,
@@ -44,7 +46,9 @@ public struct BunsetsuSnapshotCandidate {
         score: Int64,
         identity: BunsetsuCandidateDisplayIdentity,
         tokenPath: [BunsetsuToken]?,
-        mappedSplitPositions: [Int]?
+        mappedSplitPositions: [Int]?,
+        leftID: Int16? = nil,
+        rightID: Int16? = nil
     ) {
         self.nativeIndex = nativeIndex
         self.candidateID = candidateID
@@ -52,6 +56,8 @@ public struct BunsetsuSnapshotCandidate {
         self.identity = identity
         self.tokenPath = tokenPath
         self.mappedSplitPositions = mappedSplitPositions
+        self.leftID = leftID
+        self.rightID = rightID
     }
 }
 
@@ -217,7 +223,8 @@ public struct BunsetsuConversionSnapshot {
                     candidate: first.identity.surface,
                     tokens: [BunsetsuToken(
                         readingRange: NSRange(location: 0, length: readingUTF16Length),
-                        text: first.identity.surface
+                        text: first.identity.surface,
+                        leftID: first.leftID, rightID: first.rightID
                     )]
                 )]
             }

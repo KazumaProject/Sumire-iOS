@@ -16,6 +16,8 @@ struct ConversionCandidate {
     let textMacroID: String?
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
+    let leftID: Int16?
+    let rightID: Int16?
     var displayAnnotation: String? {
         let badge: String
         if let correctedReading, !correctedReading.isEmpty { badge = "[読] " + correctedReading }
@@ -89,7 +91,8 @@ struct ConversionCandidate {
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
-                presentationKind: first.presentationKind, classifiedCategories: categories)
+                presentationKind: first.presentationKind, classifiedCategories: categories,
+                leftID: first.leftID, rightID: first.rightID)
         }
         return merged
     }
@@ -101,7 +104,8 @@ struct ConversionCandidate {
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
-         presentationKind: PresentationKind = .none, classifiedCategories: [String] = []) {
+         presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
+         leftID: Int16? = nil, rightID: Int16? = nil) {
         self.id = id
         self.text = text
         self.score = score
@@ -114,6 +118,8 @@ struct ConversionCandidate {
         self.textMacroID = textMacroID
         self.presentationKind = presentationKind
         self.classifiedCategories = classifiedCategories
+        self.leftID = leftID
+        self.rightID = rightID
     }
 }
 struct ConversionResponse {
@@ -247,7 +253,7 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
-                let warnings = [try state.prepareLearning(reading: reading),
+                let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
                 let warning = warnings.isEmpty ? nil : warnings.joined(separator: " / ")
@@ -300,13 +306,20 @@ final class ConversionService {
                           let consumedRange = Range(range, in: reading) else { continue }
                     var dictionaries: [String] = []
                     var tokens: [BunsetsuToken] = []
+                    var leftID: Int16?, rightID: Int16?
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
+                        var nativeLeft: UInt16 = 0, nativeRight: UInt16 = 0
+                        guard sumire_result_segment_context_ids(result, index, segmentIndex,
+                            &nativeLeft, &nativeRight) == 0 else { throw NativeError("候補接続IDを取得できません") }
+                        if segmentIndex == 0 { leftID = Int16(bitPattern: nativeLeft) }
+                        rightID = Int16(bitPattern: nativeRight)
                         if includeBunsetsu || bunsetsuSearch {
                             tokens.append(BunsetsuToken(
                                 readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
-                                text: Self.copy(segment.text)))
+                                text: Self.copy(segment.text), leftID: Int16(bitPattern: nativeLeft),
+                                rightID: Int16(bitPattern: nativeRight)))
                         }
                         let name = Self.copy(segment.dictionary)
                         if !dictionaries.contains(name) { dictionaries.append(name) }
@@ -346,7 +359,8 @@ final class ConversionService {
                                                           correctedReading: correctedReading.isEmpty ? nil : correctedReading,
                                                           isReadingPrefix: candidateFlags & UInt32(SUMIRE_CANDIDATE_READING_PREFIX) != 0,
                                                           presentationKind: presentationKind,
-                                                          classifiedCategories: classifiedCategories))
+                                                          classifiedCategories: classifiedCategories,
+                                                          leftID: leftID, rightID: rightID))
                 }
                 candidates = ConversionCandidate.mergedForDisplay(candidates)
                 state.lastGeneration = generation
@@ -391,15 +405,20 @@ final class ConversionService {
                 guard sumire_result_segment(result, index, tokenIndex, &token) == 0 else {
                     throw NativeError("文節候補経路を取得できません")
                 }
+                var left: UInt16 = 0, right: UInt16 = 0
+                guard sumire_result_segment_context_ids(result, index, tokenIndex, &left, &right) == 0 else {
+                    throw NativeError("文節接続IDを取得できません")
+                }
                 return BunsetsuToken(readingRange: NSRange(location: Int(token.start_utf16), length: Int(token.length_utf16)),
-                                     text: copy(token.text))
+                    text: copy(token.text), leftID: Int16(bitPattern: left), rightID: Int16(bitPattern: right))
             }
             let mapped: [Int]? = hasMapping == 0 ? nil : try boundaries(sumire_result_bunsetsu_count(result, index)) {
                 sumire_result_bunsetsu_boundary(result, index, $0, $1)
             }
             return BunsetsuSnapshotCandidate(nativeIndex: index, candidateID: row.candidate_id, score: row.score,
                 identity: BunsetsuCandidateDisplayIdentity(surface: copy(row.text), readingUTF16Length: Int(row.length_utf16)),
-                tokenPath: tokens.isEmpty ? nil : tokens, mappedSplitPositions: mapped)
+                tokenPath: tokens.isEmpty ? nil : tokens, mappedSplitPositions: mapped,
+                leftID: tokens.first?.leftID, rightID: tokens.last?.rightID)
         }
         return BunsetsuConversionSnapshot(requestGeneration: generation, reading: reading,
             splitPatterns: patterns, primarySplitPositions: primary, candidates: candidates)
@@ -444,7 +463,7 @@ final class ConversionService {
             guard enabled else { state.cancelLearning(); return }
             state.appendLearning([LearningFragment(reading: String(state.lastReading[range]),
                 output: selected.text, candidateScore: Int32(clamping: selected.score),
-                candidateIndex: Int32(clamping: nativeRank), leftID: nil, rightID: nil)],
+                candidateIndex: Int32(clamping: nativeRank), leftID: selected.leftID, rightID: selected.rightID)],
                 input: state.lastReading, remaining: remaining ?? "", learnFirst: learnFirst, onNotice: onNotice)
         }
     }
@@ -564,12 +583,19 @@ final class ConversionService {
                 DispatchQueue.main.async { onNotice(error.localizedDescription) }
             }
         }
-        func prepareLearning(reading: String) throws -> String? {
+        func prepareLearning(reading: String, english: Bool) throws -> String? {
             var entries: [LearningStore.Entry] = []
-            if let url = learningURL, learningFailure == nil {
+            // Android pauses writes, not learned suggestions (IMEService
+            // learnedRepositoryForSuggestion / isLearningWriteEnabled).
+            if let url = learningURL {
                 do {
                     if learning == nil { learning = try LearningStore(url: url) }
-                    entries = try learning!.candidates(reading: reading)
+                    entries = try english ? learning!.candidates(reading: reading) :
+                        learning!.entriesForConversion(reading: reading).filter {
+                            LearningEligibilityPolicy.isEligible(input: $0.reading, output: $0.text,
+                                allowJapaneseWithSymbolsAndNumbers: true)
+                        }
+                    learningFailure = nil
                 } catch { learningFailure = error.localizedDescription }
             }
             var bytes: [CChar] = []
@@ -582,19 +608,44 @@ final class ConversionService {
                 offsets.append((start, middle - start, middle, bytes.count - middle))
             }
             var error = [CChar](repeating: 0, count: 1024)
-            let status = bytes.withUnsafeBufferPointer { buffer in
+            let status = bytes.withUnsafeBufferPointer { buffer -> Int32 in
+                if english {
+                    // Preserve the existing English exact/frequency overlay.
+                    let records = entries.enumerated().map { index, entry in
+                        let range = offsets[index]
+                        return sumire_personal_entry(
+                            reading: sumire_string(data: buffer.baseAddress?.advanced(by: range.0), size: range.1),
+                            text: sumire_string(data: buffer.baseAddress?.advanced(by: range.2), size: range.3),
+                            context_id: 0, score: -20000 - Int32(min(100, entry.count)) * 100, kind: 2)
+                    }
+                    return records.withUnsafeBufferPointer {
+                        sumire_session_set_learning(session, $0.baseAddress, $0.count, &error, error.count)
+                    }
+                }
                 let records = entries.enumerated().map { index, entry in
                     let range = offsets[index]
-                    return sumire_personal_entry(
+                    // Fixed Android GraphBuilder: each missing endpoint uses
+                    // 1851 independently. The C API checks the actual matrix;
+                    // neither this fallback nor failure rewrites stored nils.
+                    return sumire_learning_entry(
                         reading: sumire_string(data: buffer.baseAddress?.advanced(by: range.0), size: range.1),
                         text: sumire_string(data: buffer.baseAddress?.advanced(by: range.2), size: range.3),
-                        context_id: 0, score: -20000 - Int32(min(100, entry.count)) * 100, kind: 2)
+                        left_id: UInt16(bitPattern: entry.leftID ?? 1851),
+                        right_id: UInt16(bitPattern: entry.rightID ?? 1851), score: entry.score)
                 }
                 return records.withUnsafeBufferPointer {
-                    sumire_session_set_learning(session, $0.baseAddress, $0.count, &error, error.count)
+                    sumire_session_set_learning_entries(session, $0.baseAddress, $0.count, &error, error.count)
                 }
             }
-            guard status == 0 else { throw NativeError(String(cString: error)) }
+            if status != 0 {
+                let message = String(cString: error)
+                // An invalid replacement intentionally leaves the old C overlay
+                // intact. Clear it before any conversion can see stale rows.
+                guard sumire_session_set_learning_entries(session, nil, 0, &error, error.count) == 0 else {
+                    throw NativeError(String(cString: error))
+                }
+                learningFailure = message
+            }
             return learningFailure
         }
         private var englishLoaded = false
