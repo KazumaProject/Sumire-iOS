@@ -112,6 +112,20 @@ final class PhysicalKeyboardAlphabeticConversionTests: XCTestCase {
         )
     }
 
+    func testCustomEqualLengthAliasOrderControlsF9AndF10Romaji() {
+        let rules: [String: RomajiRule] = [
+            "hu": .init("ふ", 2),
+            "fu": .init("ふ", 2)
+        ]
+        let huFirst = RomajiConverter(rules: rules, ruleOrder: ["hu", "fu"])
+        let fuFirst = RomajiConverter(rules: rules, ruleOrder: ["fu", "hu"])
+
+        XCTAssertEqual(PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .half, using: huFirst), "hu")
+        XCTAssertEqual(PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .full, using: huFirst), "ｈｕ")
+        XCTAssertEqual(PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .half, using: fuFirst), "fu")
+        XCTAssertEqual(PhysicalKeyboardAlphabeticConversion.convert("ふ", to: .full, using: fuFirst), "ｆｕ")
+    }
+
     func testEmptyInputRemainsEmpty() throws {
         XCTAssertEqual(
             PhysicalKeyboardAlphabeticConversion.convert("", to: .full, using: try converter()),
