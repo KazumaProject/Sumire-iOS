@@ -4,26 +4,83 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
     public var id = UUID()
     public var name: String
     public var rules: [String: RomajiRule]
+    /// JSON object order used by Android when reverse aliases have equal length.
+    public var ruleOrder: [String]
+    public var isDeletable: Bool
     public var autoSokuon: Bool
     public var autoN: Bool
-    public init(name: String, rules: [String: RomajiRule], autoSokuon: Bool = true, autoN: Bool = true) {
-        self.name = name; self.rules = rules; self.autoSokuon = autoSokuon; self.autoN = autoN
+    public init(
+        name: String,
+        rules: [String: RomajiRule],
+        ruleOrder: [String]? = nil,
+        isDeletable: Bool = true,
+        autoSokuon: Bool = true,
+        autoN: Bool = true
+    ) {
+        self.name = name
+        self.rules = rules
+        self.ruleOrder = Self.completedRuleOrder(ruleOrder, for: rules)
+        self.isDeletable = isDeletable
+        self.autoSokuon = autoSokuon
+        self.autoN = autoN
     }
-    public var converter: RomajiConverter { RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN) }
+
+    private enum CodingKeys: String, CodingKey {
+        case id, name, rules, ruleOrder, isDeletable, autoSokuon, autoN
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
+        name = try container.decode(String.self, forKey: .name)
+        rules = try container.decode([String: RomajiRule].self, forKey: .rules)
+        ruleOrder = try container.decodeIfPresent([String].self, forKey: .ruleOrder) ?? Self.completedRuleOrder(nil, for: rules)
+        isDeletable = try container.decodeIfPresent(Bool.self, forKey: .isDeletable) ?? true
+        autoSokuon = try container.decodeIfPresent(Bool.self, forKey: .autoSokuon) ?? true
+        autoN = try container.decodeIfPresent(Bool.self, forKey: .autoN) ?? true
+    }
+    public var converter: RomajiConverter {
+        RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN, ruleOrder: ruleOrder)
+    }
+    public mutating func setRule(_ rule: RomajiRule, for key: String) {
+        if rules[key] == nil { ruleOrder.append(key) }
+        rules[key] = rule
+    }
+    public mutating func removeRule(for key: String) {
+        rules.removeValue(forKey: key)
+        ruleOrder.removeAll { $0 == key }
+    }
     public func validate() throws {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.utf8.count <= 256,
-              rules.count <= 10000 else { throw PersonalDataError("ローマ字設定の名前または規則数が不正です") }
+              rules.count <= 10000,
+              ruleOrder.count == rules.count,
+              Set(ruleOrder).count == ruleOrder.count,
+              Set(ruleOrder) == Set(rules.keys) else {
+            throw PersonalDataError("ローマ字設定の名前、規則順または規則数が不正です")
+        }
         for (key, rule) in rules {
             guard !key.isEmpty, key.utf16.count <= 64, rule.first.utf8.count <= 4096,
                   !key.contains("\0"), !rule.first.contains("\0"),
-                  (1...key.utf16.count).contains(rule.second) else {
-                throw PersonalDataError("規則「\(key.prefix(64))」が不正です。消費文字数は入力のUTF-16長以内の正数にしてください")
+                  (1...Int(Int32.max)).contains(rule.second) else {
+                throw PersonalDataError("規則「\(key.prefix(64))」が不正です。消費文字数は32-bit正数にしてください")
             }
-            let boundary = key.utf16.index(key.utf16.startIndex, offsetBy: rule.second)
-            guard String.Index(boundary, within: key) != nil else {
-                throw PersonalDataError("規則「\(key.prefix(64))」の消費文字数が文字の途中を指しています")
+            if rule.second <= key.utf16.count {
+                let boundary = key.utf16.index(key.utf16.startIndex, offsetBy: rule.second)
+                guard String.Index(boundary, within: key) != nil else {
+                    throw PersonalDataError("規則「\(key.prefix(64))」の消費文字数が文字の途中を指しています")
+                }
             }
         }
+    }
+
+    private static func completedRuleOrder(_ requested: [String]?, for rules: [String: RomajiRule]) -> [String] {
+        var seen = Set<String>()
+        var result = (requested ?? []).filter { rules[$0] != nil && seen.insert($0).inserted }
+        let remaining = rules.keys.filter { seen.insert($0).inserted }.sorted {
+            Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16))
+        }
+        result.append(contentsOf: remaining)
+        return result
     }
 }
 public struct RomajiLibrary: Codable, Equatable {
@@ -61,7 +118,6 @@ public struct RomajiLibrary: Codable, Equatable {
     }
     public static func importAndroid(_ data: Data) throws -> [RomajiProfile] {
         let preview = try RomajiImportPreview.parse(data)
-        guard preview.errors.isEmpty else { throw PersonalDataError(preview.errors.joined(separator: "\n")) }
         return preview.profiles
     }
 }
@@ -71,20 +127,440 @@ public struct RomajiImportPreview {
     public let errors: [String]
     public static func parse(_ data: Data) throws -> Self {
         guard data.count <= RomajiLibrary.maximumBytes else { throw PersonalDataError("JSONが大きすぎます") }
-        guard let rows = try JSONSerialization.jsonObject(with: data) as? [Any], rows.count <= 100 else {
+        let normalizedData = data.starts(with: [0xEF, 0xBB, 0xBF]) ? Data(data.dropFirst(3)) : data
+        let root = try AndroidRomajiJSONParser.parse(normalizedData)
+        let rows: [(Int, AndroidRomajiJSONValue)]
+        switch root {
+        case .array(let values):
+            guard values.count <= 100 else {
+                throw PersonalDataError("100件以下のローマ字設定JSON配列を指定してください")
+            }
+            rows = values.enumerated().compactMap { index, value in
+                guard case .object = value else { return nil }
+                return (index, value)
+            }
+        case .object(let fields):
+            let wrapperKeys = ["maps", "romajiMaps", "romaji_maps", "items", "list"]
+            if let wrapped = wrapperKeys.lazy.compactMap({ key in
+                fields.first(where: { $0.0 == key })?.1.arrayValue
+            }).first {
+                guard wrapped.count <= 100 else {
+                    throw PersonalDataError("100件以下のローマ字設定JSON配列を指定してください")
+                }
+                rows = wrapped.enumerated().compactMap { index, value in
+                    guard case .object = value else { return nil }
+                    return (index, value)
+                }
+            } else {
+                rows = [(0, root)]
+            }
+        default:
+            throw PersonalDataError("100件以下のローマ字設定JSON配列またはオブジェクトを指定してください")
+        }
+        guard rows.count <= 100 else {
             throw PersonalDataError("100件以下のローマ字設定JSON配列を指定してください")
         }
         var profiles: [RomajiProfile] = []
         var errors: [String] = []
-        for (index, row) in rows.enumerated() {
+        for (index, row) in rows {
             do {
-                let data = try JSONSerialization.data(withJSONObject: row, options: [.fragmentsAllowed])
-                let map = try JSONDecoder().decode(RomajiMap.self, from: data)
-                let profile = RomajiProfile(name: map.name, rules: map.mapData, autoSokuon: map.autoSokuon, autoN: map.autoN)
+                guard case .object(let fields) = row else {
+                    throw PersonalDataError("オブジェクトではありません")
+                }
+                let name = firstString(in: fields, keys: ["name", "mapName", "title"])
+                guard let name, !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    throw PersonalDataError("名前がありません")
+                }
+
+                var rules: [String: RomajiRule] = [:]
+                var ruleOrder: [String] = []
+                for key in ["mapData", "map", "data"] {
+                    guard let value = fields.first(where: { $0.0 == key })?.1 else { continue }
+                    let parsed = try parseRules(from: value)
+                    if !parsed.rules.isEmpty {
+                        rules = parsed.rules
+                        ruleOrder = parsed.order
+                        break
+                    }
+                }
+                guard !rules.isEmpty else { throw PersonalDataError("有効な規則がありません") }
+
+                let profile = RomajiProfile(
+                    name: name,
+                    rules: rules,
+                    ruleOrder: ruleOrder,
+                    isDeletable: readBoolean(in: fields, key: "isDeletable") ?? true,
+                    autoSokuon: readBoolean(in: fields, key: "autoSokuon") ?? true,
+                    autoN: readBoolean(in: fields, key: "autoN") ?? true
+                )
                 try profile.validate()
                 profiles.append(profile)
             } catch { errors.append("\(index + 1)件目: \(error.localizedDescription)") }
         }
         return Self(profiles: profiles, errors: errors)
     }
+
+    private static func firstString(in fields: [(String, AndroidRomajiJSONValue)], keys: [String]) -> String? {
+        for key in keys {
+            if let value = fields.first(where: { $0.0 == key })?.1.stringValue { return value }
+        }
+        return nil
+    }
+
+    private static func readBoolean(in fields: [(String, AndroidRomajiJSONValue)], key: String) -> Bool? {
+        guard let value = fields.first(where: { $0.0 == key })?.1 else { return nil }
+        switch value {
+        case .boolean(let result): return result
+        case .string("true"): return true
+        case .string("false"): return false
+        default: return nil
+        }
+    }
+
+    private static func parseRules(from value: AndroidRomajiJSONValue) throws -> (rules: [String: RomajiRule], order: [String]) {
+        let fields: [(String, AndroidRomajiJSONValue)]
+        switch value {
+        case .object(let object):
+            fields = object
+        case .string(let json):
+            guard let nested = try? AndroidRomajiJSONParser.parse(Data(json.utf8)) else { return ([:], []) }
+            guard case .object(let object) = nested else { return ([:], []) }
+            fields = object
+        default:
+            return ([:], [])
+        }
+
+        let parsed = try parseRuleEntries(fields)
+        if !parsed.rules.isEmpty { return parsed }
+
+        // Android has a second, compact-map fallback for object-valued maps.
+        // It accepts decimal numeric strings here; its normal Room converter
+        // only accepts integer strings.
+        return try parseCompactRuleEntries(fields)
+    }
+
+    private static func parseRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> (rules: [String: RomajiRule], order: [String]) {
+        var rules: [String: RomajiRule] = [:]
+        var order: [String] = []
+        for (key, value) in fields {
+            guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  case .object(let ruleFields) = value else { continue }
+            let kana = firstString(in: ruleFields, keys: ["kana", "first"]) ??
+                ruleFields.compactMap { $0.1.stringValue }.first(where: { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty })
+            guard let kana, !kana.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+
+            let consume = readInteger(in: ruleFields, key: "consume") ??
+                readInteger(in: ruleFields, key: "second") ??
+                ruleFields.compactMap { $0.1.androidIntegerValue(allowDecimalString: false) }.first ??
+                key.utf16.count
+            if rules[key] == nil { order.append(key) }
+            rules[key] = RomajiRule(kana, max(consume, 1))
+            guard rules.count <= 10_000 else { throw PersonalDataError("ローマ字規則が多すぎます") }
+        }
+        return (rules, order)
+    }
+
+    private static func parseCompactRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> (rules: [String: RomajiRule], order: [String]) {
+        var rules: [String: RomajiRule] = [:]
+        var order: [String] = []
+        for (key, value) in fields {
+            guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+                  case .object(let ruleFields) = value else { continue }
+            let kana = firstString(in: ruleFields, keys: ["c", "kana"])
+            guard let kana, !kana.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
+            let consume = readInteger(in: ruleFields, key: "d", allowDecimalString: true) ??
+                readInteger(in: ruleFields, key: "consume", allowDecimalString: true) ?? key.utf16.count
+            if rules[key] == nil { order.append(key) }
+            rules[key] = RomajiRule(kana, max(consume, 1))
+            guard rules.count <= 10_000 else { throw PersonalDataError("ローマ字規則が多すぎます") }
+        }
+        return (rules, order)
+    }
+
+    private static func readInteger(
+        in fields: [(String, AndroidRomajiJSONValue)],
+        key: String,
+        allowDecimalString: Bool = false
+    ) -> Int? {
+        fields.first(where: { $0.0 == key })?.1.androidIntegerValue(allowDecimalString: allowDecimalString)
+    }
+}
+
+/// An ordered JSON tree used to match Android's insertion-ordered Gson objects.
+private indirect enum AndroidRomajiJSONValue {
+    case object([(String, AndroidRomajiJSONValue)])
+    case array([AndroidRomajiJSONValue])
+    case string(String)
+    case number(String)
+    case boolean(Bool)
+    case null
+
+    var arrayValue: [AndroidRomajiJSONValue]? {
+        guard case .array(let values) = self else { return nil }
+        return values
+    }
+
+    var stringValue: String? {
+        guard case .string(let value) = self else { return nil }
+        return value
+    }
+
+    func androidIntegerValue(allowDecimalString: Bool) -> Int? {
+        switch self {
+        case .number(let value):
+            return Self.androidIntegerValue(forJSONNumber: value)
+        case .string(let value):
+            if let integer = Int32(value) { return Int(integer) }
+            guard allowDecimalString, let number = Double(value), number.isFinite else { return nil }
+            if number >= Double(Int32.max) { return Int(Int32.max) }
+            if number <= Double(Int32.min) { return Int(Int32.min) }
+            return Int(Int32(number))
+        default:
+            return nil
+        }
+    }
+
+    /// Gson's LazilyParsedNumber.intValue() narrows integer and BigDecimal values to 32 bits.
+    /// Keep the JSON number's decimal digits intact so values above Double's exact range do not
+    /// change before that narrowing step.
+    private static func androidIntegerValue(forJSONNumber value: String) -> Int? {
+        let bytes = Array(value.utf8)
+        // Gson 2.13.1's BigDecimal fallback rejects number strings longer than 10,000 chars.
+        guard !bytes.isEmpty, bytes.count <= 10_000 else { return nil }
+
+        var index = 0
+        let isNegative = bytes[index] == 0x2D
+        if isNegative { index += 1 }
+        guard index < bytes.count else { return nil }
+
+        var digits: [UInt8] = []
+        if bytes[index] == 0x30 {
+            digits.append(bytes[index])
+            index += 1
+            // JSON numbers cannot have leading zeroes.
+            if index < bytes.count, (0x30...0x39).contains(bytes[index]) { return nil }
+        } else {
+            guard (0x31...0x39).contains(bytes[index]) else { return nil }
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                digits.append(bytes[index])
+                index += 1
+            }
+        }
+
+        var fractionalDigitCount = 0
+        if index < bytes.count, bytes[index] == 0x2E {
+            index += 1
+            let fractionStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                digits.append(bytes[index])
+                index += 1
+            }
+            guard index > fractionStart else { return nil }
+            fractionalDigitCount = index - fractionStart
+        }
+
+        var exponent = 0
+        if index < bytes.count, (bytes[index] == 0x65 || bytes[index] == 0x45) {
+            index += 1
+            var exponentIsNegative = false
+            if index < bytes.count, (bytes[index] == 0x2B || bytes[index] == 0x2D) {
+                exponentIsNegative = bytes[index] == 0x2D
+                index += 1
+            }
+            let exponentStart = index
+            var magnitude = 0
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                magnitude = min(20_001, magnitude * 10 + Int(bytes[index] - 0x30))
+                index += 1
+            }
+            guard index > exponentStart, magnitude <= 20_000 else { return nil }
+            exponent = exponentIsNegative ? -magnitude : magnitude
+        }
+        guard index == bytes.count, !digits.isEmpty else { return nil }
+
+        // Gson's bounded BigDecimal fallback rejects absolute scales of 10,000 or more.
+        let scale = fractionalDigitCount - exponent
+        guard (-9_999...9_999).contains(scale) else { return nil }
+
+        // BigDecimal.intValue() truncates toward zero, then returns the low 32 bits.
+        let discardedDigits = max(scale, 0)
+        let retainedDigitCount = max(digits.count - discardedDigits, 0)
+        let modulus: UInt64 = 4_294_967_296
+        var remainder: UInt64 = 0
+        for byte in digits.prefix(retainedDigitCount) {
+            remainder = (remainder * 10 + UInt64(byte - 0x30)) % modulus
+        }
+        if scale < 0 {
+            var power = -scale
+            var factor: UInt64 = 10
+            while power > 0 {
+                if power & 1 == 1 { remainder = (remainder * factor) % modulus }
+                factor = (factor * factor) % modulus
+                power >>= 1
+            }
+        }
+        if isNegative, remainder != 0 { remainder = modulus - remainder }
+        return Int(Int32(bitPattern: UInt32(remainder)))
+    }
+
+}
+
+private struct AndroidRomajiJSONParser {
+    private let bytes: [UInt8]
+    private let decoder = JSONDecoder()
+    private var index = 0
+    private var parsedValueCount = 0
+    private static let maximumDepth = 256
+    private static let maximumValues = 100_000
+
+    private init(data: Data) { bytes = Array(data) }
+
+    static func parse(_ data: Data) throws -> AndroidRomajiJSONValue {
+        var parser = Self(data: data)
+        parser.skipWhitespace()
+        let value = try parser.parseValue(depth: 0)
+        parser.skipWhitespace()
+        guard parser.index == parser.bytes.count else { throw PersonalDataError("JSON形式が不正です") }
+        return value
+    }
+
+    private mutating func parseValue(depth: Int) throws -> AndroidRomajiJSONValue {
+        guard depth <= Self.maximumDepth, index < bytes.count else { throw PersonalDataError("JSON形式が不正です") }
+        parsedValueCount += 1
+        guard parsedValueCount <= Self.maximumValues else {
+            throw PersonalDataError("JSONの要素数が多すぎます")
+        }
+        switch bytes[index] {
+        case 0x7B: return try parseObject(depth: depth)
+        case 0x5B: return try parseArray(depth: depth)
+        case 0x22: return .string(try parseString())
+        case 0x74:
+            try consumeLiteral([0x74, 0x72, 0x75, 0x65])
+            return .boolean(true)
+        case 0x66:
+            try consumeLiteral([0x66, 0x61, 0x6C, 0x73, 0x65])
+            return .boolean(false)
+        case 0x6E:
+            try consumeLiteral([0x6E, 0x75, 0x6C, 0x6C])
+            return .null
+        default:
+            return try parseNumber()
+        }
+    }
+
+    private mutating func parseObject(depth: Int) throws -> AndroidRomajiJSONValue {
+        index += 1
+        skipWhitespace()
+        if consume(0x7D) { return .object([]) }
+
+        var fields: [(String, AndroidRomajiJSONValue)] = []
+        var fieldIndices: [String: Int] = [:]
+        while true {
+            guard index < bytes.count, bytes[index] == 0x22 else { throw PersonalDataError("JSON形式が不正です") }
+            let key = try parseString()
+            skipWhitespace()
+            guard consume(0x3A) else { throw PersonalDataError("JSON形式が不正です") }
+            skipWhitespace()
+            let value = try parseValue(depth: depth + 1)
+            if let existing = fieldIndices[key] {
+                fields[existing].1 = value
+            } else {
+                fieldIndices[key] = fields.count
+                fields.append((key, value))
+            }
+            skipWhitespace()
+            if consume(0x7D) { return .object(fields) }
+            guard consume(0x2C) else { throw PersonalDataError("JSON形式が不正です") }
+            skipWhitespace()
+        }
+    }
+
+    private mutating func parseArray(depth: Int) throws -> AndroidRomajiJSONValue {
+        index += 1
+        skipWhitespace()
+        if consume(0x5D) { return .array([]) }
+
+        var values: [AndroidRomajiJSONValue] = []
+        while true {
+            values.append(try parseValue(depth: depth + 1))
+            skipWhitespace()
+            if consume(0x5D) { return .array(values) }
+            guard consume(0x2C) else { throw PersonalDataError("JSON形式が不正です") }
+            skipWhitespace()
+        }
+    }
+
+    private mutating func parseString() throws -> String {
+        let start = index
+        guard consume(0x22) else { throw PersonalDataError("JSON形式が不正です") }
+        while index < bytes.count {
+            switch bytes[index] {
+            case 0x22:
+                index += 1
+                return try decoder.decode(String.self, from: Data(bytes[start..<index]))
+            case 0x5C:
+                index += 2
+            default:
+                index += 1
+            }
+        }
+        throw PersonalDataError("JSON形式が不正です")
+    }
+
+    private mutating func parseNumber() throws -> AndroidRomajiJSONValue {
+        let start = index
+        _ = consume(0x2D) // optional minus sign
+        guard index < bytes.count else { throw PersonalDataError("JSON形式が不正です") }
+
+        if consume(0x30) {
+            if index < bytes.count, (0x30...0x39).contains(bytes[index]) {
+                throw PersonalDataError("JSON形式が不正です")
+            }
+        } else {
+            guard (0x31...0x39).contains(bytes[index]) else { throw PersonalDataError("JSON形式が不正です") }
+            index += 1
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+        }
+
+        if consume(0x2E) {
+            let fractionStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+            guard index > fractionStart else { throw PersonalDataError("JSON形式が不正です") }
+        }
+
+        if index < bytes.count, (bytes[index] == 0x65 || bytes[index] == 0x45) {
+            index += 1
+            if index < bytes.count, (bytes[index] == 0x2B || bytes[index] == 0x2D) { index += 1 }
+            let exponentStart = index
+            while index < bytes.count, (0x30...0x39).contains(bytes[index]) { index += 1 }
+            guard index > exponentStart else { throw PersonalDataError("JSON形式が不正です") }
+        }
+
+        let token = String(decoding: bytes[start..<index], as: UTF8.self)
+        return .number(token)
+    }
+
+    private mutating func consumeLiteral(_ literal: [UInt8]) throws {
+        guard index + literal.count <= bytes.count,
+              Array(bytes[index..<(index + literal.count)]) == literal else {
+            throw PersonalDataError("JSON形式が不正です")
+        }
+        index += literal.count
+    }
+
+    private mutating func consume(_ byte: UInt8) -> Bool {
+        guard index < bytes.count, bytes[index] == byte else { return false }
+        index += 1
+        return true
+    }
+
+    private mutating func skipWhitespace() {
+        while index < bytes.count {
+            switch bytes[index] {
+            case 0x20, 0x09, 0x0A, 0x0D: index += 1
+            default: return
+            }
+        }
+    }
+
 }
