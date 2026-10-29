@@ -21,7 +21,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -119,7 +119,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +138,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,7 +155,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
