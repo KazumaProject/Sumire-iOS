@@ -9,6 +9,7 @@ final class KeyboardViewController: UIInputViewController {
     private var changing = false
     private var keyboardHeight: NSLayoutConstraint!
     private var settingsAccess: KeyboardSettingsAccess?
+    private var physicalKeyboardShortcuts: [PhysicalKeyboardShortcutItem] = []
     override func viewDidLoad() {
         super.viewDidLoad()
         ProcessMemory.record("extension.loaded")
@@ -97,7 +98,9 @@ final class KeyboardViewController: UIInputViewController {
         expectedContext = context()
         let access = KeyboardSettings.extensionAccess(hasFullAccess: hasFullAccess)
         settingsAccess = access
+        access.reload()
         let defaults = access.readDefaults
+        loadPhysicalKeyboardShortcuts(from: defaults)
         surface.candidateBar.clipboardAccessAllowed = hasFullAccess
         surface.candidateBar.automaticallyPreviewClipboard = defaults.bool(forKey: "clipboardAutomaticPreview")
         surface.settingsDefaults = defaults
@@ -131,6 +134,50 @@ final class KeyboardViewController: UIInputViewController {
         surface.candidateBar.reloadToolbarSettings(defaults: defaults)
         keyboardHeight.constant = surface.requestedHeight
         ProcessMemory.record("extension.visible")
+    }
+
+    private func loadPhysicalKeyboardShortcuts(from defaults: UserDefaults) {
+        guard defaults.object(forKey: PhysicalKeyboardShortcutStore.storageKey) != nil else {
+            // Android seeds its shortcut catalog on first use. The containing app's
+            // settings screen normally persists these rows; retain the same defaults
+            // before that screen has been opened without writing shared settings here.
+            physicalKeyboardShortcuts = PhysicalKeyboardShortcutDefaults.items
+            return
+        }
+        do {
+            physicalKeyboardShortcuts = try PhysicalKeyboardShortcutStore.load(defaults: defaults).orderedItems
+        } catch {
+            physicalKeyboardShortcuts = []
+            surface.showDataNotice(error.localizedDescription)
+        }
+    }
+
+    private func physicalShortcut(for key: UIKey) -> PhysicalKeyboardShortcutItem? {
+        let modifiers = key.modifierFlags
+        return PhysicalKeyboardShortcutEventResolver.match(
+            shortcuts: physicalKeyboardShortcuts,
+            currentContext: surface.physicalKeyboardShortcutContext,
+            hidUsage: Int(key.keyCode.rawValue),
+            // UIKit does not expose Android's hardware scan code. The shared matcher
+            // consequently accepts only wildcard bindings when a scan code is absent.
+            scanCode: nil,
+            ctrl: modifiers.contains(.control),
+            shift: modifiers.contains(.shift),
+            alt: modifiers.contains(.alternate),
+            meta: modifiers.contains(.command)
+        )
+    }
+
+    override func pressesBegan(_ presses: Set<UIPress>, with event: UIPressesEvent?) {
+        guard presses.count == 1,
+              let key = presses.first?.key,
+              let match = physicalShortcut(for: key),
+              let action = PhysicalKeyboardShortcutAction.fromID(match.actionID),
+              surface.performPhysicalKeyboardShortcut(action)
+        else {
+            super.pressesBegan(presses, with: event)
+            return
+        }
     }
     private func context() -> Context { context(for: textDocumentProxy) }
     private func context(for proxy: UITextDocumentProxy) -> Context {
