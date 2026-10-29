@@ -109,7 +109,8 @@ public struct AndroidPreferenceBackup: Equatable {
         "default_emoji_skin_tone_preference": .text(EmojiSkinTone.settingsKey, values:
             Dictionary(uniqueKeysWithValues: EmojiSkinTone.allCases.map { ($0.rawValue, $0.rawValue) })
         ),
-        "sumire_flick_input_mode_preference": .threeStepInputMode
+        "sumire_flick_input_mode_preference": .threeStepInputMode,
+        "sumire_english_qwerty_preference": .boolean(SumireModePreferences.englishQWERTYKey)
     ]
     /// Defaults returned by Android Sumire when a preference is absent from
     /// SharedPreferences. Android restore replaces the preference store, so an
@@ -125,7 +126,8 @@ public struct AndroidPreferenceBackup: Equatable {
         "clipboard_unpinned_retention_hours_preference": .number(1),
         "custom_direct_input_replace_composing_preference": .boolean(false),
         "symbol_mode_preference": .text(SymbolKeyboardMode.emoji.rawValue),
-        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.standard.rawValue)
+        "default_emoji_skin_tone_preference": .text(EmojiSkinTone.standard.rawValue),
+        "sumire_english_qwerty_preference": .boolean(false)
     ]
 
     /// Returns nil for a JSON document that is not shaped like Android

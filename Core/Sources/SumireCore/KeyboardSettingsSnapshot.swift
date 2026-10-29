@@ -18,7 +18,7 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
     }
     private static var rules: [String: Rule] {
         var result: [String: Rule] = [:]
-        for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "bunsetsuSeparation", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate"] {
+        for key in ["clipboardAutomaticPreview", "liveConversion", "omissionSearch", "bunsetsuSeparation", "englishReadingEnabled", "learningEnabled", "learnFirstCandidate", SumireModePreferences.englishQWERTYKey] {
             result[key] = .boolean
         }
         result[CustomInputModeStore.rememberKey] = .boolean

@@ -245,6 +245,7 @@ final class KeyboardSurface: UIInputView {
             // Persist the replacement so re-enabling a removed layout cannot restore a stale selection.
             rememberKeyboard()
         }
+        if sumireEnglishQWERTYVisible { resetEnglishQWERTYState() }
         rebuild()
     }
     var personalLexicon = PersonalLexicon() {
@@ -398,7 +399,10 @@ final class KeyboardSurface: UIInputView {
     }
     private var customEnglishVisible: Bool { customProxyVisible && customPresentation == .english }
     private var customNumberVisible: Bool { customProxyVisible && customPresentation == .number }
-    private var displayedInputMode: InputMode { customEnglishVisible ? .english : inputMode }
+    private var sumireEnglishQWERTYVisible: Bool {
+        inputMode == .sumire && sumireMode == .english && settingsDefaults.bool(forKey: SumireModePreferences.englishQWERTYKey)
+    }
+    private var displayedInputMode: InputMode { customEnglishVisible || sumireEnglishQWERTYVisible ? .english : inputMode }
     private func setCustomEnglishPresentation(_ visible: Bool) {
         beforeInput?(); tapCycle.reset()
         if !visible { customShift = .off }
@@ -684,6 +688,7 @@ final class KeyboardSurface: UIInputView {
         stack.addArrangedSubview(status)
         stack.addArrangedSubview(candidateBar)
         if customEnglishVisible { addQwertyGrid(palette: palette); return }
+        if sumireEnglishQWERTYVisible { addQwertyGrid(palette: palette); return }
         if customNumberVisible {
             do { addCustomGrid(palette: palette, presentation: try CustomNumberLayout.layout()) }
             catch { showDataNotice(error.localizedDescription) }
@@ -970,7 +975,7 @@ final class KeyboardSurface: UIInputView {
     private func addQwertyGrid(palette: KeyboardPalette) {
         let japanese = inputMode == .romaji
         let page = japanese ? romajiPage : englishPage
-        let pageColumn = japanese || customEnglishVisible ? 1 : 0
+        let pageColumn = japanese || customEnglishVisible || sumireEnglishQWERTYVisible ? 1 : 0
         let characters: [String]
         switch page {
         case 1: characters = japanese ? ["1234567890", "-/:@()「」￥&", "。、?!'"] : ["1234567890", "-/:;()¥&@\"", ".,?!'"]
@@ -979,7 +984,7 @@ final class KeyboardSurface: UIInputView {
         }
         var values = characters.map { $0.map(String.init) }
         values[2] = [page == 0 ? "⇧" : page == 1 ? "#+=" : "123"] + values[2] + ["⌫"]
-        values.append((customEnglishVisible ? ["あa1"] : japanese ? [romajiLatin ? "aあ" : "あa"] : []) + [page == 0 ? "123" : "ABC", "🌐", "空白", "改行"])
+        values.append((customEnglishVisible ? ["あa1"] : sumireEnglishQWERTYVisible ? ["あ"] : japanese ? [romajiLatin ? "aあ" : "あa"] : []) + [page == 0 ? "123" : "ABC", "🌐", "空白", "改行"])
         let rows = values.enumerated().map { row, values in
             values.enumerated().map { column, value -> UIView in
                 let special = row == 3 || row == 2 && (column == 0 || column == values.count - 1)
@@ -1008,6 +1013,11 @@ final class KeyboardSurface: UIInputView {
                     key.accessibilityIdentifier = "custom-input-mode-return"
                     key.accessibilityLabel = "カスタム配列に戻る"
                     key.addAction(UIAction { [weak self] _ in self?.setCustomEnglishPresentation(false) }, for: .touchUpInside)
+                }
+                else if sumireEnglishQWERTYVisible && row == 3 && column == 0 {
+                    key.accessibilityIdentifier = "sumire-qwerty-return"
+                    key.accessibilityLabel = "日本語モードへ戻る"
+                    key.addAction(UIAction { [weak self] _ in self?.executeSpecialAction(.switchKana) }, for: .touchUpInside)
                 }
                 else if japanese && row == 3 && column == 0 {
                     key.accessibilityIdentifier = "qwerty-input-mode"
@@ -1745,8 +1755,17 @@ final class KeyboardSurface: UIInputView {
     private func setSumireMode(_ mode: TenKeyMode) {
         guard mode != sumireMode else { return }
         sumireMode = mode
+        if mode == .english && settingsDefaults.bool(forKey: SumireModePreferences.englishQWERTYKey) {
+            resetEnglishQWERTYState()
+        }
         if hasComposition { composition.optionsChanged(); refreshConversion() }
         rebuild()
+    }
+    private func resetEnglishQWERTYState() {
+        englishPage = 0
+        shifted = false
+        qwertyCapsLock = false
+        qwertyLastShiftTap = 0
     }
     private func sumireAction(_ action: KeyboardLayout.Action) {
         beforeInput?()
