@@ -139,6 +139,28 @@ final class KeyFeedbackSettingsTests: XCTestCase {
         XCTAssertEqual(KeyFeedbackKeyKind.enter.soundType, .enter)
     }
 
+    func testKeyKindResolvesDeleteAndEnterFromUIKitMetadata() {
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "gojuon-delete", label: "削除", title: nil), .delete)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "sumire-deleteBackward", label: "⌫", title: nil), .delete)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "qwerty-enter", label: "改行", title: nil), .enter)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "custom-input-mode-return", label: "カスタム配列に戻る", title: "あa1"), .ordinary)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "qwerty-return", label: "改行", title: nil), .enter)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(identifier: "custom-42", label: "かな", title: "かな"), .ordinary)
+    }
+
+    func testCustomActionSoundCategoryUsesActionInsteadOfDisplayText() {
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.delete)), .delete)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.backspace)), .delete)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.deleteUntilBoundary)), .delete)
+        XCTAssertNil(KeyFeedbackKeyKind.resolve(action: .command(.doNothing)))
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.enter)), .enter)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.newLine)), .enter)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.confirm)), .enter)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .text("⌫")), .ordinary)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.forceNewLine)), .ordinary)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .switchLayout("layout-id")), .ordinary)
+    }
+
     func testDefaultsRoundTripThroughBoundedStorage() {
         let suite = "KeyFeedbackSettingsTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
@@ -186,5 +208,29 @@ final class KeyFeedbackSettingsTests: XCTestCase {
 
         defaults.set(Data("not-json".utf8), forKey: KeyFeedbackSettings.storageKey)
         XCTAssertEqual(KeyFeedbackSettings.load(defaults: defaults), KeyFeedbackSettings())
+    }
+
+    func testKeyboardSettingsSnapshotRoundTripsAndValidatesKeyFeedback() throws {
+        let suite = "KeyFeedbackSnapshotTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suite)!
+        defer { defaults.removePersistentDomain(forName: suite) }
+
+        var settings = KeyFeedbackSettings()
+        settings.isVibrationEnabled = false
+        settings.vibrationTiming = .release
+        settings.isKeySoundEnabled = true
+        settings.keySoundVolumePercent = 65
+        settings.save(defaults: defaults)
+
+        let snapshot = try KeyboardSettingsSnapshot.capture(defaults: defaults)
+        defaults.removeObject(forKey: KeyFeedbackSettings.storageKey)
+        try snapshot.restore(defaults: defaults)
+        XCTAssertEqual(KeyFeedbackSettings.load(defaults: defaults), settings)
+
+        var invalid = snapshot
+        invalid.values[KeyFeedbackSettings.storageKey] = .data(
+            Data(#"{"keySoundVolumePercent":101}"#.utf8)
+        )
+        XCTAssertThrowsError(try invalid.validate())
     }
 }

@@ -25,10 +25,45 @@ public enum KeyFeedbackKeyKind: String, CaseIterable, Codable {
         case .enter: return .enter
         }
     }
+
+    /// Resolves the UIKit key metadata used by the keyboard surface. Custom
+    /// imported key actions remain ordinary unless their stable ID or label
+    /// identifies Android's delete/enter sound category.
+    public static func resolve(identifier: String?, label: String?, title: String?) -> Self {
+        let identity = identifier?.lowercased() ?? ""
+        let visibleText = [label, title].compactMap { $0 }.joined(separator: " ")
+        if identity.contains("delete") || visibleText.contains("削除") || visibleText.contains("⌫") {
+            return .delete
+        }
+        // `return` in an accessibility identifier can name a navigation control
+        // (for example, return from the custom English layout), not an enter key.
+        if identity.contains("enter") ||
+            visibleText.contains("改行") || visibleText.contains("↵") || visibleText.contains("⏎") {
+            return .enter
+        }
+        return .ordinary
+    }
+
+    /// Resolves imported custom-key actions using their operation, not their
+    /// user-defined label. Android classifies custom actions semantically, so
+    /// a literal text key that happens to display a deletion/return glyph must
+    /// keep the standard sound category.
+    public static func resolve(action: CustomKeyAction) -> Self? {
+        guard case .command(let command) = action else { return .ordinary }
+        switch command {
+        case .doNothing:
+            return nil
+        case .delete, .backspace, .deleteUntilBoundary:
+            return .delete
+        case .enter, .newLine, .confirm:
+            return .enter
+        default:
+            return .ordinary
+        }
+    }
 }
 
-/// Shared policy/settings model for the Android key feedback preferences.
-/// Runtime dispatch still needs to be connected to the keyboard event path.
+/// Shared policy/settings model for Android-compatible key feedback preferences.
 public struct KeyFeedbackSettings: Codable, Equatable {
     public enum VibrationTiming: String, CaseIterable, Codable {
         case press
