@@ -478,4 +478,40 @@ final class BunsetsuConversionSnapshotTests: XCTestCase {
         XCTAssertEqual(projected.map(\.boundaries), [[2], []])
         XCTAssertTrue(projected.allSatisfy { !$0.boundaries.contains(1) }, "Never split the UTF-16 surrogate pair")
     }
+    func testOwnedEndpointMetadataFlowsThroughSplitUnsplitAndLocalSelection() throws {
+        let identity = BunsetsuCandidateDisplayIdentity(surface: "甲乙", readingUTF16Length: 2)
+        let snapshot = BunsetsuConversionSnapshot(requestGeneration: 7, reading: "あい",
+            splitPatterns: [[]], primarySplitPositions: [1], candidates: [
+                .init(nativeIndex: 0, candidateID: 1, score: 1, identity: identity,
+                      tokenPath: [
+                        .init(readingRange: NSRange(location: 0, length: 1), text: "甲", leftID: 11, rightID: 12),
+                        .init(readingRange: NSRange(location: 1, length: 1), text: "乙", leftID: 21, rightID: 22)
+                      ], mappedSplitPositions: [1], leftID: 11, rightID: 22)
+            ])
+        let patterns = try snapshot.projectedSplitPatterns(reading: "あい", requestGeneration: 7,
+            orderedDisplayCandidates: [identity])
+        XCTAssertEqual(patterns[0].segments.map(\.leftID), [11, 21])
+        XCTAssertEqual(patterns[0].segments.map(\.rightID), [12, 22])
+        XCTAssertEqual(patterns[1].segments.first?.leftID, 11)
+        XCTAssertEqual(patterns[1].segments.first?.rightID, 22)
+        var session = try BunsetsuConversionSession(rawInput: "あい", conversionInput: "あい",
+            wholeDisplayText: "甲乙", generation: 7, snapshot: snapshot, orderedDisplayCandidates: [identity])
+        let token = try XCTUnwrap(session.beginLoadingFocusedCandidates(conversionRequestGeneration: 8))
+        XCTAssertTrue(session.installCandidates([
+            .init(text: "別", reference: .conversionResult(generation: 8, candidateID: 3), leftID: 31, rightID: 32)
+        ], responseReading: "あ", responseGeneration: 8, for: token))
+        // The projected preferred value remains first and retains its known metadata.
+        XCTAssertEqual(session.leadingSegmentCommitPlan()?.learningFragment.leftID, 11)
+        XCTAssertTrue(session.selectFocusedCandidate(at: 1))
+        XCTAssertEqual(session.leadingSegmentCommitPlan()?.learningFragment.rightID, 32)
+        XCTAssertTrue(session.moveFocus(by: 1))
+        let plan = try XCTUnwrap(session.focusedPrefixCommitPlan())
+        XCTAssertEqual(plan.learningFragments.map(\.leftID), [31, 21])
+        XCTAssertEqual(plan.learningFragments.map(\.rightID), [32, 22])
+        var selection = BunsetsuSelection(segments: patterns[0].segments)
+        try selection.replaceSelected(text: "未照合")
+        XCTAssertNil(selection.segments[0].leftID)
+        XCTAssertNil(selection.segments[0].rightID)
+    }
+
 }

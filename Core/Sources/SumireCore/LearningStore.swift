@@ -195,6 +195,51 @@ public final class LearningStore {
                                            countColumn: 1, metadataColumn: 2))
         }
     }
+    /// Bounded exact-code-unit substrings used by Android's prefix lookup at
+    /// each scalar-aligned suffix. Prefix-index ranges avoid loading unrelated
+    /// rows; no prediction, global snapshot, or cross-request cache is used.
+    public func entriesForConversion(reading: String) throws -> [Entry] {
+        guard reading.utf16.count <= 8192, reading.utf8.count <= 32768,
+              !reading.contains("\0") else { throw PersonalDataError("学習検索条件が不正です") }
+        guard !reading.isEmpty else { return [] }
+        var entries: [Entry] = [], seen = Set<UInt32>(), totalBytes = 0
+        for scalar in reading.unicodeScalars where seen.insert(scalar.value).inserted {
+            let lower = String(scalar)
+            let next = scalar.value == 0xD7FF ? 0xE000 : scalar.value + 1
+            let upper = Unicode.Scalar(next).map(String.init)
+            let sql = "SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned WHERE reading>=? " +
+                (upper == nil ? "" : "AND reading<? ") +
+                "AND instr(?,reading)>0 ORDER BY reading COLLATE BINARY ASC,text COLLATE BINARY ASC LIMIT ?"
+            let statement = try prepare(sql)
+            defer { sqlite3_finalize(statement) }
+            try bind(lower, to: statement, at: 1)
+            var index: Int32 = 2
+            if let upper { try bind(upper, to: statement, at: index); index += 1 }
+            try bind(reading, to: statement, at: index)
+            sqlite3_bind_int(statement, index + 1, Int32(Self.maximumEntryCount - entries.count + 1))
+            while true {
+                let status = sqlite3_step(statement)
+                if status == SQLITE_DONE { break }
+                guard status == SQLITE_ROW else { throw failure() }
+                totalBytes += Int(sqlite3_column_bytes(statement, 0)) + Int(sqlite3_column_bytes(statement, 1))
+                guard totalBytes <= Self.maximumTextBytes, entries.count < Self.maximumEntryCount else {
+                    throw PersonalDataError("学習データが上限を超えています")
+                }
+                func string(_ column: Int32) throws -> String {
+                    guard let data = sqlite3_column_text(statement, column),
+                          let value = String(bytes: UnsafeBufferPointer(start: data,
+                              count: Int(sqlite3_column_bytes(statement, column))), encoding: .utf8) else {
+                        throw PersonalDataError("学習データの文字コードが不正です")
+                    }
+                    return value
+                }
+                entries.append(try decodeEntry(reading: string(0), text: string(1),
+                    statement: statement, countColumn: 2, metadataColumn: 3))
+            }
+        }
+        return entries
+    }
+
     /// Entries are oldest first, retaining recency for equal-frequency candidates.
     public func snapshot() throws -> [Entry] {
         let statement = try prepare("SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned ORDER BY last_used ASC,rowid ASC")

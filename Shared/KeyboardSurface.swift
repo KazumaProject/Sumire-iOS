@@ -2133,7 +2133,8 @@ final class KeyboardSurface: UIInputView {
                 }.map {
                     BunsetsuSessionCandidate(text: $0.text,
                         reference: .conversionResult(generation: result.generation, candidateID: $0.id),
-                        score: $0.score, matchedReadingUTF16Length: $0.range.length)
+                        score: $0.score, leftID: $0.leftID, rightID: $0.rightID,
+                        matchedReadingUTF16Length: $0.range.length)
                 }
                 guard current.installCandidates(records, responseReading: token.segmentReading,
                     responseGeneration: result.generation, for: token) else { return }

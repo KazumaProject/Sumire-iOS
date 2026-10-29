@@ -11,9 +11,13 @@ func bunsetsuStringsMatchUTF16(_ lhs: String, _ rhs: String) -> Bool {
 public struct BunsetsuToken: Equatable {
     public let readingRange: NSRange
     public let text: String
-    public init(readingRange: NSRange, text: String) {
+    public let leftID: Int16?
+    public let rightID: Int16?
+    public init(readingRange: NSRange, text: String, leftID: Int16? = nil, rightID: Int16? = nil) {
         self.readingRange = readingRange
         self.text = text
+        self.leftID = leftID
+        self.rightID = rightID
     }
 }
 
@@ -36,12 +40,17 @@ public struct BunsetsuSegment: Equatable {
     public let reading: String
     public fileprivate(set) var text: String
     public let hasConvertedDisplay: Bool
+    public fileprivate(set) var leftID: Int16?
+    public fileprivate(set) var rightID: Int16?
 
-    init(readingRange: NSRange, reading: String, text: String, hasConvertedDisplay: Bool = true) {
+    init(readingRange: NSRange, reading: String, text: String, hasConvertedDisplay: Bool = true,
+         leftID: Int16? = nil, rightID: Int16? = nil) {
         self.readingRange = readingRange
         self.reading = reading
         self.text = text
         self.hasConvertedDisplay = hasConvertedDisplay
+        self.leftID = leftID
+        self.rightID = rightID
     }
 }
 
@@ -98,6 +107,7 @@ public enum BunsetsuProjection {
         var tokenIndex = 0
         for end in boundaries + [length] {
             var text = ""
+            let firstToken = tokenIndex
             while tokenIndex < tokens.count && tokens[tokenIndex].readingRange.location < end {
                 text += tokens[tokenIndex].text
                 tokenIndex += 1
@@ -106,7 +116,8 @@ public enum BunsetsuProjection {
             guard let swiftRange = Range(range, in: reading) else {
                 throw BunsetsuProjectionError.invalidBoundary
             }
-            result.append(BunsetsuSegment(readingRange: range, reading: String(reading[swiftRange]), text: text))
+            result.append(BunsetsuSegment(readingRange: range, reading: String(reading[swiftRange]), text: text,
+                leftID: tokens[firstToken].leftID, rightID: tokens[tokenIndex - 1].rightID))
             start = end
         }
         return result
@@ -160,7 +171,9 @@ public enum BunsetsuProjection {
                 readingRange: range,
                 reading: segmentReading,
                 text: text,
-                hasConvertedDisplay: isTokenAligned
+                hasConvertedDisplay: isTokenAligned,
+                leftID: isTokenAligned ? tokens.first(where: { $0.readingRange.location == start })?.leftID : nil,
+                rightID: isTokenAligned ? tokens.first(where: { NSMaxRange($0.readingRange) == end })?.rightID : nil
             ))
         }
         return result
@@ -313,6 +326,10 @@ public struct BunsetsuSelection: Equatable {
     public mutating func replaceSelected(text: String) throws {
         guard segments.indices.contains(selectedIndex), !text.isEmpty else {
             throw BunsetsuProjectionError.invalidSelection
+        }
+        if !bunsetsuStringsMatchUTF16(segments[selectedIndex].text, text) {
+            segments[selectedIndex].leftID = nil
+            segments[selectedIndex].rightID = nil
         }
         segments[selectedIndex].text = text
     }
