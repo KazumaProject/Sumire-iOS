@@ -23,6 +23,10 @@ final class KeyboardSurface: UIInputView {
             guard oldValue != liveConversion else { return }
             beforeInput?()
             guard hasComposition else { return }
+            if currentBunsetsuSession != nil {
+                renderBunsetsuSession()
+                return
+            }
             if liveConversion && !englishComposition
                 && physicalFunctionKeyPreviewSuppressionGeneration != composition.generation
                 && composition.cursorUTF16 == composition.reading.utf16.count,
@@ -347,6 +351,10 @@ final class KeyboardSurface: UIInputView {
     private var converted: [ConversionCandidate] = []
     private var presentedCandidates: [ConversionCandidate] = []
     private var bunsetsuActionHandled = false
+    private var bunsetsuSession: BunsetsuConversionSession?
+    private var bunsetsuOwnerGeneration: UInt64?
+    private var bunsetsuCandidateItems: [BunsetsuCandidateBarItem] = []
+    private var bunsetsuRequestGeneration: UInt64 = 0
     private var resultGeneration: UInt64?
     private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
     var hasComposition: Bool { !composition.reading.isEmpty }
@@ -1716,7 +1724,7 @@ final class KeyboardSurface: UIInputView {
             commitComposition(); insert?(" ")
         case .convert:
             guard hasComposition else { return }
-            if startBunsetsuConversionIfNeeded() { return }
+            if cycleBunsetsuCandidateIfActive() || startBunsetsuConversionIfNeeded() { return }
             composition.select()
             if !converted.isEmpty {
                 selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
@@ -1852,6 +1860,7 @@ final class KeyboardSurface: UIInputView {
         closeSymbolKeyboard()
         katakanaCycle.reset()
         closeExpandedCandidates()
+        clearBunsetsuSession()
         composition.invalidate()
         containsRomaji = false
         converted = []
@@ -1935,6 +1944,14 @@ final class KeyboardSurface: UIInputView {
         expandedCandidates = panel
     }
     private func moveCompositionCursor(by offset: Int) {
+        if var session = currentBunsetsuSession {
+            if session.moveFocus(by: offset) {
+                bunsetsuSession = session
+                renderBunsetsuSession()
+                loadNextBunsetsuCandidates()
+            }
+            return
+        }
         if composition.moveCursor(by: offset) {
             tapCycle.reset()
             refreshConversion()
@@ -1955,6 +1972,7 @@ final class KeyboardSurface: UIInputView {
         return true
     }
     private func refreshConversion() {
+        clearBunsetsuSession()
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
         selectedCandidate = nil
@@ -1976,6 +1994,7 @@ final class KeyboardSurface: UIInputView {
         requestConversion(query: query, generation: generation)
     }
     private func startBunsetsuConversion() {
+        clearBunsetsuSession()
         if containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
             containsRomaji = false
@@ -2002,10 +2021,23 @@ final class KeyboardSurface: UIInputView {
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
-                let prefix = result.candidates.first.flatMap {
-                    BunsetsuProjection.firstReadingPrefix(in: $0.bunsetsu, reading: reading)
+                guard let snapshot = result.bunsetsuSnapshot else {
+                    self.requestFollowingBunsetsu(reading, statusNote: " · 文節情報なし")
+                    return
                 }
-                self.requestFollowingBunsetsu(prefix ?? reading, statusNote: prefix == nil ? " · 区切りなし" : "")
+                do {
+                    self.bunsetsuSession = try BunsetsuConversionSession(
+                        rawInput: reading, conversionInput: reading,
+                        wholeDisplayText: result.candidates.first?.text ?? reading,
+                        generation: generation, snapshot: snapshot,
+                        orderedDisplayCandidates: result.orderedDisplayIdentities)
+                    self.bunsetsuOwnerGeneration = generation
+                    self.bunsetsuActionHandled = true
+                    self.renderBunsetsuSession()
+                    self.loadNextBunsetsuCandidates()
+                } catch {
+                    self.requestFollowingBunsetsu(reading, statusNote: " · 文節情報を通常変換に切替")
+                }
             case .failure:
                 // Fall back to the ordinary conversion path without changing the composing text.
                 self.requestFollowingBunsetsu(reading, statusNote: " · 文節検索を通常変換に切替")
@@ -2019,6 +2051,99 @@ final class KeyboardSurface: UIInputView {
         startBunsetsuConversion()
         return true
     }
+    private var currentBunsetsuSession: BunsetsuConversionSession? {
+        guard let session = bunsetsuSession, let owner = bunsetsuOwnerGeneration,
+              composition.accepts(owner),
+              composition.reading.utf16.elementsEqual(session.rawInput.utf16) else { return nil }
+        return session
+    }
+
+    private func clearBunsetsuSession() {
+        bunsetsuSession = nil
+        bunsetsuOwnerGeneration = nil
+        bunsetsuCandidateItems = []
+    }
+
+    private func renderBunsetsuSession() {
+        guard let session = currentBunsetsuSession else { return }
+        bunsetsuCandidateItems = session.focusedCandidateBarItems
+        candidateBar.setCandidates(bunsetsuCandidateItems.map { CandidateBar.Presentation(text: $0.text) })
+        candidateBar.selectedIndex = session.focusedSegment?.selectedIndex
+        candidateBar.isUpdating = session.focusedSegment?.isLoadingCandidates == true
+        updateMarkedText?(session.displayText)
+        status.text = "文節 \(session.focusedSegmentIndex + 1)/\(session.segments.count) · " + session.focusedSegment!.reading
+    }
+
+    private func loadNextBunsetsuCandidates() {
+        guard var session = currentBunsetsuSession,
+              let index = session.candidatePreparationSegmentIndices.first(where: {
+                  !session.segments[$0].candidatesLoaded && !session.segments[$0].isLoadingCandidates
+              }) else { return }
+        bunsetsuRequestGeneration = max(bunsetsuRequestGeneration, session.generation) &+ 1
+        guard let token = session.beginLoadingCandidates(forSegmentAt: index,
+                    conversionRequestGeneration: bunsetsuRequestGeneration) else { return }
+        let owner = bunsetsuOwnerGeneration
+        bunsetsuSession = session
+        renderBunsetsuSession()
+        converter.convert(token.segmentReading, generation: token.conversionRequestGeneration, editStart: 0,
+                          omission: omissionSearch) { [weak self] response in
+            guard let self else { return }
+            self.beforeInput?()
+            guard var current = self.currentBunsetsuSession,
+                  self.bunsetsuOwnerGeneration == owner,
+                  current.sessionID == token.sessionID else { return }
+            switch response {
+            case let .success(result):
+                // A segment row must consume the complete segment: a normal
+                // prefix candidate cannot replace the segment's unread suffix.
+                let records = result.candidates.filter {
+                    $0.range.location == 0 && $0.range.length == token.segmentReading.utf16.count
+                }.map {
+                    BunsetsuSessionCandidate(text: $0.text,
+                        reference: .conversionResult(generation: result.generation, candidateID: $0.id),
+                        score: $0.score, matchedReadingUTF16Length: $0.range.length)
+                }
+                guard current.installCandidates(records, responseReading: token.segmentReading,
+                    responseGeneration: result.generation, for: token) else { return }
+            case .failure:
+                // Empty alternatives retain the projected/reading fallback.
+                guard current.installCandidates([], responseReading: token.segmentReading,
+                    responseGeneration: token.conversionRequestGeneration, for: token) else { return }
+            }
+            self.bunsetsuSession = current
+            self.renderBunsetsuSession()
+            self.loadNextBunsetsuCandidates()
+        }
+    }
+
+    private func cycleBunsetsuCandidateIfActive() -> Bool {
+        guard var session = currentBunsetsuSession else { return false }
+        if session.cycleFocusedCandidate(by: 1) {
+            bunsetsuSession = session
+            renderBunsetsuSession()
+        }
+        loadNextBunsetsuCandidates()
+        return true
+    }
+
+    private func commitBunsetsuPlan(_ plan: BunsetsuFocusedPrefixCommitPlan) {
+        guard currentBunsetsuSession != nil else { return }
+        // Session plans validate UTF-16/scalar boundaries, including boundaries
+        // inside a combining grapheme. Do not use Character-only commitPrefix,
+        // or reset the composition generation while adopting the remainder.
+        _ = composition.commit()
+        composition.append(plan.nextComposingInput)
+        clearBunsetsuSession()
+        containsRomaji = false
+        converted = []; presentedCandidates = []; resultGeneration = nil; selectedCandidate = nil
+        // Earlier segment references belong to earlier native results. Never
+        // pass those IDs to the native latest-result-only commit API. Fragment
+        // learning persistence is connected separately from this state route.
+        converter.reset()
+        if let commitMarkedText { commitMarkedText(plan.committedText) } else { insert?(plan.committedText) }
+        refreshConversion()
+    }
+
     private func requestFollowingBunsetsu(_ query: String, statusNote: String) {
         composition.optionsChanged()
         composition.select()
@@ -2083,6 +2208,13 @@ final class KeyboardSurface: UIInputView {
     }
     private func chooseCandidate(_ index: Int) {
         beforeInput?()
+        if var session = currentBunsetsuSession {
+            guard !candidateBar.isUpdating, bunsetsuCandidateItems.indices.contains(index) else { return }
+            let selection = session.selectFocusedCandidateBarItem(bunsetsuCandidateItems[index])
+            bunsetsuSession = session
+            if case let .segmentCandidateSelected(plan?) = selection { commitBunsetsuPlan(plan) }
+            return
+        }
         guard let generation = resultGeneration, composition.accepts(generation),
               presentedCandidates.indices.contains(index) else { return }
         if let macroID = presentedCandidates[index].textMacroID {
@@ -2095,6 +2227,7 @@ final class KeyboardSurface: UIInputView {
         commitComposition()
     }
     private func commitRawAtCursorAndSpace() {
+        clearBunsetsuSession()
         guard let commitRawTextAndSpace else {
             showDataNotice("この入力先では読みの確定と空白挿入を実行できません")
             return
@@ -2117,6 +2250,12 @@ final class KeyboardSurface: UIInputView {
     }
 
     private func commitComposition() {
+        if var session = currentBunsetsuSession {
+            _ = session.moveFocus(by: session.segments.count)
+            guard let plan = session.focusedPrefixCommitPlan() else { return }
+            commitBunsetsuPlan(plan)
+            return
+        }
         if selectedCandidate == nil, containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
         }
@@ -2467,7 +2606,7 @@ final class KeyboardSurface: UIInputView {
             if englishComposition { commitComposition(); insert?(" "); return }
             if composition.reading.isEmpty { insert?(" ") }
             else {
-                if startBunsetsuConversionIfNeeded() { return }
+                if cycleBunsetsuCandidateIfActive() || startBunsetsuConversionIfNeeded() { return }
                 composition.select()
                 if !converted.isEmpty {
                     selectedCandidate = ((selectedCandidate ?? -1) + 1) % converted.count
