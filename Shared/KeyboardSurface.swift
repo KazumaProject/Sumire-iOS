@@ -23,7 +23,10 @@ final class KeyboardSurface: UIInputView {
             guard oldValue != liveConversion else { return }
             beforeInput?()
             guard hasComposition else { return }
-            if liveConversion && !englishComposition && composition.cursorUTF16 == composition.reading.utf16.count, let first = converted.first {
+            if liveConversion && !englishComposition
+                && physicalFunctionKeyPreviewSuppressionGeneration != composition.generation
+                && composition.cursorUTF16 == composition.reading.utf16.count,
+               let first = converted.first {
                 selectedCandidate = 0
                 updateMarkedText?(first.text)
             } else {
@@ -516,6 +519,11 @@ final class KeyboardSurface: UIInputView {
         catch { showDataNotice("ローマ字設定: " + error.localizedDescription) }
     }
     private var containsRomaji = false
+    private var physicalFunctionKeyConversionSource = PhysicalKeyboardFunctionKeyConversionSource()
+    /// A function-key result stays visible for its composition generation even
+    /// when live conversion returns candidates. Candidate selection remains an
+    /// explicit user action and may still replace it.
+    private var physicalFunctionKeyPreviewSuppressionGeneration: UInt64?
     private var shifted = false
     private var qwertyCapsLock = false
     private var qwertyLastShiftTap: TimeInterval = 0
@@ -2045,7 +2053,10 @@ final class KeyboardSurface: UIInputView {
                 self.resultGeneration = generation
                 self.candidateBar.setCandidates(candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ") })
                 self.candidateBar.isUpdating = false
-                if (self.liveConversion && !self.englishComposition && self.composition.cursorUTF16 == self.composition.reading.utf16.count) || self.composition.phase == .selecting {
+                let shouldApplyLivePreview = self.liveConversion && !self.englishComposition
+                    && self.physicalFunctionKeyPreviewSuppressionGeneration != generation
+                    && self.composition.cursorUTF16 == self.composition.reading.utf16.count
+                if shouldApplyLivePreview || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
                 }
@@ -2221,6 +2232,13 @@ final class KeyboardSurface: UIInputView {
     @discardableResult
     func performPhysicalKeyboardShortcut(_ action: PhysicalKeyboardShortcutAction) -> Bool {
         switch action {
+        case .convertToHiragana, .convertToFullKatakana, .convertToHalfWidth,
+             .convertToFullAlphanumeric, .convertToHalfAlphanumeric:
+            break
+        default:
+            physicalFunctionKeyConversionSource.reset()
+        }
+        switch action {
         case .copy, .cut, .selectAll:
             return false
         case .paste:
@@ -2279,9 +2297,16 @@ final class KeyboardSurface: UIInputView {
         case .convertToFullAlphanumeric, .convertToHalfAlphanumeric,
              .segmentFocusLeft, .segmentFocusRight,
              .segmentWidthShrink, .segmentWidthExpand:
-            // These require the pinned Android romaji/segment execution paths, which
-            // this iOS surface does not yet implement. Do not consume them as no-ops.
-            return false
+            switch action {
+            case .convertToFullAlphanumeric:
+                return transformPhysicalComposition(.fullAlphanumeric)
+            case .convertToHalfAlphanumeric:
+                return transformPhysicalComposition(.halfAlphanumeric)
+            default:
+                // Bunsetsu segment navigation remains unavailable until the iOS
+                // conversion surface has a matching segmented composition model.
+                return false
+            }
         }
     }
 
@@ -2360,30 +2385,46 @@ final class KeyboardSurface: UIInputView {
     }
 
     private enum PhysicalCompositionTransform {
-        case hiragana, fullKatakana, halfWidth
+        case hiragana, fullKatakana, halfWidth, fullAlphanumeric, halfAlphanumeric
     }
 
     private func transformPhysicalComposition(_ transform: PhysicalCompositionTransform) -> Bool {
-        guard hasComposition else { return false }
+        guard hasComposition else {
+            physicalFunctionKeyConversionSource.reset()
+            // Android consumes F6–F10 even when there is no active reading;
+            // there is no composition to mutate, but the function key must
+            // not fall through and trigger a host/system command.
+            return true
+        }
         beforeInput?()
         if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
         containsRomaji = false
-        composition.transformPrefix { prefix in
-            switch transform {
-            case .hiragana:
-                return prefix.applyingTransform(.hiraganaToKatakana, reverse: true) ?? prefix
-            case .fullKatakana:
-                return prefix.applyingTransform(.hiraganaToKatakana, reverse: false) ?? prefix
-            case .halfWidth:
-                let katakana = prefix.applyingTransform(.hiraganaToKatakana, reverse: false) ?? prefix
-                return katakana.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? katakana
-            }
+        let currentPrefix = String(composition.reading.prefix(composition.cursor))
+        let source = physicalFunctionKeyConversionSource.source(
+            for: currentPrefix, generation: composition.generation)
+        let output: String
+        switch transform {
+        case .hiragana:
+            output = source.applyingTransform(.hiraganaToKatakana, reverse: true) ?? source
+        case .fullKatakana:
+            output = source.applyingTransform(.hiraganaToKatakana, reverse: false) ?? source
+        case .halfWidth:
+            let katakana = source.applyingTransform(.hiraganaToKatakana, reverse: false) ?? source
+            output = katakana.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? katakana
+        case .fullAlphanumeric:
+            output = PhysicalKeyboardAlphabeticConversion.convert(source, to: .full, using: romaji)
+        case .halfAlphanumeric:
+            output = PhysicalKeyboardAlphabeticConversion.convert(source, to: .half, using: romaji)
         }
+        composition.transformPrefix { _ in output }
+        physicalFunctionKeyPreviewSuppressionGeneration = composition.generation
+        physicalFunctionKeyConversionSource.record(output: output, generation: composition.generation)
         refreshConversion()
         return true
     }
 
     private func pressed(_ value: String) {
+        physicalFunctionKeyConversionSource.reset()
         customTapController?.interrupt()
         beforeInput?()
         katakanaCycle.reset()

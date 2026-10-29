@@ -19,7 +19,6 @@ final class PhysicalKeyboardShortcutDispatchTests: XCTestCase {
         let surface = Sumire.KeyboardSurface()
         let actions: [PhysicalKeyboardShortcutAction] = [
             .copy, .cut, .selectAll,
-            .convertToFullAlphanumeric, .convertToHalfAlphanumeric,
             .segmentFocusLeft, .segmentFocusRight,
             .segmentWidthShrink, .segmentWidthExpand
         ]
@@ -58,6 +57,144 @@ final class PhysicalKeyboardShortcutDispatchTests: XCTestCase {
 
         XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfWidth))
         XCTAssertEqual(markedUpdates.last, "ｱ")
+    }
+
+    func testFunctionKeyConversionsAreConsumedWithoutAnActiveReading() {
+        let surface = Sumire.KeyboardSurface()
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        let actions: [PhysicalKeyboardShortcutAction] = [
+            .convertToHiragana,
+            .convertToFullKatakana,
+            .convertToHalfWidth,
+            .convertToFullAlphanumeric,
+            .convertToHalfAlphanumeric
+        ]
+
+        for action in actions {
+            XCTAssertTrue(
+                surface.performPhysicalKeyboardShortcut(action),
+                "Android consumes \(action) without an active composition"
+            )
+        }
+        XCTAssertFalse(surface.hasComposition)
+        XCTAssertTrue(markedUpdates.isEmpty)
+    }
+
+    func testF6ThroughF10ChainFromTheOriginalPrefix() throws {
+        let surface = Sumire.KeyboardSurface()
+        let suite = "physical-function-key-source-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        surface.reloadAppearance()
+
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        let key = try XCTUnwrap(descendants(of: surface).first {
+            $0.accessibilityIdentifier == "gojuon-0-10"
+        } as? UIButton)
+        key.sendActions(for: .touchUpInside)
+        XCTAssertEqual(markedUpdates.last, "あ")
+
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfAlphanumeric))
+        XCTAssertEqual(markedUpdates.last, "a")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHiragana))
+        XCTAssertEqual(markedUpdates.last, "あ")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToFullKatakana))
+        XCTAssertEqual(markedUpdates.last, "ア")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfWidth))
+        XCTAssertEqual(markedUpdates.last, "ｱ")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToFullAlphanumeric))
+        XCTAssertEqual(markedUpdates.last, "ａ")
+    }
+
+    func testRegularInputResetsTheRetainedFunctionKeySource() throws {
+        let surface = Sumire.KeyboardSurface()
+        let suite = "physical-function-key-reset-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        surface.reloadAppearance()
+
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        let aKey = try XCTUnwrap(descendants(of: surface).first {
+            $0.accessibilityIdentifier == "gojuon-0-10"
+        } as? UIButton)
+        aKey.sendActions(for: .touchUpInside)
+        XCTAssertEqual(markedUpdates.last, "あ")
+
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfAlphanumeric))
+        XCTAssertEqual(markedUpdates.last, "a")
+
+        let iKey = try XCTUnwrap(descendants(of: surface).first {
+            $0.accessibilityIdentifier == "gojuon-1-10"
+        } as? UIButton)
+        iKey.sendActions(for: .touchUpInside)
+        XCTAssertEqual(markedUpdates.last, "aい")
+
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToFullAlphanumeric))
+        XCTAssertEqual(markedUpdates.last, "ａｉ")
+    }
+
+    func testF10MarkedOutputSurvivesLiveConversionCandidatesAndToggle() async throws {
+        let surface = Sumire.KeyboardSurface()
+        let suite = "physical-function-key-live-preview-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        surface.reloadAppearance()
+        let expectedF10Output = PhysicalKeyboardAlphabeticConversion.convert(
+            "にほんご", to: .half, using: try RomajiConverter.standard()
+        )
+        let distinctiveLiveCandidate = "ライブ変換検証候補"
+        var personalLexicon = PersonalLexicon()
+        personalLexicon.words = [PersonalWord(
+            word: distinctiveLiveCandidate,
+            reading: expectedF10Output,
+            posScore: -1_000_000
+        )]
+        surface.personalLexicon = personalLexicon
+        surface.liveConversion = true
+
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        for identifier in ["gojuon-1-6", "gojuon-4-5", "gojuon-2-1", "gojuon-4-9", "gojuon-4-1"] {
+            let key = try XCTUnwrap(descendants(of: surface).first {
+                $0.accessibilityIdentifier == identifier
+            } as? UIButton, "Missing Gojuon key \(identifier)")
+            key.sendActions(for: .touchUpInside)
+        }
+        XCTAssertEqual(markedUpdates.last, "にほんご")
+
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfAlphanumeric))
+        XCTAssertNotEqual(expectedF10Output, "にほんご")
+        XCTAssertEqual(markedUpdates.last, expectedF10Output)
+
+        let candidatesReady = expectation(description: "live conversion candidates arrive for F10 output")
+        Task { @MainActor in
+            for _ in 0..<400 {
+                if !surface.candidateBar.isUpdating {
+                    candidatesReady.fulfill()
+                    return
+                }
+                try? await Task.sleep(nanoseconds: 25_000_000)
+            }
+        }
+        await fulfillment(of: [candidatesReady], timeout: 12)
+        XCTAssertFalse(surface.candidateBar.isUpdating)
+        let firstCandidate = try XCTUnwrap(surface.candidateBar.candidates.first)
+        XCTAssertEqual(firstCandidate, distinctiveLiveCandidate, "The personal entry must drive a distinct live preview")
+        XCTAssertNotEqual(firstCandidate, expectedF10Output, "The fixture must distinguish the live preview from the F10 output")
+        XCTAssertEqual(markedUpdates.last, expectedF10Output, "Live conversion must not overwrite the explicit F10 output")
+
+        surface.liveConversion = false
+        surface.liveConversion = true
+        XCTAssertEqual(markedUpdates.last, expectedF10Output, "Toggling live conversion must preserve the current F10 output")
     }
 
     func testPendingConversionCannotCycleOrPreviewPreviousGeneration() async throws {
