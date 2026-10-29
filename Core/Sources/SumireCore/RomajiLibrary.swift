@@ -4,25 +4,29 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
     public var id = UUID()
     public var name: String
     public var rules: [String: RomajiRule]
+    /// JSON object order used by Android when reverse aliases have equal length.
+    public var ruleOrder: [String]
     public var isDeletable: Bool
     public var autoSokuon: Bool
     public var autoN: Bool
     public init(
         name: String,
         rules: [String: RomajiRule],
+        ruleOrder: [String]? = nil,
         isDeletable: Bool = true,
         autoSokuon: Bool = true,
         autoN: Bool = true
     ) {
         self.name = name
         self.rules = rules
+        self.ruleOrder = Self.completedRuleOrder(ruleOrder, for: rules)
         self.isDeletable = isDeletable
         self.autoSokuon = autoSokuon
         self.autoN = autoN
     }
 
     private enum CodingKeys: String, CodingKey {
-        case id, name, rules, isDeletable, autoSokuon, autoN
+        case id, name, rules, ruleOrder, isDeletable, autoSokuon, autoN
     }
 
     public init(from decoder: Decoder) throws {
@@ -30,14 +34,30 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
         id = try container.decodeIfPresent(UUID.self, forKey: .id) ?? UUID()
         name = try container.decode(String.self, forKey: .name)
         rules = try container.decode([String: RomajiRule].self, forKey: .rules)
+        ruleOrder = try container.decodeIfPresent([String].self, forKey: .ruleOrder) ?? Self.completedRuleOrder(nil, for: rules)
         isDeletable = try container.decodeIfPresent(Bool.self, forKey: .isDeletable) ?? true
         autoSokuon = try container.decodeIfPresent(Bool.self, forKey: .autoSokuon) ?? true
         autoN = try container.decodeIfPresent(Bool.self, forKey: .autoN) ?? true
     }
-    public var converter: RomajiConverter { RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN) }
+    public var converter: RomajiConverter {
+        RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN, ruleOrder: ruleOrder)
+    }
+    public mutating func setRule(_ rule: RomajiRule, for key: String) {
+        if rules[key] == nil { ruleOrder.append(key) }
+        rules[key] = rule
+    }
+    public mutating func removeRule(for key: String) {
+        rules.removeValue(forKey: key)
+        ruleOrder.removeAll { $0 == key }
+    }
     public func validate() throws {
         guard !name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty, name.utf8.count <= 256,
-              rules.count <= 10000 else { throw PersonalDataError("ローマ字設定の名前または規則数が不正です") }
+              rules.count <= 10000,
+              ruleOrder.count == rules.count,
+              Set(ruleOrder).count == ruleOrder.count,
+              Set(ruleOrder) == Set(rules.keys) else {
+            throw PersonalDataError("ローマ字設定の名前、規則順または規則数が不正です")
+        }
         for (key, rule) in rules {
             guard !key.isEmpty, key.utf16.count <= 64, rule.first.utf8.count <= 4096,
                   !key.contains("\0"), !rule.first.contains("\0"),
@@ -51,6 +71,16 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
                 }
             }
         }
+    }
+
+    private static func completedRuleOrder(_ requested: [String]?, for rules: [String: RomajiRule]) -> [String] {
+        var seen = Set<String>()
+        var result = (requested ?? []).filter { rules[$0] != nil && seen.insert($0).inserted }
+        let remaining = rules.keys.filter { seen.insert($0).inserted }.sorted {
+            Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16))
+        }
+        result.append(contentsOf: remaining)
+        return result
     }
 }
 public struct RomajiLibrary: Codable, Equatable {
@@ -143,11 +173,13 @@ public struct RomajiImportPreview {
                 }
 
                 var rules: [String: RomajiRule] = [:]
+                var ruleOrder: [String] = []
                 for key in ["mapData", "map", "data"] {
                     guard let value = fields.first(where: { $0.0 == key })?.1 else { continue }
                     let parsed = try parseRules(from: value)
-                    if !parsed.isEmpty {
-                        rules = parsed
+                    if !parsed.rules.isEmpty {
+                        rules = parsed.rules
+                        ruleOrder = parsed.order
                         break
                     }
                 }
@@ -156,6 +188,7 @@ public struct RomajiImportPreview {
                 let profile = RomajiProfile(
                     name: name,
                     rules: rules,
+                    ruleOrder: ruleOrder,
                     isDeletable: readBoolean(in: fields, key: "isDeletable") ?? true,
                     autoSokuon: readBoolean(in: fields, key: "autoSokuon") ?? true,
                     autoN: readBoolean(in: fields, key: "autoN") ?? true
@@ -184,21 +217,21 @@ public struct RomajiImportPreview {
         }
     }
 
-    private static func parseRules(from value: AndroidRomajiJSONValue) throws -> [String: RomajiRule] {
+    private static func parseRules(from value: AndroidRomajiJSONValue) throws -> (rules: [String: RomajiRule], order: [String]) {
         let fields: [(String, AndroidRomajiJSONValue)]
         switch value {
         case .object(let object):
             fields = object
         case .string(let json):
-            guard let nested = try? AndroidRomajiJSONParser.parse(Data(json.utf8)) else { return [:] }
-            guard case .object(let object) = nested else { return [:] }
+            guard let nested = try? AndroidRomajiJSONParser.parse(Data(json.utf8)) else { return ([:], []) }
+            guard case .object(let object) = nested else { return ([:], []) }
             fields = object
         default:
-            return [:]
+            return ([:], [])
         }
 
         let parsed = try parseRuleEntries(fields)
-        if !parsed.isEmpty { return parsed }
+        if !parsed.rules.isEmpty { return parsed }
 
         // Android has a second, compact-map fallback for object-valued maps.
         // It accepts decimal numeric strings here; its normal Room converter
@@ -206,8 +239,9 @@ public struct RomajiImportPreview {
         return try parseCompactRuleEntries(fields)
     }
 
-    private static func parseRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> [String: RomajiRule] {
+    private static func parseRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> (rules: [String: RomajiRule], order: [String]) {
         var rules: [String: RomajiRule] = [:]
+        var order: [String] = []
         for (key, value) in fields {
             guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   case .object(let ruleFields) = value else { continue }
@@ -219,14 +253,16 @@ public struct RomajiImportPreview {
                 readInteger(in: ruleFields, key: "second") ??
                 ruleFields.compactMap { $0.1.androidIntegerValue(allowDecimalString: false) }.first ??
                 key.utf16.count
+            if rules[key] == nil { order.append(key) }
             rules[key] = RomajiRule(kana, max(consume, 1))
             guard rules.count <= 10_000 else { throw PersonalDataError("ローマ字規則が多すぎます") }
         }
-        return rules
+        return (rules, order)
     }
 
-    private static func parseCompactRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> [String: RomajiRule] {
+    private static func parseCompactRuleEntries(_ fields: [(String, AndroidRomajiJSONValue)]) throws -> (rules: [String: RomajiRule], order: [String]) {
         var rules: [String: RomajiRule] = [:]
+        var order: [String] = []
         for (key, value) in fields {
             guard !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
                   case .object(let ruleFields) = value else { continue }
@@ -234,10 +270,11 @@ public struct RomajiImportPreview {
             guard let kana, !kana.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { continue }
             let consume = readInteger(in: ruleFields, key: "d", allowDecimalString: true) ??
                 readInteger(in: ruleFields, key: "consume", allowDecimalString: true) ?? key.utf16.count
+            if rules[key] == nil { order.append(key) }
             rules[key] = RomajiRule(kana, max(consume, 1))
             guard rules.count <= 10_000 else { throw PersonalDataError("ローマ字規則が多すぎます") }
         }
-        return rules
+        return (rules, order)
     }
 
     private static func readInteger(

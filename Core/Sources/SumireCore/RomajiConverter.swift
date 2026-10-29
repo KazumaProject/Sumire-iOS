@@ -29,11 +29,21 @@ public struct RomajiMap: Decodable {
 }
 public struct RomajiConverter {
     public let rules: [String: RomajiRule]
+    /// Rule insertion order used by reverse alias selection when lengths tie.
+    public let ruleOrder: [String]
     public let autoSokuon: Bool
     public let autoN: Bool
     private let maxKeyLength: Int
-    public init(rules: [String: RomajiRule], autoSokuon: Bool = true, autoN: Bool = true) {
-        self.rules = rules; self.autoSokuon = autoSokuon; self.autoN = autoN
+    public init(
+        rules: [String: RomajiRule],
+        autoSokuon: Bool = true,
+        autoN: Bool = true,
+        ruleOrder: [String]? = nil
+    ) {
+        self.rules = rules
+        self.ruleOrder = Self.completedRuleOrder(ruleOrder, for: rules)
+        self.autoSokuon = autoSokuon
+        self.autoN = autoN
         maxKeyLength = rules.keys.map { $0.utf16.count }.max() ?? 0
     }
     public static func standard() throws -> RomajiConverter {
@@ -83,4 +93,14 @@ public struct RomajiConverter {
         return String(decoding: text.utf16.dropLast(), as: UTF16.self) + "ん"
     }
     private func ascii(_ unit: UInt16) -> UInt16 { (0xFF41...0xFF5A).contains(unit) ? unit - 0xFEE0 : unit }
+
+    private static func completedRuleOrder(_ requested: [String]?, for rules: [String: RomajiRule]) -> [String] {
+        var seen = Set<String>()
+        var result = (requested ?? []).filter { rules[$0] != nil && seen.insert($0).inserted }
+        let remaining = rules.keys.filter { seen.insert($0).inserted }.sorted {
+            Array($0.utf16).lexicographicallyPrecedes(Array($1.utf16))
+        }
+        result.append(contentsOf: remaining)
+        return result
+    }
 }

@@ -42,7 +42,7 @@ final class RomajiLibraryTests: XCTestCase {
         XCTAssertEqual(restored, library)
         XCTAssertEqual(try restored.converter().convert("a"), "す")
         XCTAssertEqual(try restored.converter().flush("n"), "n")
-        library.profiles[0].rules["bad"] = .init("x", 0)
+        library.profiles[0].setRule(.init("x", 0), for: "bad")
         XCTAssertThrowsError(try library.save(defaults: defaults))
         XCTAssertEqual(try RomajiLibrary.load(defaults: defaults), restored)
         library = restored; library.activeID = UUID()
@@ -50,6 +50,42 @@ final class RomajiLibraryTests: XCTestCase {
         library = restored; library.version = 999
         XCTAssertThrowsError(try library.save(defaults: defaults))
     }
+    func testImportedRuleOrderSurvivesProfilePersistenceAndConverterCreation() throws {
+        let data = Data(#"[{"name":"ordered","mapData":{"hu":{"first":"ふ","second":2},"fu":{"first":"ふ","second":2}}}]"#.utf8)
+        var library = RomajiLibrary()
+        library.profiles = try RomajiLibrary.importAndroid(data)
+        let imported = try XCTUnwrap(library.profiles.first)
+        XCTAssertEqual(imported.ruleOrder, ["hu", "fu"])
+        XCTAssertEqual(imported.converter.ruleOrder, ["hu", "fu"])
+
+        library.activeID = imported.id
+        let defaultsName = "RomajiRuleOrder.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: defaultsName)!
+        defer { defaults.removePersistentDomain(forName: defaultsName) }
+        try library.save(defaults: defaults)
+        let restored = try RomajiLibrary.load(defaults: defaults)
+        XCTAssertEqual(restored.profiles.first?.ruleOrder, ["hu", "fu"])
+        XCTAssertEqual(try restored.converter().ruleOrder, ["hu", "fu"])
+    }
+
+    func testExistingProfilesWithoutRuleOrderLoadWithDeterministicLegacyOrder() throws {
+        let legacy = Data(#"{"name":"legacy","rules":{"hu":{"first":"ふ","second":2},"fu":{"first":"ふ","second":2}}}"#.utf8)
+        let profile = try JSONDecoder().decode(RomajiProfile.self, from: legacy)
+        XCTAssertEqual(profile.ruleOrder, ["fu", "hu"])
+        try profile.validate()
+    }
+
+    func testRuleEditingPreservesExistingPositionAndTracksAddedAndRemovedRules() throws {
+        var profile = RomajiProfile(name: "ordered", rules: ["hu": .init("ふ", 2), "fu": .init("ふ", 2)], ruleOrder: ["hu", "fu"])
+        profile.setRule(.init("ふ", 2), for: "fu")
+        XCTAssertEqual(profile.ruleOrder, ["hu", "fu"])
+        profile.setRule(.init("てぃ", 3), for: "thi")
+        XCTAssertEqual(profile.ruleOrder, ["hu", "fu", "thi"])
+        profile.removeRule(for: "hu")
+        XCTAssertEqual(profile.ruleOrder, ["fu", "thi"])
+        try profile.validate()
+    }
+
     func testDefaultRulesCanBeCopiedAndImportRejectsBadConsumption() throws {
         XCTAssertThrowsError(try RomajiProfile(name: "split", rules: ["😀": .init("x", 1)]).validate())
         try RomajiProfile(name: "copy", rules: RomajiConverter.standard().rules).validate()

@@ -30,8 +30,10 @@ struct RomajiSettings: View {
                 }
                 Section {
                     Button("標準をコピーして作成") {
-                        do { editing = RomajiProfile(name: "カスタム", rules: try RomajiConverter.standard().rules) }
-                        catch { self.error = error.localizedDescription }
+                        do {
+                            let standard = try RomajiConverter.standard()
+                            editing = RomajiProfile(name: "カスタム", rules: standard.rules, ruleOrder: standard.ruleOrder)
+                        } catch { self.error = error.localizedDescription }
                     }.disabled(!loaded)
                     Button("Android JSONを取り込む") { importing = true }.disabled(!loaded)
                     Text("取り込んだ設定は選択してから使用します。編集中の読みは保持し、以降のローマ字入力に新しい規則を使います。")
@@ -150,7 +152,7 @@ private struct RomajiProfileEditor: View {
     @State private var count = "1"
     @State private var error: String?
     @State private var search = ""
-    private var keys: [String] { profile.rules.keys.filter { search.isEmpty || $0.contains(search) }.sorted() }
+    private var keys: [String] { profile.ruleOrder.filter { search.isEmpty || $0.contains(search) } }
     var body: some View {
         NavigationStack {
             List {
@@ -174,7 +176,7 @@ private struct RomajiProfileEditor: View {
                     Button("規則を反映") {
                         do {
                             guard let n = Int(count) else { throw PersonalDataError("消費文字数を入力してください") }
-                            var next = profile; next.rules[input] = RomajiRule(output, n); try next.validate()
+                            var next = profile; next.setRule(RomajiRule(output, n), for: input); try next.validate()
                             profile = next; input = ""; output = ""; count = "1"; error = nil
                         } catch { self.error = error.localizedDescription }
                     }.disabled(!profile.isDeletable)
@@ -187,7 +189,7 @@ private struct RomajiProfileEditor: View {
                             input = key; output = profile.rules[key]!.first; count = String(profile.rules[key]!.second)
                         }
                     }
-                    .onDelete { indices in let removed = indices.map { keys[$0] }; for key in removed { profile.rules.removeValue(forKey: key) } }
+                    .onDelete { indices in let removed = indices.map { keys[$0] }; for key in removed { profile.removeRule(for: key) } }
                     .disabled(!profile.isDeletable)
                 }
             }
