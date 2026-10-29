@@ -59,7 +59,7 @@ struct TouchFeedbackSettingsView: View {
                 )
                 .disabled(!keyFeedback.isKeySoundEnabled)
                 .accessibilityIdentifier("feedback-key-sound-volume")
-                Text("音は押下時に再生します。音量0はiOS標準クリックを使い、iOS設定でキーボードクリックが有効な場合に再生します。1〜100%はキー種別ごとの合成音を使います。Full Access OFF時の拡張での設定反映は実機未検証です。")
+                Text("音は押下時に再生します。音量0はiOS標準クリック、1〜100%はキー種別ごとの合成音です。iOSのキーボード拡張はFull Access OFFでは音声出力を使えません。SumireはFull Access OFFを維持するため、この設定の音は利用できません。振動の実機動作は未検証です。")
                     .font(.footnote).foregroundStyle(.secondary)
                     .accessibilityIdentifier("feedback-key-runtime-active")
             }
