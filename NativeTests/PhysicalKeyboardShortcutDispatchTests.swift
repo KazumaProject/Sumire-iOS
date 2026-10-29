@@ -110,6 +110,71 @@ final class PhysicalKeyboardShortcutDispatchTests: XCTestCase {
         XCTAssertEqual(markedUpdates.last, "ａ")
     }
 
+    func testF6ThroughF8ConvertAnEnglishCompositionFromItsOriginalRomaji() throws {
+        let surface = Sumire.KeyboardSurface()
+        let suite = "physical-japanese-script-dispatch-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        defaults.set("builtin:english", forKey: "keyboard.lastUsed")
+        surface.reloadAppearance()
+
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.switchToEnglish))
+        for character in "kana" {
+            let key = try XCTUnwrap(descendants(of: surface).first {
+                $0.accessibilityIdentifier == "qwerty-character-\(character)"
+            } as? UIButton, "Missing QWERTY key for \(character)")
+            key.sendActions(for: .touchUpInside)
+        }
+        XCTAssertEqual(markedUpdates.last, "kana")
+
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHiragana))
+        XCTAssertEqual(markedUpdates.last, "かな")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToFullKatakana))
+        XCTAssertEqual(markedUpdates.last, "カナ")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfWidth))
+        XCTAssertEqual(markedUpdates.last, "ｶﾅ")
+    }
+
+    func testF6UsesAndroidEditableMapNRuleForCustomRomajiProfile() throws {
+        let surface = Sumire.KeyboardSurface()
+        let suite = "physical-custom-romaji-dispatch-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        surface.settingsDefaults = defaults
+        surface.settingsWriteDefaults = defaults
+        defaults.set("builtin:english", forKey: "keyboard.lastUsed")
+
+        let standard = try RomajiConverter.standard()
+        let profile = RomajiProfile(
+            name: "カスタム",
+            rules: standard.rules,
+            ruleOrder: standard.ruleOrder,
+            autoN: true
+        )
+        var library = RomajiLibrary()
+        library.profiles = [profile]
+        library.activeID = profile.id
+        try library.save(defaults: defaults)
+        surface.reloadRomaji()
+        surface.reloadAppearance()
+
+        var markedUpdates: [String] = []
+        surface.updateMarkedText = { markedUpdates.append($0) }
+        for character in "kanta" {
+            let key = try XCTUnwrap(descendants(of: surface).first {
+                $0.accessibilityIdentifier == "qwerty-character-\(character)"
+            } as? UIButton, "Missing QWERTY key for \(character)")
+            key.sendActions(for: .touchUpInside)
+        }
+        XCTAssertEqual(markedUpdates.last, "kanta")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHiragana))
+        XCTAssertEqual(markedUpdates.last, "かんた")
+    }
+
     func testRegularInputResetsTheRetainedFunctionKeySource() throws {
         let surface = Sumire.KeyboardSurface()
         let suite = "physical-function-key-reset-" + UUID().uuidString

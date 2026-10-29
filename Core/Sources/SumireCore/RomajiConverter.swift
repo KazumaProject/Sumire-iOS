@@ -34,17 +34,21 @@ public struct RomajiConverter {
     public let ruleOrder: [String]
     public let autoSokuon: Bool
     public let autoN: Bool
+    /// Selects Android's separate F6–F8 conversion path for the built-in map.
+    public let isDefaultMap: Bool
     private let maxKeyLength: Int
     public init(
         rules: [String: RomajiRule],
         autoSokuon: Bool = true,
         autoN: Bool = true,
-        ruleOrder: [String]? = nil
+        ruleOrder: [String]? = nil,
+        isDefaultMap: Bool = false
     ) {
         self.rules = rules
         self.ruleOrder = Self.completedRuleOrder(ruleOrder, for: rules)
         self.autoSokuon = autoSokuon
         self.autoN = autoN
+        self.isDefaultMap = isDefaultMap
         maxKeyLength = rules.keys.map { $0.utf16.count }.max() ?? 0
     }
     public static func standard() throws -> RomajiConverter {
@@ -59,7 +63,7 @@ public struct RomajiConverter {
         let data = try Data(contentsOf: url)
         let values = try JSONDecoder().decode([String: Pair].self, from: data)
         let ruleOrder = try TopLevelJSONObjectKeyOrder.keys(in: data)
-        return RomajiConverter(rules: values.mapValues(\.rule), ruleOrder: ruleOrder)
+        return RomajiConverter(rules: values.mapValues(\.rule), ruleOrder: ruleOrder, isDefaultMap: true)
     }
     public func convert(_ text: String) -> String {
         let input = Array(text.utf16)

@@ -40,7 +40,13 @@ public struct RomajiProfile: Codable, Equatable, Identifiable {
         autoN = try container.decodeIfPresent(Bool.self, forKey: .autoN) ?? true
     }
     public var converter: RomajiConverter {
-        RomajiConverter(rules: rules, autoSokuon: autoSokuon, autoN: autoN, ruleOrder: ruleOrder)
+        RomajiConverter(
+            rules: rules,
+            autoSokuon: autoSokuon,
+            autoN: autoN,
+            ruleOrder: ruleOrder,
+            isDefaultMap: !isDeletable
+        )
     }
     public mutating func setRule(_ rule: RomajiRule, for key: String) {
         if rules[key] == nil { ruleOrder.append(key) }
