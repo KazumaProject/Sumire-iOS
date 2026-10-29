@@ -184,6 +184,7 @@ final class SpecialKeyLongPressIntegrationTests: XCTestCase {
     }
 
     func testManualSpaceKanaTogglePreservesUTF16CaretAndCommitsDisplayedForm() throws {
+        try verifyMiddleCaretKana()
         for count in [1, 2] {
             let domain = "space-kana-manual-" + UUID().uuidString
             let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
@@ -279,6 +280,61 @@ final class SpecialKeyLongPressIntegrationTests: XCTestCase {
         let full = try XCTUnwrap(entries.first { $0.reading == reading && $0.text == commits.joined() })
         XCTAssertEqual(full.usageCount, 1)
         XCTAssertEqual(full.count, 1)
+    }
+
+
+    private func verifyMiddleCaretKana() throws {
+        for live in [false, true] {
+            for count in [1, 2] {
+                for reading in ["あいう", "あ😀う"] {
+                    let domain = "space-kana-middle-" + UUID().uuidString
+                    let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+                    defer { defaults.removePersistentDomain(forName: domain) }
+                    let surface = Sumire.KeyboardSurface()
+                    surface.configureAppearancePreview(.sumire, defaults: defaults)
+                    surface.liveConversion = live
+                    var marked = "", selection = NSRange(), commits: [String] = []
+                    surface.updateMarkedText = { marked = $0 }
+                    surface.updateMarkedSelection = { marked = $0; selection = $1 }
+                    surface.commitMarkedText = { commits.append($0) }
+                    let input = try XCTUnwrap(descendants(surface).first {
+                        $0.accessibilityIdentifier == "sumire-ka"
+                    } as? Sumire.MultiStageFlickKey)
+                    try XCTUnwrap(input.onCommit)(.init(output: .text(reading), isTap: false, wasFlick: true,
+                        isLongPress: false, direction: .up, secondDirection: nil, circularSlot: nil))
+                    let left = try XCTUnwrap(descendants(surface).first {
+                        $0.accessibilityIdentifier == "sumire-cursor_left_key"
+                    } as? Sumire.DirectionalActionKey)
+                    try XCTUnwrap(left.action)(.tap)
+                    let prefix = String(reading.dropLast())
+                    let caret = NSRange(location: prefix.utf16.count, length: 0)
+                    XCTAssertEqual(marked, reading)
+                    XCTAssertEqual(selection, caret)
+                    let space = try XCTUnwrap(descendants(surface).first {
+                        $0.accessibilityIdentifier == "sumire-space_convert_key"
+                    } as? Sumire.DirectionalActionKey)
+                    // Do not yield before toggling: old/end-caret and current
+                    // middle-caret conversions must not replace this display.
+                    for _ in 0..<count { try XCTUnwrap(space.action)(.longPress) }
+                    let katakana = live ? count == 2 : count == 1
+                    let expected = (katakana
+                        ? (prefix.applyingTransform(.hiraganaToKatakana, reverse: false) ?? prefix)
+                        : prefix) + "う"
+                    XCTAssertEqual(marked, expected)
+                    XCTAssertEqual(selection, caret)
+                    ready(surface)
+                    XCTAssertEqual(marked, expected)
+                    XCTAssertEqual(selection, caret)
+                    let enter = try XCTUnwrap(descendants(surface).first {
+                        $0.accessibilityIdentifier == "sumire-enter_key"
+                    } as? Sumire.DirectionalActionKey)
+                    try XCTUnwrap(enter.action)(.tap)
+                    XCTAssertEqual(commits, [expected])
+                    XCTAssertFalse(surface.hasComposition)
+                    surface.invalidateComposition()
+                }
+            }
+        }
     }
 
 }

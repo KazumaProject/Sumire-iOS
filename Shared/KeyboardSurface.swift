@@ -1829,14 +1829,14 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         let sourceCursor = previous?.sourceCursor ?? composition.cursor
         let hasConvertedKatakana = !(previous?.hasConvertedKatakana ?? false)
         let showKatakana = liveConversion ? !hasConvertedKatakana : hasConvertedKatakana
-        let displayText = showKatakana
-            ? (sourceReading.applyingTransform(.hiraganaToKatakana, reverse: false) ?? sourceReading)
-            : sourceReading
         let sourceCursorIndex = sourceReading.index(sourceReading.startIndex, offsetBy: sourceCursor)
         let sourcePrefix = String(sourceReading[..<sourceCursorIndex])
         let displayPrefix = showKatakana
             ? (sourcePrefix.applyingTransform(.hiraganaToKatakana, reverse: false) ?? sourcePrefix)
             : sourcePrefix
+        // Android applies the kana candidate only to inputString (the
+        // prefix before the caret), then appends the unchanged stringInTail.
+        let displayText = displayPrefix + sourceReading[sourceCursorIndex...]
         let state = SpaceConvertKanaToggleState(
             sourceReading: sourceReading,
             sourceCursor: sourceCursor,
