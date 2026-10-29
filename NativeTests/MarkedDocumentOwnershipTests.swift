@@ -13,6 +13,10 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
         return Context(document: document, before: input.text(in: before), after: input.text(in: after),
                        selected: selection.isEmpty ? nil : input.text(in: selection))
     }
+    private func contents(_ input: UITextInput) throws -> String? {
+        let range = try XCTUnwrap(input.textRange(from: input.beginningOfDocument, to: input.endOfDocument))
+        return input.text(in: range)
+    }
     private func mark(_ text: String, in input: UITextInput, document: String,
                       owner: inout Sumire.MarkedDocumentOwnership) throws {
         let before = try context(input, document: document)
@@ -25,8 +29,8 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
             try mark("か\u{3099}👩‍💻", in: input, document: "A", owner: &owner)
             let current = try context(input, document: "A")
             XCTAssertNotNil(input.markedTextRange)
-            XCTAssertTrue(owner.consumeIfMatching(current))
-            XCTAssertFalse(owner.consumeIfMatching(current)) // Reentrant/repeated hide must not act twice.
+            XCTAssertEqual(owner.resolveOnHide(current), .unmarkOwnedText)
+            XCTAssertEqual(owner.resolveOnHide(current), .none) // Reentrant/repeated hide must not act twice.
             input.unmarkText()
             XCTAssertNil(input.markedTextRange)
             let all = try XCTUnwrap(input.textRange(from: input.beginningOfDocument, to: input.endOfDocument))
@@ -38,9 +42,9 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
         var owner = Sumire.MarkedDocumentOwnership()
         try mark("あ", in: first, document: "A", owner: &owner)
         second.setMarkedText("別の未確定", selectedRange: NSRange(location: 2, length: 0))
-        if owner.consumeIfMatching(try context(second, document: "B")) { second.unmarkText() }
+        XCTAssertEqual(owner.resolveOnAppearance(try context(second, document: "B")), .discardOwnership)
         XCTAssertNotNil(second.markedTextRange)
-        XCTAssertFalse(owner.consumeIfMatching(try context(first, document: "A")))
+        XCTAssertEqual(owner.resolveOnHide(try context(first, document: "A")), .none)
     }
     func testExternalSelectionOrTextChangesRejectOwnership() throws {
         for input in [UITextField(), UITextView()] as [UIView & UITextInput] {
@@ -48,10 +52,10 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
             try mark("あいう", in: input, document: "A", owner: &owner)
             let start = input.beginningOfDocument
             input.selectedTextRange = input.textRange(from: start, to: start)
-            XCTAssertFalse(owner.consumeIfMatching(try context(input, document: "A")))
+            XCTAssertEqual(owner.resolveOnHide(try context(input, document: "A")), .discardOwnership)
             try mark("あ", in: input, document: "A", owner: &owner)
             input.setMarkedText("外部", selectedRange: NSRange(location: 2, length: 0))
-            XCTAssertFalse(owner.consumeIfMatching(try context(input, document: "A")))
+            XCTAssertEqual(owner.resolveOnHide(try context(input, document: "A")), .discardOwnership)
             XCTAssertNotNil(input.markedTextRange)
         }
     }
@@ -59,14 +63,80 @@ final class MarkedDocumentOwnershipTests: XCTestCase {
         let input = UITextView()
         var owner = Sumire.MarkedDocumentOwnership()
         try mark("あ", in: input, document: "A", owner: &owner)
-        XCTAssertFalse(owner.consumeIfMatching(try context(input, document: nil)))
+        let current = try context(input, document: "A")
+        XCTAssertEqual(owner.resolveOnHide(Context(document: nil, before: current.before, after: current.after,
+                                                   selected: current.selected)), .waitForDocument)
+        XCTAssertEqual(owner.resolveCurrentContext(current), .unmarkOwnedText)
+        input.unmarkText()
+        XCTAssertNil(input.markedTextRange)
+        XCTAssertEqual(try contents(input), "あ")
         try mark("あ", in: input, document: "A", owner: &owner)
         owner.discard()
         input.insertText("亜")
         input.setMarkedText("別", selectedRange: NSRange(location: 1, length: 0))
-        XCTAssertFalse(owner.consumeIfMatching(try context(input, document: "A")))
+        XCTAssertEqual(owner.resolveOnHide(try context(input, document: "A")), .none)
         try mark("", in: input, document: "A", owner: &owner)
-        XCTAssertFalse(owner.consumeIfMatching(try context(input, document: "A")))
+        XCTAssertEqual(owner.resolveOnHide(try context(input, document: "A")), .none)
+    }
+
+    func testDisconnectedMarkIsFinalizedBeforeResumedCompositionOnlyOnExactContext() throws {
+        for input in [UITextField(), UITextView()] as [UIView & UITextInput] {
+            var owner = Sumire.MarkedDocumentOwnership()
+            try mark("あ", in: input, document: "A", owner: &owner)
+            let saved = try context(input, document: "A")
+            let disconnected = Context(document: nil, before: saved.before, after: saved.after,
+                                       selected: saved.selected)
+
+            XCTAssertEqual(owner.resolveOnHide(disconnected), .waitForDocument)
+            XCTAssertEqual(owner.resolveCurrentContext(disconnected), .waitForDocument)
+            XCTAssertNotNil(input.markedTextRange)
+
+            XCTAssertEqual(owner.resolveCurrentContext(saved), .unmarkOwnedText)
+            input.unmarkText()
+            XCTAssertNil(input.markedTextRange)
+            XCTAssertEqual(try contents(input), "あ")
+
+            input.setMarkedText("い", selectedRange: NSRange(location: 1, length: 0))
+            XCTAssertEqual(try contents(input), "あい")
+            XCTAssertNotNil(input.markedTextRange)
+        }
+    }
+
+    func testDisconnectedMarkIsDiscardedOnDifferentDocumentOrChangedContext() throws {
+        for input in [UITextField(), UITextView()] as [UIView & UITextInput] {
+            var owner = Sumire.MarkedDocumentOwnership()
+            try mark("あ", in: input, document: "A", owner: &owner)
+            let saved = try context(input, document: "A")
+            let disconnected = Context(document: nil, before: saved.before, after: saved.after,
+                                       selected: saved.selected)
+            XCTAssertEqual(owner.resolveOnHide(disconnected), .waitForDocument)
+            XCTAssertEqual(owner.resolveCurrentContext(Context(document: "B", before: saved.before,
+                                                                after: saved.after, selected: saved.selected)),
+                           .discardOwnership)
+            XCTAssertNotNil(input.markedTextRange)
+
+            try mark("あ", in: input, document: "A", owner: &owner)
+            let changed = Context(document: "A", before: "external change", after: saved.after,
+                                 selected: saved.selected)
+            XCTAssertEqual(owner.resolveOnHide(Context(document: nil, before: saved.before, after: saved.after,
+                                                        selected: saved.selected)), .waitForDocument)
+            XCTAssertEqual(owner.resolveCurrentContext(changed), .discardOwnership)
+            XCTAssertNotNil(input.markedTextRange)
+        }
+    }
+
+    func testActiveOwnedCompositionIsKeptDuringInputThenFinalizedOnAppearance() throws {
+        let input = UITextField()
+        var owner = Sumire.MarkedDocumentOwnership()
+        try mark("あ", in: input, document: "A", owner: &owner)
+        let current = try context(input, document: "A")
+        XCTAssertEqual(owner.resolveCurrentContext(current), .none)
+        XCTAssertNotNil(input.markedTextRange)
+        XCTAssertEqual(owner.resolveOnAppearance(current), .unmarkOwnedText)
+        input.unmarkText()
+        XCTAssertNil(input.markedTextRange)
+        input.setMarkedText("い", selectedRange: NSRange(location: 1, length: 0))
+        XCTAssertEqual(try contents(input), "あい")
     }
 }
 #endif
