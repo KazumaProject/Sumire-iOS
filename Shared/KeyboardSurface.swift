@@ -5,14 +5,32 @@ import SumireCore
 /// Shared native surface used in the app's diagnostic harness and extension.
 /// Reading and selection survive layout changes; conversion runs off the main thread.
 final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
+    private struct SpaceConvertKanaToggleState {
+        let sourceReading: String
+        let sourceCursor: Int
+        let displayText: String
+        let displayCursorUTF16: Int
+        let hasConvertedKatakana: Bool
+        let generation: UInt64
+
+        func matches(_ composition: CompositionState) -> Bool {
+            generation == composition.generation && sourceCursor == composition.cursor &&
+                sourceReading.utf16.elementsEqual(composition.reading.utf16)
+        }
+    }
+
     var insert: ((String) -> Void)?
     var delete: (() -> Void)?
     var deleteUntilBoundary: (() -> Void)?
     var nextKeyboard: (() -> Void)?
     private var specialKeySettings = SumireSpecialKeySettings()
     private var katakanaCycle = SumireKatakanaCycle()
+    private var spaceConvertKanaToggleState: SpaceConvertKanaToggleState?
     var moveCursorRight: (() -> Void)?
     var moveCursorLeft: (() -> Void)?
+    private(set) var spaceCursorMoveModeActive = false
+    private var spaceCursorMoveRemainder: CGFloat = 0
+    private let spaceCursorMovePointsPerCharacter: CGFloat = 12
     var beforeInput: (() -> Void)?
     var updateMarkedText: ((String) -> Void)?
     var updateMarkedSelection: ((String, NSRange) -> Void)?
@@ -22,6 +40,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     var liveConversion = false {
         didSet {
             guard oldValue != liveConversion else { return }
+            spaceConvertKanaToggleState = nil
             beforeInput?()
             guard hasComposition else { return }
             if currentBunsetsuSession != nil {
@@ -1568,7 +1587,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 self.configureKeyboardSwitch(key, cycleOnTap: false)
                 let hold = self.specialKeySettings.action(for: .keyboardSwitch, gesture: .longPress,
                     arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition)
-                if let reason = hold.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress) {
+                if let reason = hold.unavailabilityReason(for: .keyboardSwitch, gesture: .longPress, mode: self.sumireMode) {
                     let unavailable = UIAction(title: "この長押し操作は iOS で未対応", attributes: .disabled) { _ in }
                     unavailable.subtitle = reason
                     key.menu = UIMenu(children: [unavailable])
@@ -1585,7 +1604,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                     guard let self else { return false }
                     let action = self.specialKeySettings.action(for: configuredKey, gesture: gesture,
                         arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition)
-                    return action.isRepeatable && action.unavailabilityReason(for: configuredKey, gesture: gesture) == nil
+                    return action.isRepeatable && action.unavailabilityReason(for: configuredKey, gesture: gesture, mode: self.sumireMode) == nil
                 }
                 gestureKey.longPressEnabled = { [weak self] in
                     guard let self else { return false }
@@ -1593,6 +1612,22 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                         arrangement: arrangement, mode: self.sumireMode)
                     return assigned != nil || self.specialKeySettings.action(for: configuredKey, gesture: .longPress,
                         arrangement: arrangement, mode: self.sumireMode, hasComposition: self.hasComposition) != .doNothing
+                }
+                if configuredKey == .spaceConvert {
+                    gestureKey.longPressDragEnabled = { [weak self] in
+                        guard let self else { return false }
+                        let action = self.specialKeySettings.action(for: configuredKey, gesture: .longPress,
+                            arrangement: arrangement, mode: self.sumireMode,
+                            hasComposition: self.hasComposition)
+                        return action == .cursorMoveMode && action.unavailabilityReason(
+                            for: configuredKey, gesture: .longPress, mode: self.sumireMode) == nil
+                    }
+                    gestureKey.longPressDrag = { [weak self] delta in
+                        self?.moveSpaceCursor(by: delta)
+                    }
+                    gestureKey.longPressDragEnded = { [weak self] in
+                        self?.endSpaceCursorMoveMode()
+                    }
                 }
             } else {
                 // The dakuten/case key is a normal key in the reference and
@@ -1715,7 +1750,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                     key.titleLabel?.adjustsFontSizeToFitWidth = true
                     key.titleLabel?.minimumScaleFactor = 0.5
                     key.accessibilityLabel = assigned.title
-                    key.accessibilityHint = assigned.unavailabilityReason(for: specialID, gesture: .tap)
+                    key.accessibilityHint = assigned.unavailabilityReason(for: specialID, gesture: .tap, mode: self.sumireMode)
                 }
             }
         }
@@ -1742,7 +1777,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         for (direction, gesture) in Self.specialGuideDirections {
             let action = specialKeySettings.action(for: key, gesture: gesture, arrangement: arrangement,
                                                    mode: sumireMode, hasComposition: hasComposition)
-            if action != .doNothing, action.unavailabilityReason(for: key, gesture: gesture) == nil {
+            if action != .doNothing, action.unavailabilityReason(for: key, gesture: gesture, mode: sumireMode) == nil {
                 titles[direction] = action == .deleteUntilBoundary
                     ? (hasComposition ? "全削除" : "区切削除") : (Self.specialGuideLabels[action] ?? action.title)
             }
@@ -1756,12 +1791,112 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         beforeInput?()
         let action = specialKeySettings.action(for: key, gesture: gesture,
             arrangement: arrangement, mode: sumireMode, hasComposition: hasComposition)
+        let hasExplicitAction = specialKeySettings.assignedAction(for: key, gesture: gesture,
+            arrangement: arrangement, mode: sumireMode) != nil
+        if action == .cycleBunsetsuSplitPattern, !hasExplicitAction,
+           currentBunsetsuSession == nil {
+            _ = toggleSpaceConvertKatakanaIfAllowed()
+            return
+        }
+        if action != .confirm {
+            if let state = spaceConvertKanaToggleState,
+               state.matches(composition), composition.phase != .selecting {
+                if liveConversion && !englishComposition,
+                   composition.cursorUTF16 == composition.reading.utf16.count,
+                   let generation = resultGeneration, composition.accepts(generation),
+                   !converted.isEmpty {
+                    let index = selectedCandidate.flatMap { converted.indices.contains($0) ? $0 : nil } ?? 0
+                    selectedCandidate = index
+                    updateMarkedText?(previewText(converted[index]))
+                } else {
+                    selectedCandidate = nil
+                    markReading()
+                }
+            }
+            spaceConvertKanaToggleState = nil
+        }
         executeSpecialAction(action, key: key, gesture: gesture, prepareInput: false)
     }
+    private func toggleSpaceConvertKatakanaIfAllowed() -> Bool {
+        guard hasComposition, composition.phase != .selecting else { return false }
+        tapCycle.reset()
+        katakanaCycle.reset()
+
+        // Android's Space long-press has a two-state flag. Its live-conversion
+        // order is intentionally the reverse of manual conversion.
+        let previous = spaceConvertKanaToggleState.flatMap { $0.matches(composition) ? $0 : nil }
+        let sourceReading = previous?.sourceReading ?? composition.reading
+        let sourceCursor = previous?.sourceCursor ?? composition.cursor
+        let hasConvertedKatakana = !(previous?.hasConvertedKatakana ?? false)
+        let showKatakana = liveConversion ? !hasConvertedKatakana : hasConvertedKatakana
+        let displayText = showKatakana
+            ? (sourceReading.applyingTransform(.hiraganaToKatakana, reverse: false) ?? sourceReading)
+            : sourceReading
+        let sourceCursorIndex = sourceReading.index(sourceReading.startIndex, offsetBy: sourceCursor)
+        let sourcePrefix = String(sourceReading[..<sourceCursorIndex])
+        let displayPrefix = showKatakana
+            ? (sourcePrefix.applyingTransform(.hiraganaToKatakana, reverse: false) ?? sourcePrefix)
+            : sourcePrefix
+        let state = SpaceConvertKanaToggleState(
+            sourceReading: sourceReading,
+            sourceCursor: sourceCursor,
+            displayText: displayText,
+            displayCursorUTF16: displayPrefix.utf16.count,
+            hasConvertedKatakana: hasConvertedKatakana,
+            generation: composition.generation)
+        spaceConvertKanaToggleState = state
+        renderSpaceConvertKanaToggle(state)
+        return true
+    }
+
+    private func renderSpaceConvertKanaToggle(_ state: SpaceConvertKanaToggleState) {
+        if let updateMarkedSelection {
+            updateMarkedSelection(state.displayText,
+                NSRange(location: state.displayCursorUTF16, length: 0))
+        } else {
+            updateMarkedText?(state.displayText)
+        }
+    }
+
+    private func beginSpaceCursorMoveMode() {
+        spaceCursorMoveModeActive = true
+        spaceCursorMoveRemainder = 0
+        updateSumireKeys()
+    }
+
+    private func endSpaceCursorMoveMode() {
+        guard spaceCursorMoveModeActive else { return }
+        spaceCursorMoveModeActive = false
+        spaceCursorMoveRemainder = 0
+        updateSumireKeys()
+    }
+
+    private func moveSpaceCursor(by horizontalDelta: CGFloat) {
+        guard spaceCursorMoveModeActive, horizontalDelta.isFinite else { return }
+        // A short trackpad stride gives finer caret placement than a key flick.
+        // Cap a single event so an anomalous touch delta cannot jump far.
+        let delta = min(192, max(-192, horizontalDelta))
+        spaceCursorMoveRemainder += delta
+        let strideCount = Int(spaceCursorMoveRemainder / spaceCursorMovePointsPerCharacter)
+        guard strideCount != 0 else { return }
+        spaceCursorMoveRemainder -= CGFloat(strideCount) * spaceCursorMovePointsPerCharacter
+        let offset = strideCount > 0 ? 1 : -1
+        for _ in 0..<abs(strideCount) { moveCompositionCursor(by: offset) }
+    }
+
+    private func cycleBunsetsuSplitPatternIfActive() -> Bool {
+        guard var session = currentBunsetsuSession,
+              session.cycleSplitPattern(by: 1) else { return false }
+        bunsetsuSession = session
+        renderBunsetsuSession()
+        loadNextBunsetsuCandidates()
+        return true
+    }
+
     private func executeSpecialAction(_ action: SumireSpecialKeyAction, key: SumireSpecialKeyID = .paste,
                                       gesture: SumireSpecialKeyGesture = .tap, prepareInput: Bool = true) {
         if prepareInput { beforeInput?() }
-        if let reason = action.unavailabilityReason(for: key, gesture: gesture) {
+        if let reason = action.unavailabilityReason(for: key, gesture: gesture, mode: sumireMode) {
             showDataNotice(reason); return
         }
         if action != .toggleKatakana { katakanaCycle.reset() }
@@ -1786,6 +1921,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             } else { showDataNotice("貼り付けできる文字がありません") }
         case .space:
             commitComposition(); insert?(" ")
+        case .cycleBunsetsuSplitPattern: _ = cycleBunsetsuSplitPatternIfActive()
+        case .cursorMoveMode: beginSpaceCursorMoveMode()
         case .convert:
             guard hasComposition else { return }
             if cycleBunsetsuCandidateIfActive() || startBunsetsuConversionIfNeeded() { return }
@@ -1920,6 +2057,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         keyRows.append(row)
     }
     func invalidateComposition() {
+        spaceConvertKanaToggleState = nil
+        endSpaceCursorMoveMode()
         cancelLearning()
         customTapController?.cancel()
         closeSymbolKeyboard()
@@ -2038,6 +2177,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         return true
     }
     private func refreshConversion() {
+        spaceConvertKanaToggleState = nil
         if let remainder = learningRemainder, !remainder.utf16.elementsEqual(composition.reading.utf16) { cancelLearning() }
         clearBunsetsuSession()
         closeExpandedCandidates()
@@ -2254,7 +2394,9 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 let shouldApplyLivePreview = self.liveConversion && !self.englishComposition
                     && self.physicalFunctionKeyPreviewSuppressionGeneration != generation
                     && self.composition.cursorUTF16 == self.composition.reading.utf16.count
-                if shouldApplyLivePreview || self.composition.phase == .selecting {
+                if let spaceToggle = self.spaceConvertKanaToggleState, spaceToggle.matches(self.composition) {
+                    self.renderSpaceConvertKanaToggle(spaceToggle)
+                } else if shouldApplyLivePreview || self.composition.phase == .selecting {
                     self.selectedCandidate = result.candidates.isEmpty ? nil : 0
                     if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
                 }
@@ -2280,6 +2422,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         return candidate.text + preview.reading
     }
     private func chooseCandidate(_ index: Int) {
+        spaceConvertKanaToggleState = nil
         beforeInput?()
         if var session = currentBunsetsuSession {
             guard !candidateBar.isUpdating, bunsetsuCandidateItems.indices.contains(index) else { return }
@@ -2329,6 +2472,25 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             _ = session.moveFocus(by: session.segments.count)
             guard let plan = session.focusedPrefixCommitPlan() else { return }
             commitBunsetsuPlan(plan)
+            return
+        }
+        if let spaceToggle = spaceConvertKanaToggleState,
+           spaceToggle.matches(composition), composition.phase != .selecting {
+            spaceConvertKanaToggleState = nil
+            cancelLearning()
+            guard let text = composition.commit(spaceToggle.displayText) else { return }
+            containsRomaji = false
+            if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
+            converted = []
+            presentedCandidates = []
+            resultGeneration = nil
+            selectedCandidate = nil
+            candidateBar.isUpdating = false
+            candidateBar.candidates = []
+            status.text = "Sumire · C++変換"
+            englishComposition = false
+            updateSumireKeys()
+            converter.reset()
             return
         }
         if selectedCandidate == nil, containsRomaji, let romaji {

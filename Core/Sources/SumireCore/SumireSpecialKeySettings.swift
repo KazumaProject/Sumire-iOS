@@ -91,7 +91,8 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
     case doNothing = "none"
     case deleteBackward, deleteUntilBoundary, deleteAfterCursorUntilBoundary, undoDelete
     case cursorLeft, cursorRight, cursorUp, cursorDown
-    case paste, copy, cut, selectAll, space, convert, enter, confirm
+    case paste, copy, cut, selectAll, space, convert, cycleBunsetsuSplitPattern
+    case cursorMoveMode, enter, confirm
     case nextKeyboard, keyboardMenu, changeInputMode, switchKana, switchEnglish, switchNumber
     case toggleKatakana, toggleDakuten, openSymbols, insertColon, insertHyphen
     public var title: String {
@@ -111,6 +112,8 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
         case .selectAll: return "すべて選択"
         case .space: return "空白"
         case .convert: return "変換・次の候補"
+        case .cycleBunsetsuSplitPattern: return "文節の区切りを変更"
+        case .cursorMoveMode: return "空白キーを押しながらカーソルを移動"
         case .enter: return "改行・入力先の実行"
         case .confirm: return "未確定文字を確定"
         case .nextKeyboard: return "次のキーボード"
@@ -135,7 +138,8 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
 
     /// Shared by settings and execution. Keep unavailable persisted actions
     /// representable; do not silently substitute another operation.
-    public func unavailabilityReason(for key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture) -> String? {
+    public func unavailabilityReason(for key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture,
+                                     mode: TenKeyMode? = nil) -> String? {
         if key == .keyboardSwitch {
             if gesture == .longPress {
                 return self == .keyboardMenu ? nil : "キーボード切替キーの長押しは配列選択メニューを使用します。別の長押し操作は現在未対応です"
@@ -144,10 +148,16 @@ public enum SumireSpecialKeyAction: String, Codable, CaseIterable {
         }
         switch self {
         case .selectAll: return "iOS のキーボード拡張には、入力先の全文を選択する公開 API がありません"
+        case .deleteAfterCursorUntilBoundary: return "カーソル後を区切りまで削除する操作は現在未対応です"
         case .cursorUp, .cursorDown: return "iOS のキーボード拡張には、入力先の表示行を上下に移動する公開 API がありません。現在未対応です"
         case .copy, .cut: return "入力先の選択文字をコピー・切り取りする操作は現在未対応です"
         case .undoDelete: return "直前の削除履歴から復元する操作は現在未対応です"
-        case .deleteAfterCursorUntilBoundary: return "カーソル後を区切りまで削除する操作は現在未対応です"
+        case .cycleBunsetsuSplitPattern:
+            return key == .spaceConvert && gesture == .longPress && mode == .japanese
+                ? nil : "文節の区切り切替は日本語の空白・変換キーの長押しからのみ実行できます"
+        case .cursorMoveMode:
+            return key == .spaceConvert && gesture == .longPress && mode == .japanese
+                ? nil : "カーソル移動モードは日本語の空白・変換キーの長押しからのみ実行できます"
         case .keyboardMenu: return key == .keyboardSwitch && gesture == .longPress ? nil : "配列選択メニューはキーボード切替キーの長押しから開きます"
         default: return nil
         }
@@ -186,12 +196,15 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
 
     /// Defaults from JapaneseKeyboard dev 9506a0b KeyboardDefaultLayouts,
     /// SumireSpecialKeyDefaultActionResolver and DeleteKeyFlickSettings.
-    /// hasComposition selects the existing dynamic space/enter/katakana state.
+    /// hasComposition selects the dynamic space, enter, and katakana actions.
     public static func defaultAction(for key: SumireSpecialKeyID, gesture: SumireSpecialKeyGesture,
                                      arrangement: SumireKeyArrangement, mode: TenKeyMode,
                                      hasComposition: Bool = false) -> SumireSpecialKeyAction {
         if gesture == .longPress {
             if key == .keyboardSwitch { return .keyboardMenu }
+            if key == .spaceConvert && mode == .japanese {
+                return hasComposition ? .cycleBunsetsuSplitPattern : .cursorMoveMode
+            }
             let tap = defaultAction(for: key, gesture: .tap, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
             return tap.isRepeatable ? tap : .doNothing
         }
@@ -251,9 +264,15 @@ public struct SumireSpecialKeySettings: Codable, Equatable {
         if let assigned = assignedAction(for: key, gesture: gesture, arrangement: arrangement, mode: mode) { return assigned }
         if gesture == .longPress, key != .keyboardSwitch {
             let tap = action(for: key, gesture: .tap, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
+            let tapHasOverride = assignedAction(for: key, gesture: .tap,
+                arrangement: arrangement, mode: mode) != nil
+            if key == .spaceConvert && mode == .japanese && !tapHasOverride {
+                return hasComposition ? .cycleBunsetsuSplitPattern : .cursorMoveMode
+            }
             return tap.isRepeatable ? tap : .doNothing
         }
-        return Self.defaultAction(for: key, gesture: gesture, arrangement: arrangement, mode: mode, hasComposition: hasComposition)
+        return Self.defaultAction(for: key, gesture: gesture, arrangement: arrangement, mode: mode,
+                                  hasComposition: hasComposition)
     }
     public mutating func set(_ action: SumireSpecialKeyAction?, for key: SumireSpecialKeyID,
                              gesture: SumireSpecialKeyGesture, arrangement: SumireKeyArrangement, mode: TenKeyMode) throws {
