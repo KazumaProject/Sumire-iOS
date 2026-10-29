@@ -175,6 +175,51 @@ final class PhysicalKeyboardShortcutDispatchTests: XCTestCase {
         XCTAssertEqual(markedUpdates.last, "かんた")
     }
 
+    func testImportedAndroidRomajiOrderDrivesF9AndF10ThroughKeyboardSurface() throws {
+        let fixtures: [(String, [String], String, String)] = [
+            (
+                #"[{"name":"hu-first","mapData":{"hu":{"first":"ふ","second":2},"fu":{"first":"ふ","second":2}}}]"#,
+                ["hu", "fu"], "hu", "ｈｕ"
+            ),
+            (
+                #"[{"name":"fu-first","mapData":{"fu":{"first":"ふ","second":2},"hu":{"first":"ふ","second":2}}}]"#,
+                ["fu", "hu"], "fu", "ｆｕ"
+            )
+        ]
+
+        for fixture in fixtures {
+            let surface = Sumire.KeyboardSurface()
+            let suite = "physical-imported-romaji-order-" + UUID().uuidString
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            surface.settingsDefaults = defaults
+            surface.settingsWriteDefaults = defaults
+
+            var library = RomajiLibrary()
+            library.profiles = try RomajiLibrary.importAndroid(Data(fixture.0.utf8))
+            let profile = try XCTUnwrap(library.profiles.first)
+            XCTAssertEqual(profile.ruleOrder, fixture.1)
+            library.activeID = profile.id
+            try library.save(defaults: defaults)
+
+            surface.reloadRomaji()
+            surface.reloadAppearance()
+            var markedUpdates: [String] = []
+            surface.updateMarkedText = { markedUpdates.append($0) }
+
+            let fuKey = try XCTUnwrap(descendants(of: surface).first {
+                $0.accessibilityIdentifier == "gojuon-2-5"
+            } as? UIButton)
+            fuKey.sendActions(for: .touchUpInside)
+            XCTAssertEqual(markedUpdates.last, "ふ")
+
+            XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToHalfAlphanumeric))
+            XCTAssertEqual(markedUpdates.last, fixture.2)
+            XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertToFullAlphanumeric))
+            XCTAssertEqual(markedUpdates.last, fixture.3)
+        }
+    }
+
     func testRegularInputResetsTheRetainedFunctionKeySource() throws {
         let surface = Sumire.KeyboardSurface()
         let suite = "physical-function-key-reset-" + UUID().uuidString
