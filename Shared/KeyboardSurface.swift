@@ -2402,14 +2402,15 @@ final class KeyboardSurface: UIInputView {
         let currentPrefix = String(composition.reading.prefix(composition.cursor))
         let source = physicalFunctionKeyConversionSource.source(
             for: currentPrefix, generation: composition.generation)
+        let scriptSource = PhysicalKeyboardJapaneseScriptConversion.source(source, using: romaji)
         let output: String
         switch transform {
         case .hiragana:
-            output = source.applyingTransform(.hiraganaToKatakana, reverse: true) ?? source
+            output = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: true) ?? scriptSource
         case .fullKatakana:
-            output = source.applyingTransform(.hiraganaToKatakana, reverse: false) ?? source
+            output = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: false) ?? scriptSource
         case .halfWidth:
-            let katakana = source.applyingTransform(.hiraganaToKatakana, reverse: false) ?? source
+            let katakana = scriptSource.applyingTransform(.hiraganaToKatakana, reverse: false) ?? scriptSource
             output = katakana.applyingTransform(.fullwidthToHalfwidth, reverse: false) ?? katakana
         case .fullAlphanumeric:
             output = PhysicalKeyboardAlphabeticConversion.convert(source, to: .full, using: romaji)
