@@ -122,6 +122,21 @@ struct ConversionResponse {
     let elapsedMilliseconds: Double
     let complete: Bool
     let warning: String?
+    let bunsetsuSnapshot: BunsetsuConversionSnapshot?
+    let orderedDisplayIdentities: [BunsetsuCandidateDisplayIdentity]
+
+    init(generation: UInt64, candidates: [ConversionCandidate], elapsedMilliseconds: Double,
+         complete: Bool, warning: String?, bunsetsuSnapshot: BunsetsuConversionSnapshot? = nil) {
+        self.generation = generation
+        self.candidates = candidates
+        self.elapsedMilliseconds = elapsedMilliseconds
+        self.complete = complete
+        self.warning = warning
+        self.bunsetsuSnapshot = bunsetsuSnapshot
+        self.orderedDisplayIdentities = candidates.map {
+            BunsetsuCandidateDisplayIdentity(surface: $0.text, readingUTF16Length: $0.range.length)
+        }
+    }
 }
 
 /// All native handles are confined to this queue. Results are copied to Swift
@@ -251,6 +266,8 @@ final class ConversionService {
                 defer { sumire_result_destroy(result) }
                 var metrics = sumire_metrics()
                 guard sumire_result_metrics(result, &metrics) == 0 else { throw NativeError("変換結果の計測情報が不正です") }
+                let ownedSnapshot = (includeBunsetsu || bunsetsuSearch)
+                    ? try Self.copyBunsetsuSnapshot(result, reading: reading, generation: metrics.generation) : nil
                 var candidates: [ConversionCandidate] = []
                 for index in 0..<sumire_result_count(result) {
                     var candidate = sumire_candidate()
@@ -330,11 +347,57 @@ final class ConversionService {
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
                 response = .success(ConversionResponse(generation: metrics.generation, candidates: candidates,
-                                                       elapsedMilliseconds: metrics.conversion_ms, complete: metrics.complete != 0, warning: warning))
+                                                       elapsedMilliseconds: metrics.conversion_ms, complete: metrics.complete != 0, warning: warning,
+                                                       bunsetsuSnapshot: ownedSnapshot))
             } catch { response = .failure(error) }
             DispatchQueue.main.async { completion(response) }
         }
     }
+    /// Copy all native indexes before display merging and before result destruction.
+    /// An explicitly empty mapping differs from a missing mapping.
+    private static func copyBunsetsuSnapshot(_ result: OpaquePointer, reading: String,
+                                            generation: UInt64) throws -> BunsetsuConversionSnapshot {
+        func boundaries(_ count: Int, _ read: (Int, UnsafeMutablePointer<UInt32>) -> Int32) throws -> [Int] {
+            try (0..<count).map { index in
+                var offset: UInt32 = 0
+                guard read(index, &offset) == 0 else { throw NativeError("文節境界を取得できません") }
+                return Int(offset)
+            }
+        }
+        let patterns = try (0..<sumire_result_bunsetsu_split_pattern_count(result)).map { pattern in
+            try boundaries(sumire_result_bunsetsu_split_pattern_boundary_count(result, pattern)) {
+                sumire_result_bunsetsu_split_pattern_boundary(result, pattern, $0, $1)
+            }
+        }
+        let primary = try boundaries(sumire_result_primary_bunsetsu_boundary_count(result)) {
+            sumire_result_primary_bunsetsu_boundary(result, $0, $1)
+        }
+        let candidates = try (0..<sumire_result_count(result)).map { index -> BunsetsuSnapshotCandidate in
+            var row = sumire_candidate()
+            var hasMapping: Int32 = 0
+            guard sumire_result_candidate(result, index, &row) == 0,
+                  sumire_result_candidate_has_bunsetsu_split_pattern(result, index, &hasMapping) == 0 else {
+                throw NativeError("文節候補を取得できません")
+            }
+            let tokens = try (0..<row.segment_count).map { tokenIndex -> BunsetsuToken in
+                var token = sumire_segment()
+                guard sumire_result_segment(result, index, tokenIndex, &token) == 0 else {
+                    throw NativeError("文節候補経路を取得できません")
+                }
+                return BunsetsuToken(readingRange: NSRange(location: Int(token.start_utf16), length: Int(token.length_utf16)),
+                                     text: copy(token.text))
+            }
+            let mapped: [Int]? = hasMapping == 0 ? nil : try boundaries(sumire_result_bunsetsu_count(result, index)) {
+                sumire_result_bunsetsu_boundary(result, index, $0, $1)
+            }
+            return BunsetsuSnapshotCandidate(nativeIndex: index, candidateID: row.candidate_id, score: row.score,
+                identity: BunsetsuCandidateDisplayIdentity(surface: copy(row.text), readingUTF16Length: Int(row.length_utf16)),
+                tokenPath: tokens.isEmpty ? nil : tokens, mappedSplitPositions: mapped)
+        }
+        return BunsetsuConversionSnapshot(requestGeneration: generation, reading: reading,
+            splitPatterns: patterns, primarySplitPositions: primary, candidates: candidates)
+    }
+
     func commit(generation: UInt64, candidate: UInt64, learn: Bool, onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {

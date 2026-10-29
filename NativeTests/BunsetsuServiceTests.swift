@@ -18,6 +18,22 @@ final class BunsetsuServiceTests: XCTestCase {
         return try XCTUnwrap(response).get()
     }
 
+    func testOwnedSnapshotSurvivesResultReplacementAndServiceRelease() throws {
+        var service: ConversionService? = ConversionService()
+        let reading = "きょうはとうきょうにいきます"
+        let response = try convert(service!, reading, generation: 701, bunsetsuSearch: true)
+        let snapshot = try XCTUnwrap(response.bunsetsuSnapshot)
+        let before = try snapshot.projectedSplitPatterns(reading: reading, requestGeneration: 701,
+            orderedDisplayCandidates: response.orderedDisplayIdentities)
+        _ = try convert(service!, "あした", generation: 702)
+        service = nil
+        XCTAssertEqual(try snapshot.projectedSplitPatterns(reading: reading, requestGeneration: 701,
+            orderedDisplayCandidates: response.orderedDisplayIdentities), before)
+        XCTAssertThrowsError(try snapshot.projectedSplitPatterns(reading: reading, requestGeneration: 702,
+            orderedDisplayCandidates: response.orderedDisplayIdentities))
+        XCTAssertFalse(before.isEmpty)
+    }
+
     func testOptionalMetadataDoesNotChangeCandidateIdentityOrRanking() throws {
         let service = ConversionService()
         let reading = "きょうはとうきょうにいきます"
