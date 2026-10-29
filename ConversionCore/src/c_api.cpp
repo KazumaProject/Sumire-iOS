@@ -115,6 +115,31 @@ int sumire_session_set_learning(sumire_session *session,
     session->latest.reset();
   });
 }
+int sumire_session_set_learning_entries(sumire_session *session,
+                                        const sumire_learning_entry *entries,
+                                        size_t count, char *error, size_t size) {
+  return guarded(error, size, [&] {
+    check(session && (entries || count == 0), "null learning dictionary argument");
+    check(count <= 10000, "too many learning entries");
+    std::vector<sumire::PersonalEntry> words;
+    size_t total = 0;
+    for (size_t i = 0; i < count; ++i) {
+      const auto &entry = entries[i];
+      check(entry.reading.data && entry.text.data, "null learning text");
+      check(entry.reading.size <= 32768 && entry.text.size <= 65536,
+            "learning entry too long");
+      total += entry.reading.size + entry.text.size;
+      check(total <= 16 * 1024 * 1024, "learning text budget exceeded");
+      words.push_back({std::string(entry.reading.data, entry.reading.size),
+                       std::string(entry.text.data, entry.text.size), 0,
+                       entry.score, false, true, entry.left_id, entry.right_id});
+    }
+    auto replacement = session->engine->personal_dictionary(std::move(words));
+    if (!session->learned || !session->learned->equivalent(*replacement))
+      session->learned = std::move(replacement);
+    session->latest.reset();
+  });
+}
 uint32_t sumire_abi_version(void) { return 1; }
 size_t sumire_category_count(void) { return 30; }
 const char *sumire_category_name(size_t index) {
@@ -293,6 +318,17 @@ int sumire_result_category(const sumire_result *result, size_t candidate,
                            size_t index, sumire_string *out) {
   if (!out || index >= sumire_result_category_count(result, candidate)) return -1;
   *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
+  return 0;
+}
+int sumire_result_segment_context_ids(const sumire_result *result,
+                                      size_t candidate, size_t index,
+                                      uint16_t *left_id, uint16_t *right_id) {
+  if (!result || !left_id || !right_id || candidate >= sumire_result_count(result))
+    return -1;
+  const auto &segments = result->snapshot->value.candidates[candidate].segments;
+  if (index >= segments.size()) return -1;
+  *left_id = segments[index].left_context_id;
+  *right_id = segments[index].right_context_id;
   return 0;
 }
 size_t sumire_result_bunsetsu_count(const sumire_result *result, size_t candidate) {
