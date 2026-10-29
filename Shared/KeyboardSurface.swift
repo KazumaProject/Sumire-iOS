@@ -331,6 +331,7 @@ final class KeyboardSurface: UIInputView {
         stack.accessibilityElementsHidden = false
     }
     private var learningURL: URL?
+    private var learningRemainder: String?
     private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
     func reloadLearningResults() {
@@ -338,14 +339,42 @@ final class KeyboardSurface: UIInputView {
     }
     func configureLearning(url: URL?, localReset: LocalDataReset? = nil) {
         guard learningURL != url || localReset != nil else { return }
+        cancelLearning()
         learningURL = url
         converter.setLearning(url: url, localReset: localReset)
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }
     func toggleLearningPauseForSession() -> Bool {
+        cancelLearning()
         learningPausedForSession.toggle()
         converter.setLearningPaused(learningPausedForSession)
         return learningPausedForSession
+    }
+    private func cancelLearning() {
+        learningRemainder = nil
+        converter.cancelLearning()
+    }
+    func synchronizeLearning(_ completion: @escaping () -> Void) {
+        converter.synchronizeLearning(completion)
+    }
+    /// Only synchronous input mutations at the old composing end may extend
+    /// a partially committed session. Conversion callbacks never call this.
+    private func mutateLearningInput(_ mutation: () -> Void) {
+        let previous = composition.reading, cursor = composition.cursorUTF16
+        mutation()
+        guard let remainder = learningRemainder else { return }
+        guard cursor == previous.utf16.count,
+              remainder.utf16.elementsEqual(previous.utf16), !composition.reading.isEmpty else {
+            cancelLearning(); return
+        }
+        converter.appendLearningInput(from: previous, to: composition.reading)
+        learningRemainder = composition.reading
+    }
+    private func appendLearningInput(_ text: String) {
+        mutateLearningInput { composition.append(text) }
+    }
+    private func appendLearningRomaji(_ text: String, using processor: RomajiConverter) {
+        mutateLearningInput { composition.appendRomaji(text, using: processor) }
     }
     private var composition = CompositionState()
     private var converted: [ConversionCandidate] = []
@@ -837,8 +866,8 @@ final class KeyboardSurface: UIInputView {
                 generation: composition.generation, time: ProcessInfo.processInfo.systemUptime,
                 enabled: tenKeyToggle && tenKeyMode != .number)
             if choice.replacing { _ = composition.replaceLast(choice.text) }
-            else { composition.append(choice.text) }
-        } else { tapCycle.reset(); composition.append(outputs[direction.rawValue]) }
+            else { appendLearningInput(choice.text) }
+        } else { tapCycle.reset(); appendLearningInput(outputs[direction.rawValue]) }
         refreshConversion()
     }
     private func addGojuonGrid(palette: KeyboardPalette) {
@@ -978,7 +1007,7 @@ final class KeyboardSurface: UIInputView {
         beforeInput?(); tapCycle.reset()
         if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
         containsRomaji = false
-        composition.append(text); refreshConversion()
+        appendLearningInput(text); refreshConversion()
         if gojuonMode == .english && direction == .tap && gojuonShift {
             gojuonShift = false; rebuild()
         }
@@ -1095,7 +1124,7 @@ final class KeyboardSurface: UIInputView {
             } else {
                 if self.containsRomaji, let romaji = self.romaji { _ = self.composition.flushRomaji(using: romaji) }
                 self.containsRomaji = false
-                self.composition.append(output); self.refreshConversion()
+                self.appendLearningInput(output); self.refreshConversion()
             }
             self.consumeQwertyShift()
         }
@@ -1389,7 +1418,7 @@ final class KeyboardSurface: UIInputView {
         } else {
             // InputText punctuation bypasses romaji conversion in the reference.
             // Preserve any pending roman prefix rather than flushing it here.
-            composition.append(text); refreshConversion()
+            appendLearningInput(text); refreshConversion()
         }
     }
     private func refreshCustomShiftDisplay() {
@@ -1405,17 +1434,17 @@ final class KeyboardSurface: UIInputView {
             containsRomaji = true
             if text.utf16.count == 1 {
                 if isDefaultCustomRomaji && customShift.isActive {
-                    composition.append(text)
+                    appendLearningInput(text)
                     composition.transformPrefix { customShift.applying(to: $0) }
                 } else {
-                    composition.appendRomaji(text, using: romaji)
+                    appendLearningRomaji(text, using: romaji)
                     if !isDefaultCustomRomaji { composition.transformPrefix { customShift.applying(to: $0) } }
                 }
-            } else { composition.appendRomaji(shiftedText, using: romaji) }
+            } else { appendLearningRomaji(shiftedText, using: romaji) }
             refreshConversion()
         } else {
             if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
-            containsRomaji = false; composition.append(shiftedText); refreshConversion()
+            containsRomaji = false; appendLearningInput(shiftedText); refreshConversion()
         }
     }
     private func addSumireGrid(palette: KeyboardPalette) {
@@ -1565,8 +1594,8 @@ final class KeyboardSurface: UIInputView {
                 let choice = tapCycle.choose(cycle, direction: .tap,
                     generation: composition.generation, time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
                 if choice.replacing { _ = composition.replaceLast(choice.text) }
-                else { composition.append(choice.text) }
-            } else { tapCycle.reset(); composition.append(text) }
+                else { appendLearningInput(choice.text) }
+            } else { tapCycle.reset(); appendLearningInput(text) }
             refreshConversion()
         case .referenceAction(let action, _): dispatchFlickReferenceAction(action)
         case .action(let action, let value, _):
@@ -1718,7 +1747,7 @@ final class KeyboardSurface: UIInputView {
                 showDataNotice("クリップボードを利用するにはキーボードのフルアクセスが必要です"); return
             }
             if let text = UIPasteboard.general.string, !text.isEmpty {
-                composition.append(text); refreshConversion()
+                appendLearningInput(text); refreshConversion()
             } else { showDataNotice("貼り付けできる文字がありません") }
         case .space:
             commitComposition(); insert?(" ")
@@ -1742,7 +1771,7 @@ final class KeyboardSurface: UIInputView {
             guard hasComposition else { return }
             let oldCursor = composition.cursor
             let text = katakanaCycle.next(composition.reading)
-            composition.invalidate(); composition.append(text)
+            composition.invalidate(); appendLearningInput(text)
             _ = composition.moveCursor(by: min(oldCursor, text.count) - text.count)
             containsRomaji = false; refreshConversion()
         case .openSymbols: showSymbolKeyboard()
@@ -1771,7 +1800,7 @@ final class KeyboardSurface: UIInputView {
             // Read only following an explicit tap; iOS controls paste permission.
             if let text = UIPasteboard.general.string {
                 tapCycle.reset()
-                composition.append(text)
+                appendLearningInput(text)
                 refreshConversion()
             }
         case .cursorLeft:
@@ -1821,7 +1850,7 @@ final class KeyboardSurface: UIInputView {
         let choice = tapCycle.choose(values, direction: direction, generation: composition.generation,
                                      time: ProcessInfo.processInfo.systemUptime, enabled: tenKeyToggle)
         if choice.replacing { _ = composition.replaceLast(choice.text) }
-        else { composition.append(choice.text) }
+        else { appendLearningInput(choice.text) }
         refreshConversion()
     }
     private func addRow(_ values: [String], palette: KeyboardPalette, special: Bool) {
@@ -1856,6 +1885,7 @@ final class KeyboardSurface: UIInputView {
         keyRows.append(row)
     }
     func invalidateComposition() {
+        cancelLearning()
         customTapController?.cancel()
         closeSymbolKeyboard()
         katakanaCycle.reset()
@@ -1896,6 +1926,7 @@ final class KeyboardSurface: UIInputView {
         panel.onSelect = { [weak self] id, clipboard in
             guard let self else { return }
             self.closeExpandedCandidates()
+            self.cancelLearning()
             self.executeTextMacro?(id, clipboard)
         }
         addSubview(panel)
@@ -1972,6 +2003,7 @@ final class KeyboardSurface: UIInputView {
         return true
     }
     private func refreshConversion() {
+        if let remainder = learningRemainder, !remainder.utf16.elementsEqual(composition.reading.utf16) { cancelLearning() }
         clearBunsetsuSession()
         closeExpandedCandidates()
         if inputMode == .tenKey || inputMode == .sumire || inputMode == .kana { updateModeConversionLanguage() }
@@ -2127,7 +2159,12 @@ final class KeyboardSurface: UIInputView {
     }
 
     private func commitBunsetsuPlan(_ plan: BunsetsuFocusedPrefixCommitPlan) {
-        guard currentBunsetsuSession != nil else { return }
+        guard currentBunsetsuSession != nil,
+              plan.learningReading.utf16.elementsEqual(composition.reading.utf16) else { return }
+        converter.commitLearningPlan(plan, learnFirst: learnFirstCandidate) { [weak self] message in
+            if self?.hasComposition == false { self?.showDataNotice(message) }
+        }
+        learningRemainder = plan.nextComposingInput.isEmpty ? nil : plan.nextComposingInput
         // Session plans validate UTF-16/scalar boundaries, including boundaries
         // inside a combining grapheme. Do not use Character-only commitPrefix,
         // or reset the composition generation while adopting the remainder.
@@ -2219,6 +2256,7 @@ final class KeyboardSurface: UIInputView {
               presentedCandidates.indices.contains(index) else { return }
         if let macroID = presentedCandidates[index].textMacroID {
             selectedCandidate = nil
+            cancelLearning()
             executeTextMacro?(macroID, nil)
             return
         }
@@ -2227,6 +2265,7 @@ final class KeyboardSurface: UIInputView {
         commitComposition()
     }
     private func commitRawAtCursorAndSpace() {
+        cancelLearning()
         clearBunsetsuSession()
         guard let commitRawTextAndSpace else {
             showDataNotice("この入力先では読みの確定と空白挿入を実行できません")
@@ -2259,14 +2298,13 @@ final class KeyboardSurface: UIInputView {
         if selectedCandidate == nil, containsRomaji, let romaji {
             _ = composition.flushRomaji(using: romaji)
         }
+        let originalInput = composition.reading
+        var learningSelection: (UInt64, ConversionCandidate, Int)?
         var candidate: ConversionCandidate?
         if let generation = resultGeneration, composition.accepts(generation),
            let index = selectedCandidate, converted.indices.contains(index) {
             candidate = converted[index]
-            converter.commit(generation: generation, candidate: converted[index].id,
-                             learn: index > 0 || learnFirstCandidate) { [weak self] message in
-                if self?.hasComposition == false { self?.showDataNotice(message) }
-            }
+            learningSelection = (generation, converted[index], index)
         }
         let text: String?
         if let candidate {
@@ -2274,6 +2312,13 @@ final class KeyboardSurface: UIInputView {
             text = composition.commitPrefix(candidate.text, readingUTF16Length: candidate.range.length)
         } else { text = composition.commit() }
         guard let text else { return }
+        if let (generation, selected, rank) = learningSelection {
+            converter.commitSelection(generation: generation, candidate: selected, rank: rank,
+                input: originalInput, remaining: composition.reading, learnFirst: learnFirstCandidate) { [weak self] message in
+                if self?.hasComposition == false { self?.showDataNotice(message) }
+            }
+            learningRemainder = composition.reading.isEmpty ? nil : composition.reading
+        } else { cancelLearning() }
         containsRomaji = false
         if let commitMarkedText { commitMarkedText(text) } else { insert?(text) }
         converted = []
@@ -2508,6 +2553,7 @@ final class KeyboardSurface: UIInputView {
     }
 
     private func cancelPhysicalConversion() {
+        cancelLearning()
         guard hasComposition else { return }
         composition.optionsChanged() // Invalidates pending results and returns to editing.
         containsRomaji = false
@@ -2601,6 +2647,7 @@ final class KeyboardSurface: UIInputView {
             }
             updateQwertyCase()
         case "⌫":
+            cancelLearning()
             if composition.deleteBackward() { refreshConversion() } else { delete?() }
         case "空白":
             if englishComposition { commitComposition(); insert?(" "); return }
@@ -2623,12 +2670,12 @@ final class KeyboardSurface: UIInputView {
             else if inputMode == .romaji && romajiLatin { commitComposition(); insert?(value) }
             else if inputMode == .romaji, let romaji {
                 containsRomaji = true
-                composition.appendRomaji(value, using: romaji)
+                appendLearningRomaji(value, using: romaji)
                 refreshConversion()
             } else {
                 if containsRomaji, let romaji { _ = composition.flushRomaji(using: romaji) }
                 containsRomaji = false
-                composition.append(value)
+                appendLearningInput(value)
                 refreshConversion()
             }
         }
@@ -2651,7 +2698,7 @@ final class KeyboardSurface: UIInputView {
         if !englishComposition && !composition.reading.isEmpty { commitComposition() }
         englishComposition = true
         containsRomaji = false
-        composition.append(text)
+        appendLearningInput(text)
         refreshConversion()
     }
     private func consumeQwertyShift() {

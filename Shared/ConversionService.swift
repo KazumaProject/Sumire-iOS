@@ -221,6 +221,7 @@ final class ConversionService {
         _ = pending.advance()
         let state = state
         queue.async {
+            state.cancelLearning()
             state.learning = nil; state.learningURL = nil; state.learningFailure = nil
             do {
                 try localReset?.apply()
@@ -230,7 +231,7 @@ final class ConversionService {
     }
     func setLearningPaused(_ paused: Bool) {
         let state = state
-        queue.async { state.learningPaused = paused }
+        queue.async { state.learningPaused = paused; if paused { state.cancelLearning() } }
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
@@ -255,8 +256,12 @@ final class ConversionService {
                 let flags: UInt32
                 if english { flags = 2 }
                 else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) }
+                // UI composition and bunsetsu loads have different generation
+                // domains; the C session requires one strictly increasing one.
+                state.nativeGeneration += 1
+                let nativeGeneration = state.nativeGeneration
                 let status = reading.utf8CString.withUnsafeBufferPointer { bytes -> Int32 in
-                    var request = sumire_request(generation: generation, reading: bytes.baseAddress,
+                    var request = sumire_request(generation: nativeGeneration, reading: bytes.baseAddress,
                                                  reading_bytes: bytes.count - 1,
                                                  edit_start_utf16: UInt32(max(0, editStart)),
                                                  candidate_count: 20, max_states: 200_000, flags: flags)
@@ -267,7 +272,7 @@ final class ConversionService {
                 var metrics = sumire_metrics()
                 guard sumire_result_metrics(result, &metrics) == 0 else { throw NativeError("変換結果の計測情報が不正です") }
                 let ownedSnapshot = (includeBunsetsu || bunsetsuSearch)
-                    ? try Self.copyBunsetsuSnapshot(result, reading: reading, generation: metrics.generation) : nil
+                    ? try Self.copyBunsetsuSnapshot(result, reading: reading, generation: generation) : nil
                 var candidates: [ConversionCandidate] = []
                 for index in 0..<sumire_result_count(result) {
                     var candidate = sumire_candidate()
@@ -344,9 +349,11 @@ final class ConversionService {
                                                           classifiedCategories: classifiedCategories))
                 }
                 candidates = ConversionCandidate.mergedForDisplay(candidates)
+                state.lastGeneration = generation
+                state.lastCandidateOrder = candidates.map(\.id)
                 state.lastReading = reading
                 state.lastCandidates = Dictionary(uniqueKeysWithValues: candidates.map { ($0.id, $0) })
-                response = .success(ConversionResponse(generation: metrics.generation, candidates: candidates,
+                response = .success(ConversionResponse(generation: generation, candidates: candidates,
                                                        elapsedMilliseconds: metrics.conversion_ms, complete: metrics.complete != 0, warning: warning,
                                                        bunsetsuSnapshot: ownedSnapshot))
             } catch { response = .failure(error) }
@@ -398,20 +405,78 @@ final class ConversionService {
             splitPatterns: patterns, primarySplitPositions: primary, candidates: candidates)
     }
 
+    /// Compatibility entry point for consumers committing a whole native result.
     func commit(generation: UInt64, candidate: UInt64, learn: Bool, onNotice: @escaping (String) -> Void) {
+        enqueueCommit(generation: generation, candidate: candidate, rank: nil, input: nil,
+                      remaining: nil, expected: nil, learnFirst: learn, enabled: learn, onNotice: onNotice)
+    }
+
+    func commitSelection(generation: UInt64, candidate: ConversionCandidate, rank: Int,
+                         input: String, remaining: String, learnFirst: Bool,
+                         onNotice: @escaping (String) -> Void) {
+        enqueueCommit(generation: generation, candidate: candidate.id, rank: rank, input: input,
+                      remaining: remaining, expected: candidate, learnFirst: learnFirst,
+                      enabled: true, onNotice: onNotice)
+    }
+
+    private func enqueueCommit(generation: UInt64, candidate: UInt64, rank: Int?, input: String?,
+                               remaining: String?, expected: ConversionCandidate?, learnFirst: Bool,
+                               enabled: Bool, onNotice: @escaping (String) -> Void) {
         let state = state
         queue.async {
-            var error = [CChar](repeating: 0, count: 1024)
-            guard sumire_session_commit(state.session, generation, candidate, &error, error.count) == 0,
-                  learn, !state.learningPaused, state.learningURL != nil, let store = state.learning,
-                  let selected = state.lastCandidates[candidate],
-                  let range = Range(selected.range, in: state.lastReading) else { return }
-            do {
-                try store.record(reading: String(state.lastReading[range]), text: selected.text)
-                DispatchQueue.main.async { onNotice("学習しました") }
+            guard state.lastGeneration == generation,
+                  let selected = state.lastCandidates[candidate], selected.range.location == 0,
+                  let range = Range(selected.range, in: state.lastReading),
+                  let nativeRank = state.lastCandidateOrder.firstIndex(of: candidate),
+                  rank == nil || rank == nativeRank,
+                  input == nil || state.lastReading.utf16.elementsEqual(input!.utf16),
+                  expected == nil || (expected!.range == selected.range &&
+                    expected!.text.utf16.elementsEqual(selected.text.utf16) && expected!.score == selected.score)
+            else { state.cancelLearning(); return }
+            let tail = String(state.lastReading[range.upperBound...])
+            guard remaining == nil || tail.utf16.elementsEqual(remaining!.utf16) else {
+                state.cancelLearning(); return
             }
-            catch { let message = error.localizedDescription; DispatchQueue.main.async { onNotice(message) } }
+            var error = [CChar](repeating: 0, count: 1024)
+            guard sumire_session_commit(state.session, state.nativeGeneration, candidate, &error, error.count) == 0 else {
+                state.cancelLearning(); return
+            }
+            guard enabled else { state.cancelLearning(); return }
+            state.appendLearning([LearningFragment(reading: String(state.lastReading[range]),
+                output: selected.text, candidateScore: Int32(clamping: selected.score),
+                candidateIndex: Int32(clamping: nativeRank), leftID: nil, rightID: nil)],
+                input: state.lastReading, remaining: remaining ?? "", learnFirst: learnFirst, onNotice: onNotice)
         }
+    }
+
+    /// Bunsetsu references can outlive the latest native result. Only the owned
+    /// and current Surface plan is used; no old native candidate ID is committed.
+    func commitLearningPlan(_ plan: BunsetsuFocusedPrefixCommitPlan, learnFirst: Bool,
+                            onNotice: @escaping (String) -> Void) {
+        let state = state
+        queue.async {
+            state.appendLearning(plan.learningFragments.map {
+                LearningFragment(reading: $0.reading, output: $0.output,
+                    candidateScore: $0.candidateScore, candidateIndex: $0.candidateIndex,
+                    leftID: $0.leftID, rightID: $0.rightID, explicitlySelected: $0.explicitlySelected)
+            }, input: plan.learningReading, remaining: plan.nextComposingInput,
+               learnFirst: learnFirst, onNotice: onNotice)
+        }
+    }
+
+    func cancelLearning() { let state = state; queue.async { state.cancelLearning() } }
+    func appendLearningInput(from input: String, to updated: String) {
+        let state = state
+        queue.async {
+            guard state.learningRemainder?.utf16.elementsEqual(input.utf16) == true,
+                  state.learningSession.adoptAppendedRemainder(updated) else {
+                state.cancelLearning(); return
+            }
+            state.learningRemainder = updated
+        }
+    }
+    func synchronizeLearning(_ completion: @escaping () -> Void) {
+        queue.async { DispatchQueue.main.async(execute: completion) }
     }
     func reset() {
         _ = pending.advance()
@@ -419,6 +484,8 @@ final class ConversionService {
         queue.async {
             sumire_session_reset(state.session)
             state.lastReading = ""
+            state.lastGeneration = nil
+            state.lastCandidateOrder = []
             state.lastCandidates.removeAll(keepingCapacity: false)
         }
     }
@@ -460,6 +527,11 @@ final class ConversionService {
         var learningFailure: String?
         var standaloneAvailable = false
         var lastReading = ""
+        var nativeGeneration: UInt64 = 0
+        var lastGeneration: UInt64?
+        var lastCandidateOrder: [UInt64] = []
+        var learningSession = ConversionLearningSession()
+        var learningRemainder: String?
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         private var openedDirectory: URL?
         // Generations are immutable. Once a native open rejects one, skip it for
@@ -469,6 +541,29 @@ final class ConversionService {
         private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
+        func cancelLearning() { learningSession.cancel(); learningRemainder = nil }
+        func appendLearning(_ fragments: [LearningFragment], input: String, remaining: String,
+                            learnFirst: Bool, onNotice: @escaping (String) -> Void) {
+            guard !learningPaused, let url = learningURL else { cancelLearning(); return }
+            guard learningSession.append(fragments, from: input, remainingInput: remaining) else {
+                cancelLearning(); return
+            }
+            learningRemainder = remaining
+            guard remaining.isEmpty else { return }
+            let records = learningSession.finish(learnFirstCandidate: learnFirst,
+                timestamp: Int64(Date().timeIntervalSince1970 * 1_000))
+            learningRemainder = nil
+            do {
+                if learning == nil { learning = try LearningStore(url: url) }
+                let eligible = records.filter { LearningEligibilityPolicy.isEligible(input: $0.input,
+                    output: $0.output, allowJapaneseWithSymbolsAndNumbers: true) }
+                try learning?.upsertLearningEntries(eligible)
+                if !eligible.isEmpty { DispatchQueue.main.async { onNotice("学習しました") } }
+            } catch {
+                learningFailure = error.localizedDescription
+                DispatchQueue.main.async { onNotice(error.localizedDescription) }
+            }
+        }
         func prepareLearning(reading: String) throws -> String? {
             var entries: [LearningStore.Entry] = []
             if let url = learningURL, learningFailure == nil {
@@ -561,6 +656,8 @@ final class ConversionService {
             sumire_session_destroy(session)
             session = nil
             lastReading = ""
+            lastGeneration = nil
+            lastCandidateOrder = []
             lastCandidates.removeAll(keepingCapacity: false)
             standaloneAvailable = false
             englishLoaded = false
