@@ -35,7 +35,7 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
     override func touchesEnded(_ touches: Set<UITouch>, with event: UIEvent?) {
         guard let touch = activeTouch, touches.contains(touch) else { return }
         let shouldEmit = emission.finish(inside: bounds.contains(touch.location(in: self)))
-        clearInput()
+        clearInput(reportRelease: true)
         if shouldEmit, let onCommittedPress {
             super.touchesCancelled([touch], with: event)
             onCommittedPress(true)
@@ -56,22 +56,23 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
     func finishActiveInput() {
         guard activeTouch != nil else { return }
         let emit = emission.finish(inside: inside && isEnabled)
-        cancelActiveInput()
+        clearInput(reportRelease: true)
         if emit { emitPress(isTap: true) }
     }
     func cancelActiveInput() {
         let touch = activeTouch
-        clearInput()
+        clearInput(reportRelease: false)
         if let touch { super.touchesCancelled([touch], with: nil) }
         // Prevent a recognizer already tracking this finger from firing later.
         hold.isEnabled = false; hold.isEnabled = true
         isHighlighted = false
     }
-    private func clearInput() {
+    private func clearInput(reportRelease: Bool) {
         stopRepeating()
         activeTouch = nil
         emission.cancel()
-        touchRouter?.end(self)
+        if reportRelease { touchRouter?.end(self) }
+        else { touchRouter?.cancel(self) }
     }
     private var repeatTimer: Timer?
     private lazy var hold: UILongPressGestureRecognizer = {
@@ -112,7 +113,9 @@ final class RepeatingKey: UIButton, UIGestureRecognizerDelegate, KeyTouchPartici
             RunLoop.main.add(repeatTimer!, forMode: .common)
         case .changed:
             if !bounds.contains(gesture.location(in: self)) { stopRepeating() }
-        default: clearInput()
+        case .ended: clearInput(reportRelease: true)
+        case .cancelled, .failed: clearInput(reportRelease: false)
+        default: break
         }
     }
     private func stopRepeating() {

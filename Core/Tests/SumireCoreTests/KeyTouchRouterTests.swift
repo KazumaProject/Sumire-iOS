@@ -82,6 +82,36 @@ final class KeyTouchRouterTests: XCTestCase {
         temporary = nil
         XCTAssertEqual(router.activeCount, 0)
     }
+    func testFeedbackCallbacksFollowAcceptedTouchesAndIgnoreCancellation() {
+        let router = KeyTouchRouter(), first = Key(), second = Key(), exclusive = Key()
+        router.independentMultiTouch = true
+        var events: [String] = []
+        router.onBegin = { key in events.append(key === first ? "down:first" : key === second ? "down:second" : "down:exclusive") }
+        router.onEnd = { key in events.append(key === first ? "up:first" : key === second ? "up:second" : "up:exclusive") }
+
+        XCTAssertTrue(router.begin(first))
+        XCTAssertFalse(router.begin(first)) // Rejected duplicate: no second down event.
+        XCTAssertTrue(router.begin(second))
+        router.end(second)
+        XCTAssertTrue(router.begin(exclusive, exclusive: true))
+        router.end(exclusive)
+        XCTAssertEqual(events, ["down:first", "down:second", "up:second", "down:exclusive", "up:exclusive"])
+    }
+    func testExplicitCancelDoesNotEmitReleaseFeedback() {
+        let router = KeyTouchRouter(), key = Key()
+        var events: [String] = []
+        router.onBegin = { _ in events.append("down") }
+        router.onEnd = { _ in events.append("up") }
+
+        XCTAssertTrue(router.begin(key))
+        router.cancel(key)
+        XCTAssertEqual(events, ["down"])
+        XCTAssertEqual(router.activeCount, 0)
+
+        XCTAssertTrue(router.begin(key))
+        router.end(key)
+        XCTAssertEqual(events, ["down", "down", "up"])
+    }
     func testFeedbackBackupRoundTripAndInvalidData() throws {
         let defaults = UserDefaults(suiteName: UUID().uuidString)!
         var feedback = TouchFeedbackSettings()

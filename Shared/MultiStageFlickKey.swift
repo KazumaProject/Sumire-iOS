@@ -228,8 +228,12 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         guard let touch = tracked else { return }
         updateMovement(point(touch))
         let result = engine?.end(point(touch), wasFlick: wasFlick)
-        cancelActiveInput()
+        endActiveInput()
         if let result { emit(result) }
+    }
+    private func endActiveInput() {
+        touchRouter?.end(self)
+        resetActiveInput()
     }
     private func emit(_ result: CommitEvent) {
         if let onCommit { onCommit(result) } else { onOutput?(result.output) }
@@ -240,7 +244,10 @@ final class MultiStageFlickKey: UIButton, KeyTouchParticipant {
         wasFlick = wasFlick || distance >= max(1, activeConfiguration.threshold)
     }
     func cancelActiveInput() {
-        touchRouter?.end(self)
+        touchRouter?.cancel(self)
+        resetActiveInput()
+    }
+    private func resetActiveInput() {
         holdTimer?.invalidate(); holdTimer = nil
         tracked = nil; engine = nil; isHighlighted = false
         popup?.removeFromSuperview(); popup = nil

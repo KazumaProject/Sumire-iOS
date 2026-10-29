@@ -111,8 +111,9 @@ final class FlickKey: UIButton, KeyTouchParticipant {
         if let resolveDirection { return resolveDirection(point.x - start.x, point.y - start.y) }
         return .resolve(dx: point.x - start.x, dy: point.y - start.y, shape: thresholdShape)
     }
-    private func restore() {
-        touchRouter?.end(self)
+    private func restore(reportRelease: Bool = false) {
+        if reportRelease { touchRouter?.end(self) }
+        else { touchRouter?.cancel(self) }
         holdTimer?.invalidate(); holdTimer = nil
         popup?.removeFromSuperview(); popup = nil
         longPressActive = false
@@ -153,7 +154,7 @@ final class FlickKey: UIButton, KeyTouchParticipant {
         guard let touch = tracked else { return }
         let selected = direction(touch)
         let useAlternate = longPressActive && selected == selectedDirection
-        restore()
+        restore(reportRelease: true)
         if useAlternate { onLongPressFlick?(selected) } else { onFlick?(selected) }
     }
     func cancelActiveFlick() { restore() }

@@ -1,9 +1,10 @@
+import AVFoundation
 import UIKit
 import SumireCore
 
 /// Shared native surface used in the app's diagnostic harness and extension.
 /// Reading and selection survive layout changes; conversion runs off the main thread.
-final class KeyboardSurface: UIInputView {
+final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     var insert: ((String) -> Void)?
     var delete: (() -> Void)?
     var deleteUntilBoundary: (() -> Void)?
@@ -570,6 +571,14 @@ final class KeyboardSurface: UIInputView {
     private var keyRows: [UIStackView] = []
     private let touchRouter = KeyTouchRouter()
     private var touchFeedback = TouchFeedbackSettings()
+    private var keyFeedbackSettings = KeyFeedbackSettings()
+    private var customKeyFeedbackActions: [ObjectIdentifier: CustomKeyAction] = [:]
+    private lazy var keyFeedbackRuntime = KeyboardKeyFeedbackRuntime()
+    var enableInputClicksWhenVisible: Bool {
+        keyFeedbackSettings.isKeySoundEnabled &&
+            keyFeedbackSettings.soundVolumeMultiplier == nil &&
+            !isAppearancePreview && resizeOverlay == nil
+    }
     private let stack = UIStackView()
     private let status = UILabel()
     private var expandedCandidates: UIView?
@@ -580,6 +589,8 @@ final class KeyboardSurface: UIInputView {
 
     init(frame: CGRect = .zero) {
         super.init(frame: frame, inputViewStyle: .keyboard)
+        touchRouter.onBegin = { [weak self] participant in self?.emitKeyFeedback(.press, for: participant) }
+        touchRouter.onEnd = { [weak self] participant in self?.emitKeyFeedback(.release, for: participant) }
         NotificationCenter.default.addObserver(self, selector: #selector(purgeConversionCache),
             name: UIApplication.didReceiveMemoryWarningNotification, object: nil)
         translatesAutoresizingMaskIntoConstraints = false
@@ -689,6 +700,27 @@ final class KeyboardSurface: UIInputView {
         }
         view.subviews.forEach { configureTouchInput(in: $0) }
     }
+    private func emitKeyFeedback(_ moment: KeyFeedbackMoment, for participant: any KeyTouchParticipant) {
+        let button = participant as? UIButton
+        let kind: KeyFeedbackKeyKind
+        if let button, let action = customKeyFeedbackActions[ObjectIdentifier(button)] {
+            // Android's explicit no-op key suppresses both DOWN and release feedback.
+            guard let resolved = KeyFeedbackKeyKind.resolve(action: action) else { return }
+            kind = resolved
+        } else {
+            kind = KeyFeedbackKeyKind.resolve(
+                identifier: button?.accessibilityIdentifier,
+                label: button?.accessibilityLabel,
+                title: button?.currentTitle
+            )
+        }
+        keyFeedbackRuntime.dispatch(
+            moment,
+            kind: kind,
+            settings: keyFeedbackSettings,
+            isKeyboardLayoutEditing: isAppearancePreview || resizeOverlay != nil
+        )
+    }
     private func rebuild() {
         var customNotice: String?
         if inputMode == .custom, !customEnglishVisible,
@@ -702,7 +734,9 @@ final class KeyboardSurface: UIInputView {
         defer { if let customNotice { showDataNotice(customNotice) } }
         touchRouter.cancelAll()
         customTapController?.deactivate(); customTapController = nil
+        customKeyFeedbackActions.removeAll()
         touchFeedback = TouchFeedbackSettings.load(defaults: settingsDefaults)
+        keyFeedbackSettings = KeyFeedbackSettings.load(defaults: settingsDefaults)
         touchRouter.independentMultiTouch = touchFeedback.independentMultiTouch
         // All arrangements, including early-return grids, share the same router.
         defer { configureTouchInput(in: stack) }
@@ -1179,6 +1213,7 @@ final class KeyboardSurface: UIInputView {
                 tapAction = .unsupported(raw: placement.id, reason: "キーの操作が未設定です")
             }
             let normalAction = tapAction
+            self.customKeyFeedbackActions[ObjectIdentifier(key)] = normalAction
             let textLabels = Set(((runtime.map { Self.customActions(in: $0, targets: targets) } ?? []) + [normalAction]).compactMap { action -> String? in
                 if case .text(let value) = action { return value }
                 return nil
@@ -2706,5 +2741,115 @@ final class KeyboardSurface: UIInputView {
         guard displayedInputMode == .english || inputMode == .romaji else { return }
         qwertyLastShiftTap = 0
         if shifted && !qwertyCapsLock { shifted = false; updateQwertyCase() }
+    }
+}
+
+/// Platform runtime for the settings policy above. The short PCM click is
+/// generated in memory, so the extension needs no extra resource or shared
+/// container access. AVAudioSession's ambient category follows the iOS silent
+/// switch and mixes with audio from the host app.
+@MainActor
+private final class KeyboardKeyFeedbackRuntime {
+    private let haptic = UIImpactFeedbackGenerator(style: .soft)
+    private var players: [String: AVAudioPlayer] = [:]
+    private var didConfigureAudioSession = false
+
+    func dispatch(_ moment: KeyFeedbackMoment, kind: KeyFeedbackKeyKind,
+                  settings: KeyFeedbackSettings, isKeyboardLayoutEditing: Bool) {
+        if settings.shouldVibrate(at: moment, isKeyboardLayoutEditing: isKeyboardLayoutEditing) {
+            haptic.impactOccurred(intensity: 0.45)
+            haptic.prepare()
+        }
+
+        // iOS exposes no public silent-switch query. The ambient category below
+        // suppresses playback when silent mode is active, matching Android's
+        // normal-ringer-only policy without private APIs.
+        guard settings.shouldPlaySound(
+            at: moment,
+            isRingerModeNormal: true,
+            isKeyboardLayoutEditing: isKeyboardLayoutEditing
+        ) else { return }
+        guard let volume = settings.soundVolumeMultiplier else {
+            UIDevice.current.playInputClick()
+            return
+        }
+        play(kind.soundType, volume: volume)
+    }
+
+    private func play(_ type: KeyFeedbackSoundType, volume: Double) {
+        let session = AVAudioSession.sharedInstance()
+        if !didConfigureAudioSession {
+            // `.ambient` already mixes with other app audio and respects the
+            // Ring/Silent switch; `.mixWithOthers` is only explicitly valid
+            // for other playback categories.
+            guard (try? session.setCategory(.ambient)) != nil else { return }
+            didConfigureAudioSession = true
+        }
+        guard let player = audioPlayer(for: type) else { return }
+        // Zero delegates to the system output volume. Applying outputVolume
+        // here as well would multiply it twice (once per player and once by
+        // the audio route).
+        player.volume = Float(min(1, max(0, volume)))
+        player.currentTime = 0
+        player.play()
+    }
+
+    private func audioPlayer(for type: KeyFeedbackSoundType) -> AVAudioPlayer? {
+        if let player = players[type.rawValue] { return player }
+        guard let player = try? AVAudioPlayer(data: makeClickWave(for: type)) else { return nil }
+        player.prepareToPlay()
+        players[type.rawValue] = player
+        return player
+    }
+
+    private func makeClickWave(for type: KeyFeedbackSoundType) -> Data {
+        let sampleRate: UInt32 = 22_050
+        let frameCount = Int(sampleRate / 50) // 20 ms
+        let dataLength = UInt32(frameCount * MemoryLayout<Int16>.size)
+        let frequency: Double
+        switch type {
+        case .standard: frequency = 1_900
+        case .delete: frequency = 1_250
+        case .enter: frequency = 2_300
+        }
+
+        var data = Data()
+        data.append(contentsOf: "RIFF".utf8)
+        appendLE(36 + dataLength, to: &data)
+        data.append(contentsOf: "WAVEfmt ".utf8)
+        appendLE(UInt32(16), to: &data)
+        appendLE(UInt16(1), to: &data) // PCM
+        appendLE(UInt16(1), to: &data) // mono
+        appendLE(sampleRate, to: &data)
+        appendLE(sampleRate * 2, to: &data)
+        appendLE(UInt16(2), to: &data) // block alignment
+        appendLE(UInt16(16), to: &data)
+        data.append(contentsOf: "data".utf8)
+        appendLE(dataLength, to: &data)
+
+        var noiseState: UInt32 = 0x51A7
+        for frame in 0..<frameCount {
+            let time = Double(frame) / Double(sampleRate)
+            noiseState = noiseState &* 1_664_525 &+ 1_013_904_223
+            let noise = Double(noiseState >> 16) / 32_767.5 - 1
+            let tone = sin(2 * .pi * frequency * time) * 0.55
+                + sin(2 * .pi * frequency * 2.4 * time) * 0.15
+            let transient = noise * exp(-time * 900) * 0.22
+            let sample = min(1, max(-1, (tone * exp(-time * 165) + transient) * 0.7))
+            appendLE(UInt16(bitPattern: Int16(sample * Double(Int16.max))), to: &data)
+        }
+        return data
+    }
+
+    private func appendLE(_ value: UInt16, to data: inout Data) {
+        data.append(UInt8(value & 0x00ff))
+        data.append(UInt8((value >> 8) & 0x00ff))
+    }
+
+    private func appendLE(_ value: UInt32, to data: inout Data) {
+        data.append(UInt8(value & 0x000000ff))
+        data.append(UInt8((value >> 8) & 0x000000ff))
+        data.append(UInt8((value >> 16) & 0x000000ff))
+        data.append(UInt8((value >> 24) & 0x000000ff))
     }
 }

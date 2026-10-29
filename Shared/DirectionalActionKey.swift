@@ -182,13 +182,20 @@ final class DirectionalActionKey: UIButton, KeyTouchParticipant {
     func finishActiveInput() {
         guard touch != nil else { return }
         let selected = gesture, shouldEmit = !emitted
-        cancel()
+        endActiveInput()
         if shouldEmit { action?(selected) }
     }
     override func touchesCancelled(_ touches: Set<UITouch>, with event: UIEvent?) { cancel() }
     func cancelActiveInput() { cancel() }
-    private func cancel() {
+    private func endActiveInput() {
         touchRouter?.end(self)
+        resetActiveInput()
+    }
+    private func cancel() {
+        touchRouter?.cancel(self)
+        resetActiveInput()
+    }
+    private func resetActiveInput() {
         timer?.invalidate(); timer = nil; touch = nil; isHighlighted = false
     }
     override func didMoveToWindow() { super.didMoveToWindow(); if window == nil { cancel() } }

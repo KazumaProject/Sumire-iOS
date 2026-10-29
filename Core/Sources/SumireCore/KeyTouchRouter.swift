@@ -11,6 +11,11 @@ public final class KeyTouchRouter {
         let blocksFollowingTouches: Bool
     }
     public var independentMultiTouch = false
+    /// Called after a participant has been accepted as the owner of a touch.
+    public var onBegin: ((any KeyTouchParticipant) -> Void)?
+    /// Called when an accepted touch ends normally or is committed before the next key.
+    /// `cancelAll()` and explicitly cancelled exclusive touches do not emit this callback.
+    public var onEnd: ((any KeyTouchParticipant) -> Void)?
     private var gestureIndependent = false
     private var entries: [Entry] = []
     private var cancellationGeneration = 0
@@ -29,15 +34,26 @@ public final class KeyTouchRouter {
             entries.removeAll()
             for participant in previous {
                 if exclusive && gestureIndependent { participant.cancelActiveInput() }
-                else { participant.finishActiveInput() }
+                else {
+                    onEnd?(participant)
+                    participant.finishActiveInput()
+                }
             }
         }
         // A commit may rebuild the keyboard and cancel the entire gesture.
         guard generation == cancellationGeneration else { return false }
         entries.append(Entry(key: key, blocksFollowingTouches: gestureIndependent ? exclusive : blocksSequentialTouches))
+        onBegin?(key)
         return true
     }
     public func end(_ key: any KeyTouchParticipant) {
+        let wasActive = entries.contains { $0.key === key }
+        entries.removeAll { $0.key == nil || $0.key === key }
+        if wasActive { onEnd?(key) }
+    }
+    /// Drops a touch that was cancelled by UIKit or by a keyboard rebuild.
+    /// A cancelled touch is not an Android-style key release event.
+    public func cancel(_ key: any KeyTouchParticipant) {
         entries.removeAll { $0.key == nil || $0.key === key }
     }
     public func cancelAll() {

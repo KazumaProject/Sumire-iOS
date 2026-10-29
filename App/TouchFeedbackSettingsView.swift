@@ -3,6 +3,7 @@ import SumireCore
 
 struct TouchFeedbackSettingsView: View {
     @State private var settings = TouchFeedbackSettings.load(defaults: KeyboardSettings.appDefaults)
+    @State private var keyFeedback = KeyFeedbackSettings.load(defaults: KeyboardSettings.appDefaults)
     var body: some View {
         Form {
             Section("標準フリックのポップアップ") {
@@ -27,12 +28,51 @@ struct TouchFeedbackSettingsView: View {
                 Stepper("判定時間：\(settings.longPressMilliseconds) ms", value: $settings.longPressMilliseconds, in: 100...2000, step: 50)
                     .accessibilityIdentifier("feedback-long-press-time")
             }
+            Section("キー操作のフィードバック") {
+                Toggle("振動を有効にする", isOn: $keyFeedback.isVibrationEnabled)
+                    .accessibilityIdentifier("feedback-key-vibration-enabled")
+                Picker("振動タイミング", selection: $keyFeedback.vibrationTiming) {
+                    Text("押した時").tag(KeyFeedbackSettings.VibrationTiming.press)
+                    Text("離した時").tag(KeyFeedbackSettings.VibrationTiming.release)
+                    Text("押した時と離した時").tag(KeyFeedbackSettings.VibrationTiming.both)
+                    if keyFeedback.vibrationTiming == .disabled {
+                        Text("不明な値のため無効").tag(KeyFeedbackSettings.VibrationTiming.disabled)
+                    }
+                }
+                .disabled(!keyFeedback.isVibrationEnabled)
+                .accessibilityIdentifier("feedback-key-vibration-timing")
+                Toggle("キー押下音を有効にする", isOn: $keyFeedback.isKeySoundEnabled)
+                    .accessibilityIdentifier("feedback-key-sound-enabled")
+                LabeledContent(
+                    "キー押下音の音量",
+                    value: keyFeedback.keySoundVolumePercent == 0
+                        ? "システムデフォルト"
+                        : "\(keyFeedback.keySoundVolumePercent)%"
+                )
+                Slider(
+                    value: Binding(
+                        get: { Double(keyFeedback.keySoundVolumePercent) },
+                        set: { keyFeedback.keySoundVolumePercent = Int($0.rounded()) }
+                    ),
+                    in: 0...100,
+                    step: 1
+                )
+                .disabled(!keyFeedback.isKeySoundEnabled)
+                .accessibilityIdentifier("feedback-key-sound-volume")
+                Text("音は押下時に再生します。音量0はiOS標準クリック、1〜100%はキー種別ごとの合成音です。iOSのキーボード拡張はFull Access OFFでは音声出力を使えません。SumireはFull Access OFFを維持するため、この設定の音は利用できません。振動の実機動作は未検証です。")
+                    .font(.footnote).foregroundStyle(.secondary)
+                    .accessibilityIdentifier("feedback-key-runtime-active")
+            }
             Section {
-                Button("標準に戻す") { settings = TouchFeedbackSettings() }
+                Button("標準に戻す") {
+                    settings = TouchFeedbackSettings()
+                    keyFeedback = KeyFeedbackSettings()
+                }
             }
         }
         .navigationTitle("入力の操作と表示")
         .navigationBarTitleDisplayMode(.inline)
         .onChange(of: settings) { _, value in value.save(defaults: KeyboardSettings.appDefaults) }
+        .onChange(of: keyFeedback) { _, value in value.save(defaults: KeyboardSettings.appDefaults) }
     }
 }
