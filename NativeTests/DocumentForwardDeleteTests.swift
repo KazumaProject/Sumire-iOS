@@ -6,13 +6,14 @@ import UIKit
     private final class Proxy: NSObject, UITextDocumentProxy {
         let text = UITextView()
         var contextAvailable = true
+        var beforeContextAvailable = true
         var movements: [Int] = []
         var deletions = 0
         let documentIdentifier = UUID()
         var documentInputMode: UITextInputMode? { nil }
         var hasText: Bool { text.hasText }
         var documentContextBeforeInput: String? {
-            contextAvailable ? (text.text as NSString).substring(to: text.selectedRange.location) : nil
+            contextAvailable && beforeContextAvailable ? (text.text as NSString).substring(to: text.selectedRange.location) : nil
         }
         var documentContextAfterInput: String? {
             contextAvailable ? (text.text as NSString).substring(from: NSMaxRange(text.selectedRange)) : nil
@@ -94,4 +95,57 @@ import UIKit
         XCTAssertEqual(text.text, "前👩‍💻後")
         XCTAssertEqual(text.selectedRange, actual)
     }
+    func testProxyInternalGraphemeCaretMustNotMoveOrDelete() {
+        for source in ["前👩‍💻後", "前か\u{3099}後"] {
+            let proxy = Proxy()
+            proxy.text.text = source
+            proxy.text.selectedRange = NSRange(location: 2, length: 0)
+            let selection = proxy.text.selectedRange
+            XCTAssertEqual(selection, NSRange(location: 2, length: 0), "Fixed fixture must expose the internal UTF16 caret")
+            let before = proxy.documentContextBeforeInput ?? ""
+            let after = proxy.documentContextAfterInput ?? ""
+            let diagnostic: [String: Any] = [
+                "sourceScalars": source.unicodeScalars.map { $0.value },
+                "sourceUTF16": Array(source.utf16),
+                "beforeScalars": before.unicodeScalars.map { $0.value },
+                "beforeUTF16": Array(before.utf16),
+                "afterScalars": after.unicodeScalars.map { $0.value },
+                "afterUTF16": Array(after.utf16),
+                "nextUTF16": after.first.map { Array(String($0).utf16) } ?? [],
+                "caretUTF16": selection.location
+            ]
+            print("FIXED_FORWARD_BOUNDARY " + String(data: try! JSONSerialization.data(withJSONObject: diagnostic, options: .sortedKeys), encoding: .utf8)!)
+            DocumentForwardDelete.apply(to: proxy)
+            XCTAssertEqual(proxy.text.text, source)
+            XCTAssertEqual(proxy.text.selectedRange, selection)
+            XCTAssertEqual(proxy.movements, [])
+            XCTAssertEqual(proxy.deletions, 0)
+        }
+    }
+
+    func testProxyMissingBeforeContextCannotProveBoundary() {
+        let proxy = Proxy()
+        proxy.text.text = "前あ後"
+        proxy.text.selectedRange = NSRange(location: 1, length: 0)
+        proxy.beforeContextAvailable = false
+        XCTAssertEqual(proxy.documentContextAfterInput, "あ後")
+        DocumentForwardDelete.apply(to: proxy)
+        XCTAssertEqual(proxy.text.text, "前あ後")
+        XCTAssertEqual(proxy.text.selectedRange, NSRange(location: 1, length: 0))
+        XCTAssertEqual(proxy.movements, [])
+        XCTAssertEqual(proxy.deletions, 0)
+    }
+    func testProxyReplacementScalarNearBoundaryRemainsUntouched() {
+        for caret in [1, 2] {
+            let proxy = Proxy()
+            proxy.text.text = "前\u{fffd}後"
+            proxy.text.selectedRange = NSRange(location: caret, length: 0)
+            DocumentForwardDelete.apply(to: proxy)
+            XCTAssertEqual(proxy.text.text, "前\u{fffd}後")
+            XCTAssertEqual(proxy.text.selectedRange, NSRange(location: caret, length: 0))
+            XCTAssertEqual(proxy.movements, [])
+            XCTAssertEqual(proxy.deletions, 0)
+        }
+    }
+
 }
