@@ -2012,9 +2012,9 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         for _ in 0..<abs(strideCount) { moveCompositionCursor(by: offset) }
     }
 
-    private func cycleBunsetsuSplitPatternIfActive() -> Bool {
+    private func cycleBunsetsuSplitPatternIfActive(by delta: Int = 1) -> Bool {
         guard var session = currentBunsetsuSession,
-              session.cycleSplitPattern(by: 1) else { return false }
+              session.cycleSplitPattern(by: delta) else { return false }
         bunsetsuSession = session
         renderBunsetsuSession()
         loadNextBunsetsuCandidates()
@@ -2766,6 +2766,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
 
     var physicalKeyboardShortcutContext: PhysicalKeyboardShortcutContext {
+        if currentBunsetsuSession != nil { return .bunsetsuConversion }
         guard hasComposition else { return .any }
         return composition.phase == .selecting ? .conversion : .composition
     }
@@ -2838,19 +2839,20 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             return transformPhysicalComposition(.fullKatakana)
         case .convertToHalfWidth:
             return transformPhysicalComposition(.halfWidth)
-        case .convertToFullAlphanumeric, .convertToHalfAlphanumeric,
-             .segmentFocusLeft, .segmentFocusRight,
-             .segmentWidthShrink, .segmentWidthExpand:
-            switch action {
-            case .convertToFullAlphanumeric:
-                return transformPhysicalComposition(.fullAlphanumeric)
-            case .convertToHalfAlphanumeric:
-                return transformPhysicalComposition(.halfAlphanumeric)
-            default:
-                // Bunsetsu segment navigation remains unavailable until the iOS
-                // conversion surface has a matching segmented composition model.
-                return false
-            }
+        case .convertToFullAlphanumeric:
+            return transformPhysicalComposition(.fullAlphanumeric)
+        case .convertToHalfAlphanumeric:
+            return transformPhysicalComposition(.halfAlphanumeric)
+        case .segmentFocusLeft, .segmentFocusRight:
+            guard currentBunsetsuSession != nil else { return false }
+            beforeInput?()
+            guard currentBunsetsuSession != nil else { return false }
+            moveCompositionCursor(by: action == .segmentFocusLeft ? -1 : 1)
+            return true
+        case .segmentWidthShrink, .segmentWidthExpand:
+            guard currentBunsetsuSession != nil else { return false }
+            beforeInput?()
+            return cycleBunsetsuSplitPatternIfActive(by: action == .segmentWidthShrink ? -1 : 1)
         }
     }
 
