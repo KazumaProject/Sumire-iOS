@@ -51,7 +51,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             if liveConversion && !englishComposition
                 && physicalFunctionKeyPreviewSuppressionGeneration != composition.generation
                 && composition.cursorUTF16 == composition.reading.utf16.count,
-               let first = converted.first {
+               let first = automaticPreviewCandidate {
                 selectedCandidate = 0
                 updateMarkedText?(first.text)
             } else {
@@ -384,6 +384,17 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             if hasComposition { composition.optionsChanged(); refreshConversion() }
         }
     }
+    private var textMacroCandidatesEnabled = true
+    func configureTextMacroCandidates(enabled: Bool) {
+        guard textMacroCandidatesEnabled != enabled else { return }
+        beforeInput?()
+        cancelLearning()
+        textMacroCandidatesEnabled = enabled
+        guard hasComposition else { return }
+        clearBunsetsuSession()
+        composition.optionsChanged()
+        refreshConversion()
+    }
     private var legacyTemplatesEnabled = true
     func configureLegacyTemplates(enabled: Bool) {
         guard legacyTemplatesEnabled != enabled else { return }
@@ -471,7 +482,27 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     private var bunsetsuCandidateItems: [BunsetsuCandidateBarItem] = []
     private var bunsetsuRequestGeneration: UInt64 = 0
     private var resultGeneration: UInt64?
-    private var selectedCandidate: Int? { didSet { candidateBar.selectedIndex = selectedCandidate } }
+    // Selection/learning ranks stay in the Service's converted array. Macro
+    // actions may occupy intervening display slots and never own a native rank.
+    private var selectedCandidate: Int? {
+        didSet { candidateBar.selectedIndex = presentedIndex(forConvertedIndex: selectedCandidate) }
+    }
+    private func presentedIndex(forConvertedIndex index: Int?) -> Int? {
+        guard let index, converted.indices.contains(index) else { return nil }
+        let id = converted[index].id
+        return presentedCandidates.firstIndex { $0.textMacroID == nil && $0.id == id }
+    }
+    private func convertedIndex(forPresentedIndex index: Int) -> Int? {
+        guard presentedCandidates.indices.contains(index), presentedCandidates[index].textMacroID == nil else { return nil }
+        let id = presentedCandidates[index].id
+        return converted.firstIndex { $0.id == id }
+    }
+    private var automaticPreviewCandidate: ConversionCandidate? {
+        // df1 applyFirstSuggestionOnMainIfCurrent falls back to raw reading
+        // when the first displayed candidate is an executable macro action.
+        guard presentedCandidates.first?.textMacroID == nil else { return nil }
+        return converted.first
+    }
     var hasComposition: Bool { !composition.reading.isEmpty }
 
     var hue: CGFloat = 0.73 { didSet { if hue != oldValue { rebuild() } } }
@@ -1901,7 +1932,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 if liveConversion && !englishComposition,
                    composition.cursorUTF16 == composition.reading.utf16.count,
                    let generation = resultGeneration, composition.accepts(generation),
-                   !converted.isEmpty {
+                   automaticPreviewCandidate != nil {
                     let index = selectedCandidate.flatMap { converted.indices.contains($0) ? $0 : nil } ?? 0
                     selectedCandidate = index
                     updateMarkedText?(previewText(converted[index]))
@@ -2236,7 +2267,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         list.setCandidates(presentedCandidates.map {
             CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ")
         })
-        list.selectedIndex = selectedCandidate
+        list.selectedIndex = presentedIndex(forConvertedIndex: selectedCandidate)
         list.onSelect = { [weak self] index in
             self?.closeExpandedCandidates()
             self?.chooseCandidate(index)
@@ -2489,18 +2520,28 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
-                let macros = AndroidTextMacroCandidatePolicy.candidates(
+                let macroDefinitions = self.textMacroCandidatesEnabled ? AndroidTextMacroCandidatePolicy.candidates(
                     in: self.personalLexicon.textMacros,
                     reading: query,
                     contextAllowed: self.textMacroContextAllowed
-                ).map { macro in
+                ) : []
+                let macros = macroDefinitions.map { macro in
                     ConversionCandidate(
                         id: 0, text: macro.name, score: Int64.min, range: NSRange(location: 0, length: query.utf16.count),
                         dictionaries: ["text_macro"], correctedReading: macro.reading,
                         textMacroID: macro.id
                     )
                 }
-                let candidates = result.candidates + macros
+                let candidates: [ConversionCandidate]
+                if self.englishComposition {
+                    // Preserve the existing English strip route and placement.
+                    candidates = result.candidates + macros
+                } else {
+                    let insertion = result.candidates.firstIndex {
+                        $0.learnedPredictionReading == nil && $0.legacyTemplateReading == nil
+                    } ?? result.candidates.count
+                    candidates = Array(result.candidates[..<insertion]) + macros + Array(result.candidates[insertion...])
+                }
                 self.converted = result.candidates
                 self.presentedCandidates = candidates
                 self.resultGeneration = generation
@@ -2512,8 +2553,14 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 if let spaceToggle = self.spaceConvertKanaToggleState, spaceToggle.matches(self.composition) {
                     self.renderSpaceConvertKanaToggle(spaceToggle)
                 } else if shouldApplyLivePreview || self.composition.phase == .selecting {
-                    self.selectedCandidate = result.candidates.isEmpty ? nil : 0
-                    if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
+                    if shouldApplyLivePreview && self.composition.phase != .selecting,
+                       candidates.first?.textMacroID != nil {
+                        self.selectedCandidate = nil
+                        self.markReading()
+                    } else {
+                        self.selectedCandidate = result.candidates.isEmpty ? nil : 0
+                        if let first = result.candidates.first { self.updateMarkedText?(self.previewText(first)) }
+                    }
                 }
                 self.status.text = reading + (result.complete ? "" : " · 探索上限") + (result.warning.map { " · " + $0 } ?? "") + statusNote
             case .failure(let error):
@@ -2554,8 +2601,8 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             executeTextMacro?(macroID, nil)
             return
         }
-        guard converted.indices.contains(index) else { return }
-        selectedCandidate = index
+        guard let convertedIndex = convertedIndex(forPresentedIndex: index) else { return }
+        selectedCandidate = convertedIndex
         commitComposition()
     }
     private func commitRawAtCursorAndSpace() {
