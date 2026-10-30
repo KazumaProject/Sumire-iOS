@@ -133,7 +133,8 @@ public:
                  const PersonalDictionary *learned = nullptr,
                  Workspace *workspace = nullptr, bool prefix_candidates = false,
                  bool japanese_prediction = false, bool bunsetsu_search = false,
-                 const PredictionConfig &prediction_config = {}) const;
+                 const PredictionConfig &prediction_config = {},
+                 bool numeric_symbol_candidates = true) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;

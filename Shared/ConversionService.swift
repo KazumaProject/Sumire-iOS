@@ -287,7 +287,8 @@ final class ConversionService {
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(sources: sources, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
+                let englishWords = english || (!bunsetsuSearch && NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading))
+                try state.open(sources: sources, mask: mask, english: englishWords, englishReading: englishReading, categoryIDs: categoryIDs)
                 try state.setPredictionSettings(predictionSettings)
                 let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
@@ -597,9 +598,9 @@ final class ConversionService {
         var learningRemainder: String?
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         private var openedDirectory: URL?
-        // Generations are immutable. Once a native open rejects one, skip it for
-        // this process and try the previous pointer or bundled baseline.
-        private var rejectedDirectories = Set<URL>()
+        // Keep immutable-generation failures for each English-word requirement.
+        // A missing optional English file must not blacklist Japanese-only use.
+        private var rejectedDirectoriesByEnglishRequirement: [Bool: Set<URL>] = [:]
         var unavailableCategoryIDs: [String] = []
         private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
@@ -712,6 +713,8 @@ final class ConversionService {
         }
 
         func open(sources: [NativeDictionaryEngineSource], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
+            var rejectedDirectories = rejectedDirectoriesByEnglishRequirement[english] ?? []
+            defer { rejectedDirectoriesByEnglishRequirement[english] = rejectedDirectories }
             let candidates = sources.filter { !rejectedDirectories.contains($0.directory) }
             let requestedDirectory = candidates.first?.directory
             let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&

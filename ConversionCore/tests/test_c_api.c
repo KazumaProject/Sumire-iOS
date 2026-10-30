@@ -338,6 +338,63 @@ static void test_generated_ascii_fullwidth_ranges(const char *directory) {
   }
   sumire_session_destroy(session); sumire_engine_close(engine);
 }
+static void test_generated_numeric_ranges(const char *directory) {
+  char error[256];
+  sumire_engine *engine = NULL;
+  sumire_session *session = NULL;
+  CHECK(sumire_engine_open(directory,0,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  const char *input = "1";
+  sumire_request request = {1,input,strlen(input),0,100,200000,12};
+  sumire_result *result = NULL;
+  CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+  int full_width = 0, half_width = 0, numeric_symbol = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+    if (candidate.segment_count != 0) continue;
+    CHECK(candidate.start_utf16 == 0 && candidate.length_utf16 == 1);
+    uint32_t kind = 99;
+    CHECK(sumire_result_candidate_presentation_kind(result,i,&kind) == 0);
+    if (candidate.text.size == strlen("１") && memcmp(candidate.text.data,"１",candidate.text.size) == 0) {
+      CHECK(candidate.score == 8000 && kind == SUMIRE_PRESENTATION_FULL_WIDTH);
+      full_width = 1;
+    } else if (candidate.text.size == strlen("1") && memcmp(candidate.text.data,"1",candidate.text.size) == 0 && candidate.score == 8000) {
+      CHECK(kind == SUMIRE_PRESENTATION_HALF_WIDTH);
+      half_width = 1;
+    } else if (candidate.text.size == strlen("①") && memcmp(candidate.text.data,"①",candidate.text.size) == 0) {
+      CHECK(candidate.score == 8500 && kind == SUMIRE_PRESENTATION_NUMERIC_SYMBOL);
+      numeric_symbol = 1;
+    }
+  }
+  CHECK(full_width && half_width && numeric_symbol);
+  sumire_result_destroy(result);
+  request = (sumire_request){2,input,strlen(input),0,100,200000,
+      SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES};
+  result = NULL;
+  CHECK(sumire_session_update(session,&request,&result,error,sizeof error) == 0);
+  int disabled_full_width = 0, disabled_half_width = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result,i,&candidate) == 0);
+    if (candidate.segment_count != 0) continue;
+    uint32_t kind = 99;
+    CHECK(sumire_result_candidate_presentation_kind(result,i,&kind) == 0);
+    if (candidate.text.size == strlen("１") && memcmp(candidate.text.data,"１",candidate.text.size) == 0) {
+      CHECK(kind == SUMIRE_PRESENTATION_FULL_WIDTH);
+      disabled_full_width = 1;
+    }
+    if (candidate.text.size == strlen("1") && memcmp(candidate.text.data,"1",candidate.text.size) == 0 && candidate.score == 8000) {
+      CHECK(kind == SUMIRE_PRESENTATION_HALF_WIDTH);
+      disabled_half_width = 1;
+    }
+    CHECK(kind != SUMIRE_PRESENTATION_NUMERIC_SYMBOL);
+  }
+  CHECK(disabled_full_width && disabled_half_width);
+  sumire_result_destroy(result);
+  sumire_session_destroy(session);
+  sumire_engine_close(engine);
+}
 static void test_primary_presentation(const char *directory) {
   char error[256];
   sumire_engine *engine = NULL;
@@ -695,6 +752,10 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2],"--ascii-generated") == 0) {
     test_generated_ascii_fullwidth_ranges(argv[1]);
+    return 0;
+  }
+  if (argc == 3 && strcmp(argv[2],"--numeric-generated") == 0) {
+    test_generated_numeric_ranges(argv[1]);
     return 0;
   }
   if (argc == 3 && strcmp(argv[2],"--aux-completion") == 0) {

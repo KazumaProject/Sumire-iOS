@@ -77,6 +77,16 @@ int main(int argc, char **argv) {
     check(rejected, "invalid typed aggregate ID accepted");
     return 0;
   }
+  if (argc == 3 && std::string(argv[2]) == "--ascii-cache") {
+    Engine engine(argv[1], {});
+    Workspace workspace;
+    for (const std::string &reading : {"あ", "a", "aあ", "a", "あ"}) {
+      auto cached = engine.convert(reading,20,200000,false,nullptr,nullptr,&workspace,true,true);
+      equal(cached, engine.convert(reading,20,200000,false,nullptr,nullptr,nullptr,true,true));
+      check(cached.reused_search_rows == 0, "ASCII/mixed graph mode reused incompatible dictionary rows");
+    }
+    return 0;
+  }
   check(argc == 2, "dictionary directory required");
   Engine engine(argv[1], {});
   learning_metadata(engine);
