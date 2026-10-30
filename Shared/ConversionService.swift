@@ -295,7 +295,7 @@ final class ConversionService {
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                let englishWords = english || (!bunsetsuSearch && NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading))
+                let englishWords = english || NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading)
                 try state.open(sources: sources, mask: mask, english: englishWords, englishReading: englishReading, categoryIDs: categoryIDs)
                 try state.setPredictionSettings(predictionSettings)
                 try state.setKotowazaEnabled(kotowazaEnabled)
@@ -350,7 +350,7 @@ final class ConversionService {
                     // or expose a candidate that cannot be committed safely.
                     guard range.location == 0, range.length > 0,
                           let consumedRange = Range(range, in: reading) else { continue }
-                    var dictionaries: [String] = []
+                    var dictionaries: [String] = candidateFlags & UInt32(SUMIRE_CANDIDATE_ENGLISH_PROVIDER) != 0 ? ["english"] : []
                     var tokens: [BunsetsuToken] = []
                     let candidateIDs = try Self.candidateContextIDs(result, index: index)
                     var leftID = candidateIDs?.0, rightID = candidateIDs?.1

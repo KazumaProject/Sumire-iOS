@@ -344,8 +344,9 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
 int sumire_result_candidate_flags(const sumire_result *result, size_t index,
                                    uint32_t *out) {
   if (!result || !out || index >= sumire_result_count(result)) return -1;
-  *out = result->snapshot->value.candidates[index].is_reading_prefix
-             ? SUMIRE_CANDIDATE_READING_PREFIX : 0;
+  const auto &candidate = result->snapshot->value.candidates[index];
+  *out = (candidate.is_reading_prefix ? SUMIRE_CANDIDATE_READING_PREFIX : 0) |
+         (candidate.english_provider ? SUMIRE_CANDIDATE_ENGLISH_PROVIDER : 0);
   return 0;
 }
 int sumire_result_candidate_presentation_kind(const sumire_result *result,
