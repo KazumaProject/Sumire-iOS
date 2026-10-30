@@ -88,8 +88,8 @@ enum DictionaryArchiveImporter {
             let loadedCandidates = store.loadCandidates()
             let storedCandidates = loadedCandidates.map(\.directory)
             // Release leaves require the release taxonomy. Typed legacy overlays
-            // are stored in a separate namespace, so they can preserve the active
-            // generation regardless of taxonomy without becoming native inputs.
+            // are stored in a separate namespace. Verified release generations
+            // may use them only when every leaf of their family is selected.
             let releaseCandidates = loadedCandidates
                 .filter(\.hasVerifiedReleaseMarker)
                 .map(\.directory)
@@ -144,8 +144,10 @@ enum DictionaryArchiveImporter {
                 } else {
                     message = "新分類の辞書世代を有効化しました（\(loaded.generation)）。分類未判定の既存辞書は別領域に保持し、変換には使っていません。"
                 }
+            } else if current.hasCurrentVerifiedReleaseProvenance {
+                message = "辞書世代を保存しました（\(loaded.generation)）。旧分類集約辞書は、対応する新分類をすべて選択した場合に変換に使います。一部だけ選択した場合は新分類の辞書を使います。"
             } else {
-                message = "辞書世代を保存しました（\(loaded.generation)）。旧分類集約辞書は型付き保存のみで、現在のキーボード変換には使われません。"
+                message = "辞書世代を保存しました（\(loaded.generation)）。旧分類集約辞書は型付きで保存しましたが、この世代は新分類の認証がないため変換には使われません。"
             }
             return DictionaryImportOutcome(
                 succeeded: true,
