@@ -254,18 +254,42 @@ static void test_bunsetsu_ascii_provider(const char *directory) {
   CHECK(reading_found); sumire_result_destroy(result); result = NULL;
   request.generation = 4; request.reading = "ca"; request.reading_bytes = 2; request.flags = 12;
   CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
-  int legacy_found = 0;
+  int normal_found = 0;
   for (size_t i = 0; i < sumire_result_count(result); ++i) {
     sumire_candidate c; CHECK(sumire_result_candidate(result, i, &c) == 0);
     if (c.text.size != 3 || memcmp(c.text.data, "cat", 3)) continue;
     uint32_t flags = 99;
-    CHECK(c.segment_count == 1 && sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
-    legacy_found = 1;
+    CHECK(c.segment_count == 0 && c.length_utf16 == 2 && c.score == 100);
+    CHECK(sumire_result_candidate_flags(result, i, &flags) == 0 && flags == SUMIRE_CANDIDATE_ENGLISH_PROVIDER);
+    int has = 99; uint16_t left = 99, right = 99;
+    CHECK(sumire_result_candidate_context_ids(result, i, &has, &left, &right) == 0 && has == 0 && left == 0 && right == 0);
+    normal_found = 1;
   }
-  CHECK(legacy_found); sumire_result_destroy(result); result = NULL;
-  request.generation = 5; request.flags = 2;
+  CHECK(normal_found); sumire_result_destroy(result); result = NULL;
+  request.generation = 5; request.reading = "あ"; request.reading_bytes = strlen(request.reading);
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int normal_reading_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate row; CHECK(sumire_result_candidate(result, i, &row) == 0);
+    if (row.text.size != 8 || memcmp(row.text.data, "ReadWord", 8)) continue;
+    uint16_t left = 0, right = 0;
+    CHECK(row.segment_count == 1 && row.length_utf16 == 1 && row.score == 400);
+    CHECK(sumire_result_segment_context_ids(result, i, 0, &left, &right) == 0 && left == 2 && right == 2);
+    normal_reading_found = 1;
+  }
+  CHECK(normal_reading_found); sumire_result_destroy(result); result = NULL;
+  request.generation = 6; request.reading = "ca"; request.reading_bytes = 2; request.flags = 2;
   CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
   CHECK(prediction_score(result, "cat") == 100);
+  int english_only_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate row; CHECK(sumire_result_candidate(result, i, &row) == 0);
+    if (row.text.size != 3 || memcmp(row.text.data, "cat", 3)) continue;
+    uint32_t flags = 99;
+    CHECK(row.segment_count == 1 && sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
+    english_only_found = 1;
+  }
+  CHECK(english_only_found);
   sumire_result_destroy(result); sumire_session_destroy(session); sumire_engine_close(engine);
   sumire_candidate c; uint32_t flags = 99;
   CHECK(sumire_result_candidate(owned, word, &c) == 0 && c.text.size == 3 && !memcmp(c.text.data, "cat", 3));

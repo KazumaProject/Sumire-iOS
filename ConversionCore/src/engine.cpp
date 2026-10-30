@@ -1783,7 +1783,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     d.prefixes(reading, 0, [&](size_t end, uint32_t token) {
       if (end != reading.size()) return;
       auto text = d.surface(token, reading, 0, end);
-      const bool known = japanese_prediction && bunsetsu_search;
+      const bool known = japanese_prediction;
       const uint16_t left = known ? impl->connection.left[d.pos[token]] : 0;
       const uint16_t right = known ? impl->connection.right[d.pos[token]] : 0;
       add(text, d.costs[token], left, right);
@@ -1916,7 +1916,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         auto english = english_dictionary_candidates(impl->english_words.get(), utf8(englishInput), true);
         // This provider is not the standalone English session: no N-best cap
         // or personal overlay is applied a second time.
-        if (bunsetsu_search) for (auto &candidate : english.candidates) {
+        for (auto &candidate : english.candidates) {
           // EnglishEngine leaves Japanese endpoints unspecified. Keep source
           // provenance without inventing a Japanese conversion path/segment.
           candidate.segments.clear();

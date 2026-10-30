@@ -119,6 +119,52 @@ final class BunsetsuASCIIProviderTests: XCTestCase {
         XCTAssertThrowsError(try snapshot.projectedSplitPatterns(reading: "ca", requestGeneration: initialGeneration + 1,
             orderedDisplayCandidates: first.orderedDisplayIdentities))
     }
+
+    func testNormalJapaneseReadingEndpointsAndWordUnknownSurviveActualCommit() throws {
+        let root = try directory(), database = root.appendingPathComponent("metadata.sqlite")
+        try dictionary(reading: "あ", text: "ReadWord", cost: 400).write(to: root.appendingPathComponent("english_reading.sud"))
+        let value = ConversionService(directory: root); value.setLearning(url: database)
+        func normal(_ input: String) throws -> ConversionResponse {
+            generation += 1
+            let done = expectation(description: "normal Japanese owned metadata")
+            var result: Result<ConversionResponse, Error>?
+            value.convert(input, generation: generation, editStart: 0, includeBunsetsu: true) { result = $0; done.fulfill() }
+            wait(for: [done], timeout: 30)
+            return try XCTUnwrap(result).get()
+        }
+        let wordResponse = try normal("ca")
+        let wordIndex = try XCTUnwrap(wordResponse.candidates.firstIndex { $0.text == "cat" })
+        let word = wordResponse.candidates[wordIndex]
+        XCTAssertNil(word.leftID); XCTAssertNil(word.rightID); XCTAssertEqual(word.dictionaries, ["english"])
+        let owned = try XCTUnwrap(wordResponse.bunsetsuSnapshot?.candidates.first { $0.candidateID == word.id })
+        XCTAssertNil(owned.tokenPath)
+        value.commitSelection(generation: generation, candidate: word, rank: wordIndex, input: "ca", remaining: "", learnFirst: true) { _ in }
+        let fenceWord = expectation(description: "word persisted"); value.synchronizeLearning { fenceWord.fulfill() }
+        wait(for: [fenceWord], timeout: 10)
+        let savedWord = try XCTUnwrap(try LearningStore(url: database).snapshot().first { $0.text == "cat" })
+        XCTAssertNil(savedWord.leftID); XCTAssertNil(savedWord.rightID)
+        let known = try normal("あ")
+        for text in ["ReadWord", "readword", "Readword", "READWORD"] {
+            let row = try XCTUnwrap(known.candidates.first { $0.text == text })
+            XCTAssertEqual(row.leftID, 1920); XCTAssertEqual(row.rightID, 1927)
+            let path = try XCTUnwrap(known.bunsetsuSnapshot?.candidates.first { $0.candidateID == row.id }?.tokenPath)
+            XCTAssertEqual(path.first?.leftID, 1920); XCTAssertEqual(path.last?.rightID, 1927)
+        }
+        let index = try XCTUnwrap(known.candidates.firstIndex { $0.text == "ReadWord" })
+        value.commitSelection(generation: generation, candidate: known.candidates[index], rank: index,
+            input: "あ", remaining: "", learnFirst: true) { _ in }
+        let fenceKnown = expectation(description: "known persisted"); value.synchronizeLearning { fenceKnown.fulfill() }
+        wait(for: [fenceKnown], timeout: 10)
+        let row = try XCTUnwrap(try LearningStore(url: database).snapshot().first { $0.text == "ReadWord" })
+        XCTAssertEqual(row.leftID, 1920); XCTAssertEqual(row.rightID, 1927)
+        XCTAssertEqual(owned.identity.surface, "cat"); XCTAssertNil(owned.tokenPath)
+        let generated = try normal("ab12")
+        for row in generated.candidates.filter({ $0.score == 30_000 && $0.presentationKind == .fullWidth }) {
+            XCTAssertNil(row.leftID); XCTAssertNil(row.rightID)
+            XCTAssertNil(generated.bunsetsuSnapshot?.candidates.first { $0.candidateID == row.id }?.tokenPath)
+        }
+        XCTAssertEqual(generated.candidates.filter { $0.score == 30_000 && $0.presentationKind == .fullWidth }.map(\.text), ["ａｂ１２", "ＡＢ１２"])
+    }
     func testGeneratedASCIIEligibilityDuplicatesAndNumericEarlyRoute() throws {
         let value = ConversionService(directory: try directory()); value.setEnglishReading(false)
         for (input, expected) in [("ab12", ["ａｂ１２", "ＡＢ１２"]), ("a+b", ["ａ＋ｂ", "Ａ＋Ｂ"]),
