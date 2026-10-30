@@ -81,11 +81,15 @@ public struct AndroidPreferenceBackup: Equatable {
         case boolean(String)
         case integer(String, range: ClosedRange<Int>)
         case text(String, values: [String: String])
+        case predictionLookahead
+        case predictionAggressiveness
         case threeStepInputMode
 
         var targetKey: String {
             switch self {
             case .boolean(let key), .integer(let key, _), .text(let key, _): return key
+            case .predictionLookahead: return JapanesePredictionSettings.lookaheadStorageKey
+            case .predictionAggressiveness: return JapanesePredictionSettings.aggressivenessStorageKey
             case .threeStepInputMode: return FlickStyleSettings.storageKey
             }
         }
@@ -96,6 +100,8 @@ public struct AndroidPreferenceBackup: Equatable {
         "conversion_bunsetsu_separation_preference": .boolean("bunsetsuSeparation"),
         "learn_dictionary_preference": .boolean("learningEnabled"),
         "learn_first_candidate_dictionary_preference": .boolean("learnFirstCandidate"),
+        "prediction_lookahead_preference": .predictionLookahead,
+        "prediction_aggressiveness_preference": .predictionAggressiveness,
         "learn_dictionary_allow_mixed_symbols_numbers_preference": .boolean("learnMixedSymbolsAndNumbers"),
         "clipboard_history_preference": .boolean(ClipboardHistorySettings.enabledKey),
         "clipboard_delete_unpinned_after_hours_preference": .boolean("clipboard.expirationEnabled"),
@@ -122,6 +128,8 @@ public struct AndroidPreferenceBackup: Equatable {
         "conversion_bunsetsu_separation_preference": .boolean(false),
         "learn_dictionary_preference": .boolean(true),
         "learn_first_candidate_dictionary_preference": .boolean(false),
+        "prediction_lookahead_preference": .number(Double(JapanesePredictionSettings.defaultLookaheadCharacterCount)),
+        "prediction_aggressiveness_preference": .text(JapanesePredictionAggressiveness.standard.rawValue),
         "learn_dictionary_allow_mixed_symbols_numbers_preference": .boolean(true),
         "clipboard_history_preference": .boolean(false),
         "clipboard_delete_unpinned_after_hours_preference": .boolean(false),
@@ -217,16 +225,26 @@ public struct AndroidPreferenceBackup: Equatable {
                 }
                 snapshot.values[targetKey] = .boolean(number.boolValue)
             case "int":
-                guard case .integer(let targetKey, let range) = mapping,
-                      let number = entry["value"] as? NSNumber,
+                guard let number = entry["value"] as? NSNumber,
                       CFGetTypeID(number) != CFBooleanGetTypeID(),
                       number.doubleValue.isFinite,
-                      number.doubleValue.rounded() == number.doubleValue,
-                      number.doubleValue >= Double(range.lowerBound),
-                      number.doubleValue <= Double(range.upperBound) else {
+                      number.doubleValue.rounded() == number.doubleValue else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                 }
-                snapshot.values[targetKey] = .number(number.doubleValue)
+                switch mapping {
+                case .integer(let targetKey, let range):
+                    guard number.doubleValue >= Double(range.lowerBound),
+                          number.doubleValue <= Double(range.upperBound) else {
+                        throw PersonalDataError("Android設定バックアップの対応項目が不正です")
+                    }
+                    snapshot.values[targetKey] = .number(number.doubleValue)
+                case .predictionLookahead:
+                    snapshot.values[JapanesePredictionSettings.lookaheadStorageKey] = .number(
+                        Double(JapanesePredictionSettings.androidLookahead(number.intValue))
+                    )
+                default:
+                    throw PersonalDataError("Android設定バックアップの対応項目の型が一致しません")
+                }
             case "string":
                 guard let value = entry["value"] as? String else {
                     throw PersonalDataError("Android設定バックアップの対応項目が不正です")
@@ -237,6 +255,14 @@ public struct AndroidPreferenceBackup: Equatable {
                         throw PersonalDataError("Android設定バックアップの対応項目が不正です")
                     }
                     snapshot.values[targetKey] = .text(translatedValue)
+                case .predictionLookahead:
+                    snapshot.values[JapanesePredictionSettings.lookaheadStorageKey] = .number(
+                        Double(JapanesePredictionSettings.androidLookahead(value))
+                    )
+                case .predictionAggressiveness:
+                    let value = JapanesePredictionAggressiveness(rawValue: value)?.rawValue
+                        ?? JapanesePredictionAggressiveness.standard.rawValue
+                    snapshot.values[JapanesePredictionSettings.aggressivenessStorageKey] = .text(value)
                 case .threeStepInputMode:
                     guard let mode = FlickStyleSettings.ThreeStepInput(rawValue: value) else {
                         throw PersonalDataError("Android設定バックアップの対応項目が不正です")

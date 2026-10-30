@@ -69,6 +69,16 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             refreshConversion()
         }
     }
+    var predictionSettings = JapanesePredictionSettings() {
+        didSet {
+            guard oldValue != predictionSettings else { return }
+            beforeInput?()
+            converter.setPredictionSettings(predictionSettings)
+            guard hasComposition else { return }
+            composition.optionsChanged()
+            refreshConversion()
+        }
+    }
     var bunsetsuSeparation = false
     var englishReadingEnabled = true {
         didSet {

@@ -16,6 +16,11 @@ extern "C" {
 typedef struct sumire_engine sumire_engine;
 typedef struct sumire_session sumire_session;
 typedef struct sumire_result sumire_result;
+enum {
+  SUMIRE_PREDICTION_AGGRESSIVENESS_CONSERVATIVE = 0,
+  SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD = 1,
+  SUMIRE_PREDICTION_AGGRESSIVENESS_AGGRESSIVE = 2
+};
 typedef struct {
   const char *data;
   size_t size;
@@ -28,9 +33,9 @@ typedef struct {
   uint32_t candidate_count; /* N-best limit, not total result limit: exact category matches, Japanese predictions and auxiliaries may add results. */
   uint32_t max_states;
   /* Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
-   * lookahead 3, up to 4 system and 4 per enabled category candidates.
+   * per-session lookahead (default 3), up to 4 system and 4 per enabled category candidates.
    * Also includes kana forms and optional reading-correction completions
-   * (3..16 input units, lookahead 3, no four-candidate cap). All consume only
+   * (3..16 input units, per-session lookahead, no four-candidate cap). All consume only
    * the typed input. Correction metadata is queried separately below. */
   uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
 } sumire_request;
@@ -151,6 +156,13 @@ int sumire_engine_has_standalone_priority(const sumire_engine *engine);
 int sumire_session_create(sumire_engine *engine, sumire_session **out,
                           char *error, size_t error_size);
 void sumire_session_destroy(sumire_session *session);
+/* Updates per-session Japanese completion settings without changing ABI structs.
+ * lookahead is 1..6 additional UTF-16 units. Aggressiveness uses the enum above.
+ * A successful change invalidates the previous commit selection. */
+int sumire_session_set_prediction_config(sumire_session *session,
+                                         uint32_t lookahead,
+                                         uint32_t aggressiveness,
+                                         char *error, size_t error_size);
 /* Reuses bounded dictionary search rows when their inspected UTF-16 prefix
  * is unchanged. Viterbi costs and A* are recalculated for the whole lattice.
  * edit_start is validated; actual common prefix is verified from both readings. After the first request, generation must strictly
