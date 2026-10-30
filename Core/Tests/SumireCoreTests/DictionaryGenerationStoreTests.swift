@@ -1114,4 +1114,47 @@ final class DictionaryGenerationStoreTests: XCTestCase {
         XCTAssertTrue(recovered.hasVerifiedReleaseMarker)
         XCTAssertEqual(store.loadCandidates().map(\.generation), [previous.generation])
     }
+    func testLoadedSourceSelectionRevalidatesMarkerAndManifestProvenance() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let base = root.appendingPathComponent("base")
+        try FileManager.default.createDirectory(at: base, withIntermediateDirectories: true)
+        for name in ["system.sud", "connection.sud", DictionaryCategoryCatalog.releaseMarker] {
+            try Data(name.utf8).write(to: base.appendingPathComponent(name))
+        }
+        let aggregate = root.appendingPathComponent("person.sud")
+        try Data("person aggregate".utf8).write(to: aggregate)
+        let store = DictionaryGenerationStore(directory: root.appendingPathComponent("store"))
+        let published = try store.publish(importedFiles: [:], from: base, supportFallback: base,
+            legacyAggregateOverlays: [.init(rawValue: "person"): aggregate], importMode: .typedLegacyAggregate)
+        let reloaded = try XCTUnwrap(store.loadCurrent())
+        let ids = DictionaryCategoryCatalog.categories.filter { $0.legacyFamilies.contains("person") }.map(\.id)
+        for snapshot in [published, reloaded] {
+            for name in [DictionaryCategoryCatalog.releaseMarker, "manifest.json"] {
+                let url = published.directory.appendingPathComponent(name)
+                let bytes = try Data(contentsOf: url)
+                let symlinkTarget = root.appendingPathComponent("saved-" + name)
+                try bytes.write(to: symlinkTarget)
+                for mutation in 0..<4 {
+                    try FileManager.default.removeItem(at: url)
+                    switch mutation {
+                    case 0: try Data("changed bytes".utf8).write(to: url)
+                    case 1: break // Missing file.
+                    case 2: try FileManager.default.createDirectory(at: url, withIntermediateDirectories: false)
+                    default: try FileManager.default.createSymbolicLink(at: url, withDestinationURL: symlinkTarget)
+                    }
+                    XCTAssertFalse(snapshot.hasCurrentVerifiedReleaseProvenance, "\(name), mutation \(mutation)")
+                    let selection = snapshot.resolveSourceSelection(for: ids)
+                    XCTAssertTrue(selection.legacyAggregateSources.isEmpty)
+                    XCTAssertTrue(selection.releaseLeafIDs.isEmpty)
+                    XCTAssertEqual(selection.unavailableCategoryIDs, ids)
+                    if FileManager.default.fileExists(atPath: url.path) { try FileManager.default.removeItem(at: url) }
+                    try bytes.write(to: url)
+                    XCTAssertTrue(snapshot.hasCurrentVerifiedReleaseProvenance)
+                    XCTAssertEqual(snapshot.resolveSourceSelection(for: ids).legacyAggregateSources.map { $0.id.rawValue }, ["person"])
+                }
+            }
+        }
+    }
+
 }

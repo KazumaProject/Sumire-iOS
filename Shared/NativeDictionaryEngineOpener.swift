@@ -68,6 +68,11 @@ enum NativeDictionaryEngineOpener {
                 directory.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker).path)
             let unavailable: [String]
             if let generation = source.generation, generation.hasVerifiedReleaseMarker {
+                guard generation.hasCurrentVerifiedReleaseProvenance else {
+                    rejectedDirectories.insert(directory)
+                    lastOpenError = "辞書世代の分類マーカーまたはマニフェストが変更されています"
+                    continue
+                }
                 let selection = generation.resolveSourceSelection(for: selected)
                 let requests: [(UInt32, String)] = selection.releaseLeafIDs.map {
                     (UInt32(SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF), $0)
