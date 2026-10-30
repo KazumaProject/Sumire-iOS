@@ -22,6 +22,7 @@ private struct AndroidTextMacroFile: FileDocument {
 
 struct PersonalTextMacroSettings: View {
     @ObservedObject var library: PersonalLibrary
+    @AppStorage(TextMacroCandidateSettings.enabledKey, store: KeyboardSettings.appDefaults) private var candidatesEnabled = true
     @Environment(\.dismiss) private var dismiss
     @State private var editing: EditItem?
     @State private var importing = false
@@ -95,6 +96,10 @@ struct PersonalTextMacroSettings: View {
 
     private var macroList: some View {
         List {
+            Section {
+                Toggle("マクロを候補に表示", isOn: $candidatesEnabled)
+                    .accessibilityIdentifier("text-macro-candidates-enabled")
+            }
             if let notice = library.notice { Text(notice).foregroundStyle(.red) }
             managementSection
             macroSection
