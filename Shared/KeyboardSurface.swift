@@ -384,6 +384,18 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             if hasComposition { composition.optionsChanged(); refreshConversion() }
         }
     }
+    private var legacyTemplatesEnabled = true
+    func configureLegacyTemplates(enabled: Bool) {
+        guard legacyTemplatesEnabled != enabled else { return }
+        beforeInput?()
+        cancelLearning()
+        legacyTemplatesEnabled = enabled
+        converter.setLegacyTemplatesEnabled(enabled)
+        guard hasComposition else { return }
+        clearBunsetsuSession()
+        composition.optionsChanged()
+        refreshConversion()
+    }
     private var userDictionaryPredictionSettings = UserDictionaryPredictionSettings()
     func configureUserDictionaryPrediction(settings: UserDictionaryPredictionSettings) {
         guard userDictionaryPredictionSettings != settings else { return }
@@ -2327,11 +2339,20 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                     return
                 }
                 do {
+                    let wholeTemplate = result.candidates.first.flatMap { candidate -> String? in
+                        guard candidate.legacyTemplateReading != nil,
+                              candidate.range == NSRange(location: 0, length: reading.utf16.count),
+                              candidate.textMacroID == nil, candidate.presentationKind == .none,
+                              candidate.rawText == nil else { return nil }
+                        return candidate.text
+                    }
+                    let patterns = try snapshot.projectedSplitPatterns(reading: reading,
+                        requestGeneration: generation, orderedDisplayCandidates: result.orderedDisplayIdentities)
                     self.bunsetsuSession = try BunsetsuConversionSession(
                         rawInput: reading, conversionInput: reading,
                         wholeDisplayText: result.candidates.first?.text ?? reading,
-                        generation: generation, snapshot: snapshot,
-                        orderedDisplayCandidates: result.orderedDisplayIdentities)
+                        generation: generation, splitPatterns: patterns,
+                        eligibleWholeCandidateDisplayText: wholeTemplate)
                     self.bunsetsuOwnerGeneration = generation
                     self.bunsetsuActionHandled = true
                     self.renderBunsetsuSession()

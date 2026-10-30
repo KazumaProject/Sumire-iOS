@@ -35,6 +35,7 @@ struct HomeView: View {
     private var predictionLookaheadCharacterCount = JapanesePredictionSettings.defaultLookaheadCharacterCount
     @AppStorage(JapanesePredictionSettings.aggressivenessStorageKey, store: KeyboardSettings.appDefaults)
     private var predictionAggressivenessRawValue = JapanesePredictionAggressiveness.standard.rawValue
+    @AppStorage(LegacyTemplateSettings.enabledKey, store: KeyboardSettings.appDefaults) private var legacyTemplatesEnabled = true
     @AppStorage(UserDictionaryPredictionSettings.enabledKey, store: KeyboardSettings.appDefaults) private var userDictionaryPredictionEnabled = true
     @AppStorage(UserDictionaryPredictionSettings.minimumInputLengthKey, store: KeyboardSettings.appDefaults) private var userDictionaryPredictionMinimumInputLength = 2
     @AppStorage(UserDictionaryPredictionSettings.candidateLimitKey, store: KeyboardSettings.appDefaults) private var userDictionaryPredictionCandidateLimit = 4
@@ -72,7 +73,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, kotowazaEnabled: kotowazaEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings, learnedPredictionSettings: .init(enabled: learnedPredictionEnabled, minimumInputLength: learnedPredictionMinimumInputLength, candidateLimit: learnedPredictionCandidateLimit), userDictionaryPredictionSettings: .init(enabled: userDictionaryPredictionEnabled, minimumInputLength: userDictionaryPredictionMinimumInputLength, candidateLimit: userDictionaryPredictionCandidateLimit))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, kotowazaEnabled: kotowazaEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings, learnedPredictionSettings: .init(enabled: learnedPredictionEnabled, minimumInputLength: learnedPredictionMinimumInputLength, candidateLimit: learnedPredictionCandidateLimit), userDictionaryPredictionSettings: .init(enabled: userDictionaryPredictionEnabled, minimumInputLength: userDictionaryPredictionMinimumInputLength, candidateLimit: userDictionaryPredictionCandidateLimit), legacyTemplatesEnabled: legacyTemplatesEnabled)
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -272,6 +273,7 @@ struct InputHarness: UIViewRepresentable {
     var predictionSettings = JapanesePredictionSettings()
     var learnedPredictionSettings = LearnedPredictionSettings()
     var userDictionaryPredictionSettings = UserDictionaryPredictionSettings()
+    var legacyTemplatesEnabled = true
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextView {
         #if DEBUG
@@ -395,6 +397,7 @@ struct InputHarness: UIViewRepresentable {
         surface.predictionSettings = predictionSettings
         surface.configureLearnedPrediction(settings: learnedPredictionSettings)
         surface.configureUserDictionaryPrediction(settings: userDictionaryPredictionSettings)
+        surface.configureLegacyTemplates(enabled: legacyTemplatesEnabled)
         surface.categoryMask = categoryMask
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }
         surface.saturation = CGFloat(saturation)
