@@ -142,7 +142,8 @@ class Tests(unittest.TestCase):
         rows=json.loads(self.run_cli('--predict-japanese','＋＋').stdout)['candidates']
         normalized=next(i for i,c in enumerate(rows) if c['text']=='NORMALIZED-MULTI')
         original=next(i for i,c in enumerate(rows) if c['text']=='ORIGINAL-MULTI')
-        english=next(i for i,c in enumerate(rows) if c['segments'] and c['segments'][0]['dictionary']=='english')
+        english=next(i for i,c in enumerate(rows) if c['is_english_provider'])
+        self.assertEqual(rows[english]['segments'],[])
         self.assertLess(normalized,english)
         self.assertLess(english,original)
         self.assertEqual(rows[normalized]['segments'],[dict(text='NORMALIZED-MULTI',dictionary='symbol',start_utf16=0,length_utf16=2)])
@@ -362,7 +363,7 @@ class Tests(unittest.TestCase):
         dictionary(self.data/'english.sud', [('ab', 'word'+str(i), 0, i+100) for i in range(12)])
         def provider(reading, *options):
             result = json.loads(self.run_cli('--predict-japanese','--nbest','1',*options,reading).stdout)
-            return result, [c for c in result['candidates'] if c['segments'] and all(s['dictionary']=='english' for s in c['segments'])]
+            return result, [c for c in result['candidates'] if c['is_english_provider']]
         result, english = provider('ab')
         self.assertTrue(result['complete'])
         self.assertGreater(len(english),20)
@@ -370,7 +371,7 @@ class Tests(unittest.TestCase):
         wide, wide_english = provider('ａｂ')
         self.assertEqual([(c['text'],c['score']) for c in english],[(c['text'],c['score']) for c in wide_english])
         for candidate in wide_english:
-            self.assertTrue(all(s['length_utf16']==2 for s in candidate['segments']))
+            self.assertEqual(candidate['segments'],[])
         for reading in ['a1','a+b','あ','é','123','１２３']:
             _, values = provider(reading)
             self.assertFalse(values,reading)

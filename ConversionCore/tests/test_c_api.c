@@ -289,7 +289,17 @@ static void test_bunsetsu_ascii_provider(const char *directory) {
     CHECK(row.segment_count == 1 && sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
     english_only_found = 1;
   }
-  CHECK(english_only_found);
+  CHECK(english_only_found); sumire_result_destroy(result); result = NULL;
+  request.generation = 7; request.reading = "ｃａ"; request.reading_bytes = strlen(request.reading); request.flags = 12;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int wide_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate row; CHECK(sumire_result_candidate(result, i, &row) == 0);
+    if (row.text.size != 3 || memcmp(row.text.data, "cat", 3)) continue;
+    CHECK(row.segment_count == 0 && row.start_utf16 == 0 && row.length_utf16 == 2 && row.score == 100);
+    wide_found = 1;
+  }
+  CHECK(wide_found);
   sumire_result_destroy(result); sumire_session_destroy(session); sumire_engine_close(engine);
   sumire_candidate c; uint32_t flags = 99;
   CHECK(sumire_result_candidate(owned, word, &c) == 0 && c.text.size == 3 && !memcmp(c.text.data, "cat", 3));
