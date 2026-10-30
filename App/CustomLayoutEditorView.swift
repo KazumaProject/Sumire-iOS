@@ -11,6 +11,7 @@ struct CustomLayoutEditorView: View {
     @State private var direct: Bool
     @State private var error: String?
     @State private var keyEditor: KeyDraft?
+    @State private var dropTargetID: String?
     let allLayouts: [ImportedCustomLayout]
     let save: (ImportedCustomLayout) -> Bool
     init(layout: ImportedCustomLayout?, allLayouts: [ImportedCustomLayout], save: @escaping (ImportedCustomLayout) -> Bool) {
@@ -24,6 +25,43 @@ struct CustomLayoutEditorView: View {
         self.save = save
     }
     private var layout: ImportedCustomLayout? { try? editor.validated() }
+
+    private func targetKeyID(at location: CGPoint, excluding draggedID: String,
+                            placements: [ImportedCustomLayout.Placement], previewSize: CGSize) -> String? {
+        let unitWidth = previewSize.width / CGFloat(columns * 2)
+        let unitHeight = previewSize.height / CGFloat(rows * 2)
+        return placements.first { placement in
+            guard placement.id != draggedID else { return false }
+            let frame = CGRect(x: CGFloat(placement.column) * unitWidth,
+                               y: CGFloat(placement.row) * unitHeight,
+                               width: CGFloat(placement.width) * unitWidth,
+                               height: CGFloat(placement.height) * unitHeight)
+            return frame.contains(location)
+        }?.id
+    }
+
+    private func targetKeyID(draggedID: String, translation: CGSize,
+                            placements: [ImportedCustomLayout.Placement], previewSize: CGSize) -> String? {
+        guard let dragged = placements.first(where: { $0.id == draggedID }) else { return nil }
+        let unitWidth = previewSize.width / CGFloat(columns * 2)
+        let unitHeight = previewSize.height / CGFloat(rows * 2)
+        let start = CGPoint(x: (CGFloat(dragged.column) + CGFloat(dragged.width) / 2) * unitWidth,
+                            y: (CGFloat(dragged.row) + CGFloat(dragged.height) / 2) * unitHeight)
+        return targetKeyID(at: CGPoint(x: start.x + translation.width, y: start.y + translation.height),
+                           excluding: draggedID, placements: placements, previewSize: previewSize)
+    }
+
+    private func swapKeys(draggedID: String, targetID: String) {
+        guard draggedID != targetID else { return }
+        do {
+            var next = editor
+            try next.swapKeyPlacements(draggedID: draggedID, targetID: targetID)
+            editor = next
+            error = nil
+        } catch {
+            self.error = error.localizedDescription
+        }
+    }
     var body: some View {
         Form {
             if let error { Text(error).foregroundStyle(.red) }
@@ -34,11 +72,25 @@ struct CustomLayoutEditorView: View {
             Toggle("直接入力する", isOn: $direct)
             if direct { Text("変換せず、確定した文字として挿入します。").font(.caption).foregroundStyle(.secondary) }
             if let layout {
-                Section("プレビュー・キーを選んで編集") {
+                Section("プレビュー・キーを選択またはドラッグ") {
+                    Text("キーをドラッグして別のキーに重ねると位置を交換できます。")
+                        .font(.caption).foregroundStyle(.secondary)
                     GeometryReader { geometry in
-                        ForEach(layout.placements.filter { !$0.isSpacer }, id: \.id) { key in
+                        let keyPlacements = layout.placements.filter { !$0.isSpacer }
+                        ForEach(keyPlacements, id: \.id) { key in
                             CustomEditablePreviewKey(key: key, containerWidth: geometry.size.width,
-                                                     rows: rows, columns: columns) { keyEditor = KeyDraft(key) }
+                                                     rows: rows, columns: columns,
+                                                     isDropTargeted: dropTargetID == key.id,
+                                                     select: { keyEditor = KeyDraft(key) },
+                                                     dragChanged: { draggedID, translation in
+                                dropTargetID = targetKeyID(draggedID: draggedID, translation: translation,
+                                                           placements: keyPlacements, previewSize: geometry.size)
+                            }, dragEnded: { draggedID, translation in
+                                let targetID = targetKeyID(draggedID: draggedID, translation: translation,
+                                                           placements: keyPlacements, previewSize: geometry.size)
+                                dropTargetID = nil
+                                if let targetID { swapKeys(draggedID: draggedID, targetID: targetID) }
+                            })
                         }
                     }.frame(height: 220)
                 }
@@ -193,6 +245,7 @@ private struct CustomKeyEditor: View {
                 }
                 Stepper("上から：\(draft.row) 半キー", value: $draft.row, in: 0...(rows * 2 - 1))
                 Stepper("左から：\(draft.column) 半キー", value: $draft.column, in: 0...(columns * 2 - 1))
+                    .accessibilityIdentifier("customKeyColumnPosition")
                 Stepper("高さ：\(draft.height) 半キー", value: $draft.height, in: 1...(rows * 2))
                 Stepper("幅：\(draft.width) 半キー", value: $draft.width, in: 1...(columns * 2))
                 if draft.existing { Button("キーを削除", role: .destructive) { remove(); dismiss() } }
@@ -212,7 +265,26 @@ private struct CustomEditablePreviewKey: View {
     let key: ImportedCustomLayout.Placement
     let containerWidth: CGFloat
     let rows: Int, columns: Int
+    let isDropTargeted: Bool
     let select: () -> Void
+    let dragChanged: (String, CGSize) -> Void
+    let dragEnded: (String, CGSize) -> Void
+    @GestureState private var dragTranslation = CGSize.zero
+    @State private var isDragging = false
+
+    init(key: ImportedCustomLayout.Placement, containerWidth: CGFloat, rows: Int, columns: Int,
+         isDropTargeted: Bool, select: @escaping () -> Void,
+         dragChanged: @escaping (String, CGSize) -> Void, dragEnded: @escaping (String, CGSize) -> Void) {
+        self.key = key
+        self.containerWidth = containerWidth
+        self.rows = rows
+        self.columns = columns
+        self.isDropTargeted = isDropTargeted
+        self.select = select
+        self.dragChanged = dragChanged
+        self.dragEnded = dragEnded
+    }
+
     var body: some View {
         let unitWidth: CGFloat = containerWidth / CGFloat(columns * 2)
         let unitHeight: CGFloat = 220 / CGFloat(rows * 2)
@@ -224,8 +296,29 @@ private struct CustomEditablePreviewKey: View {
             .buttonStyle(.plain)
             .font(.caption).lineLimit(2)
             .frame(width: width, height: height)
-            .background(Color.accentColor.opacity(0.15), in: RoundedRectangle(cornerRadius: 5))
+            .background(Color.accentColor.opacity(isDropTargeted ? 0.4 : 0.15), in: RoundedRectangle(cornerRadius: 5))
+            .overlay {
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(isDropTargeted ? Color.accentColor : .clear, lineWidth: 2)
+            }
+            .contentShape(RoundedRectangle(cornerRadius: 5))
+            .accessibilityIdentifier("customLayoutPreviewKey-\(key.id)")
+            .accessibilityHint("別のキーへドラッグすると、キーの位置を交換します")
             .position(x: x, y: y)
+            .offset(dragTranslation)
+            .zIndex(isDragging ? 1 : 0)
+            .highPriorityGesture(
+                DragGesture(minimumDistance: 8)
+                    .updating($dragTranslation) { value, state, _ in state = value.translation }
+                    .onChanged { value in
+                        isDragging = true
+                        dragChanged(key.id, value.translation)
+                    }
+                    .onEnded { value in
+                        isDragging = false
+                        dragEnded(key.id, value.translation)
+                    }
+            )
     }
 }
 

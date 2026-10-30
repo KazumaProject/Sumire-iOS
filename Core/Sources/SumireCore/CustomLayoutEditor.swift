@@ -141,6 +141,43 @@ public struct CustomLayoutEditor {
         keys[index] = setting(keys[index], ["flicks": .array(updated)])
         source = setting(source, ["keysWithFlicks": .array(keys)])
     }
+    /// Exchanges two key placements while keeping each key's definition and
+    /// imported metadata attached to its identifier. Spacers stay in place.
+    /// The edit is committed only if the complete candidate layout remains valid.
+    public mutating func swapKeyPlacements(draggedID: String, targetID: String) throws {
+        guard draggedID != targetID else { return }
+        let layout = try validated()
+        guard let dragged = layout.placements.first(where: { $0.id == draggedID && !$0.isSpacer }),
+              let target = layout.placements.first(where: { $0.id == targetID && !$0.isSpacer }) else {
+            throw PersonalDataError("交換するキーがありません")
+        }
+
+        var keys = source["keysWithFlicks"]?.array ?? []
+        let replacements = [draggedID: target, targetID: dragged]
+        var updated = Set<String>()
+        for index in keys.indices {
+            guard let id = keys[index]["key"]?["keyIdentifier"]?.string,
+                  let placement = replacements[id],
+                  let definition = keys[index]["key"] else { continue }
+            let fields: [String: LayoutJSON] = [
+                "rowUnits": .integer(Int64(placement.row)),
+                "columnUnits": .integer(Int64(placement.column)),
+                "rowSpanUnits": .integer(Int64(placement.height)),
+                "columnSpanUnits": .integer(Int64(placement.width))
+            ]
+            keys[index] = setting(keys[index], ["key": setting(definition, fields)])
+            updated.insert(id)
+        }
+        guard updated == Set([draggedID, targetID]) else {
+            throw PersonalDataError("交換するキーがありません")
+        }
+
+        var candidate = self
+        candidate.source = setting(source, ["keysWithFlicks": .array(keys)])
+        _ = try candidate.validated()
+        source = candidate.source
+    }
+
     public mutating func removeKey(id: String) {
         source = setting(source, ["keysWithFlicks": .array((source["keysWithFlicks"]?.array ?? []).filter {
             $0["key"]?["keyIdentifier"]?.string != id
