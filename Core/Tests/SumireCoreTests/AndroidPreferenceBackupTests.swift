@@ -2,6 +2,22 @@ import XCTest
 @testable import SumireCore
 
 final class AndroidPreferenceBackupTests: XCTestCase {
+    func testLearnedPredictionThreeAndroidKeysAndDefaults() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("enable_prediction_search_learn_dictionary_preference", "boolean", true),
+            entry("learn_prediction_preference", "int", 2),
+            entry("learn_dictionary_prediction_candidate_limit_preference", "int", 7)
+        ]))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.enabledKey], .boolean(true))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.minimumInputLengthKey], .number(2))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.candidateLimitKey], .number(7))
+        let domain = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        try backup.apply(to: defaults)
+        XCTAssertEqual(LearnedPredictionSettings.load(defaults: defaults), .init(enabled: true, minimumInputLength: 2, candidateLimit: 7))
+    }
+
     func testMapsSupportedAndroidSettingsAndPreservesUnrepresentedIOSSettings() throws {
         let backup = try AndroidPreferenceBackup.decode(json([
             entry("live_conversion_preference", "boolean", true),

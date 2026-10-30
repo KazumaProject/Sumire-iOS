@@ -120,6 +120,7 @@ final class KeyboardViewController: UIInputViewController {
         let learningEnabled = defaults.object(forKey: "learningEnabled") == nil || defaults.bool(forKey: "learningEnabled")
         let learningReset = LocalDataReset(store: .learning, url: PersonalDataLocation.learningURL(allowShared: false), sharedDefaults: defaults, localDefaults: .standard)
         surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: hasFullAccess) : nil, localReset: learningReset)
+        surface.configureLearnedPrediction(settings: LearnedPredictionSettings.load(defaults: defaults))
         surface.learnFirstCandidate = defaults.bool(forKey: "learnFirstCandidate")
         surface.learnMixedSymbolsAndNumbers = defaults.object(forKey: "learnMixedSymbolsAndNumbers") == nil || defaults.bool(forKey: "learnMixedSymbolsAndNumbers")
         updateTextMacroContext()
