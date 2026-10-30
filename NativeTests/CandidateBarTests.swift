@@ -1,5 +1,6 @@
 import XCTest
 import UIKit
+import CoreText
 import SumireCore
 @testable import Sumire
 
@@ -250,6 +251,58 @@ final class CandidateBarTests: XCTestCase {
                 XCTAssertEqual(size.width, min(max(44, HistoricKanaFont.attributed(text).size().width + 32), max(44, list.bounds.width)))
             }
         }
+    }
+
+    func testCurrentBundledWoHistoricKanaReachesExpandedCellWithRealGlyph() throws {
+        let directory = try XCTUnwrap(ConversionService.bundledDictionary)
+        let service = ConversionService(directory: directory, categoryMask: 0)
+        service.setPersonal(PersonalLexicon())
+        service.setLearning(url: nil)
+        let completed = expectation(description: "Current bundled を conversion")
+        var result: Result<ConversionResponse, Error>?
+        service.convert("を", generation: 1, editStart: 0) {
+            result = $0
+            completed.fulfill()
+        }
+        wait(for: [completed], timeout: 20)
+        let response = try XCTUnwrap(result).get()
+        XCTAssertTrue(response.complete)
+        let candidate = try XCTUnwrap(response.candidates.first {
+            $0.text.unicodeScalars.map(\.value) == [0x1B005]
+                && $0.range == NSRange(location: 0, length: 1)
+        }, "Canonical dictionary must contain the whole を → U+1B005 candidate")
+        XCTAssertEqual(candidate.text.utf16.count, 2)
+        var rendered: NSAttributedString?
+        withBar(rows: 3) { bar, list in
+            bar.useExpandedLayout()
+            bar.setCandidates([.init(text: candidate.text, annotation: candidate.displayAnnotation)])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            let path = IndexPath(item: 0, section: 0)
+            let cell = list.cellForItem(at: path)
+            let label = cell?.contentView.subviews.compactMap { $0 as? UILabel }.first
+            XCTAssertEqual(label?.attributedText?.string.unicodeScalars.map(\.value), [0x1B005])
+            XCTAssertEqual(cell?.accessibilityLabel?.unicodeScalars.map(\.value), [0x1B005])
+            rendered = label?.attributedText
+        }
+        let attributed = try XCTUnwrap(rendered)
+        var effectiveRange = NSRange()
+        let font = try XCTUnwrap(attributed.attribute(.font, at: 0, effectiveRange: &effectiveRange) as? UIFont)
+        XCTAssertEqual(font.fontName, HistoricKanaFont.assetName)
+        XCTAssertEqual(effectiveRange, NSRange(location: 0, length: 2))
+        let runs = CTLineGetGlyphRuns(CTLineCreateWithAttributedString(attributed)) as! [CTRun]
+        XCTAssertFalse(runs.isEmpty)
+        var glyphCount = 0
+        for run in runs {
+            let attributes = CTRunGetAttributes(run) as NSDictionary
+            let actualFont = try XCTUnwrap(attributes[kCTFontAttributeName]) as! CTFont
+            XCTAssertEqual(CTFontCopyPostScriptName(actualFont) as String, HistoricKanaFont.assetName)
+            let count = CTRunGetGlyphCount(run)
+            var glyphs = [CGGlyph](repeating: 0, count: count)
+            CTRunGetGlyphs(run, CFRange(location: 0, length: 0), &glyphs)
+            XCTAssertTrue(glyphs.allSatisfy { $0 != 0 })
+            glyphCount += count
+        }
+        XCTAssertGreaterThan(glyphCount, 0)
     }
 
     func testThreeRowsPackVariableWidthsWithoutBlankColumns() {
