@@ -1825,19 +1825,26 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       std::vector<Candidate> candidates;
       if (reading.size() > 16)
         return candidates;
+      auto segment = [&](const std::string &text, uint32_t token) {
+        const auto pos = dictionary.pos[token];
+        const bool known = japanese_prediction && bunsetsu_search;
+        return Segment{text, dictionary.name, 0, uint32_t(reading.size()),
+                       uint16_t(known ? impl->connection.left[pos] : 0),
+                       uint16_t(known ? impl->connection.right[pos] : 0)};
+      };
       dictionary.prefixes(lookup, 0, [&](size_t end, uint32_t token) {
         if (end != lookup.size()) return;
         auto text = dictionary.surface(token, lookup, 0, end);
         candidates.push_back({
             text, dictionary.costs[token],
-            {{text, dictionary.name, 0, uint32_t(reading.size())}}});
+            {segment(text, token)}});
         if (dictionary.name == "symbol")
           candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
       });
       // Android includes an exact symbol/emoji reading regardless of the
-      // prediction minimum, then permits up to three extra UTF-16 units when
-      // Japanese prediction is enabled (the production default).
-      if (include_completions && japanese_prediction && !bunsetsu_search && reading.size() >= 3) {
+      // prediction minimum, then permits the configured UTF-16 lookahead
+      // (default three) when Japanese prediction is enabled.
+      if (include_completions && japanese_prediction && reading.size() >= 3) {
         const bool complete = dictionary.completion(
             lookup, prediction_config.lookahead_character_count, limit,
             [&](size_t node, uint32_t token, size_t extra) {
@@ -1852,7 +1859,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                   {text, score,
                    // The longer dictionary reading selects the completion, but
                    // this candidate replaces only the currently typed input.
-                   {{text, dictionary.name, 0, uint32_t(reading.size())}}});
+                   {segment(text, token)}});
               if (dictionary.name == "symbol")
                 candidates.back().presentation_kind = CandidatePresentationKind::numeric_symbol;
             });

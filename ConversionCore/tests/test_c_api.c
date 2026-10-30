@@ -216,6 +216,42 @@ static int64_t prediction_score(sumire_result *result, const char *text) {
   }
   return INT64_MAX;
 }
+static void test_bunsetsu_auxiliary_completion(const char *directory) {
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
+  sumire_result *owned = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory, 0, 0, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  const uint32_t modes[] = {24, 16, 12};
+  const char *names[] = {"EMOJI-COMP", "EMOTICON-COMP", "SYMBOL-COMP"};
+  const int64_t scores[] = {1100, 1200, 1300};
+  for (size_t m = 0; m < 3; ++m) {
+    sumire_result *result = NULL;
+    sumire_request request = {m + 1, "あいう", strlen("あいう"), 0, 20, 200000, modes[m]};
+    CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+    for (size_t k = 0; k < 3; ++k) {
+      CHECK(prediction_score(result, names[k]) == (modes[m] == 16 ? INT64_MAX : scores[k]));
+    }
+    for (size_t i = 0; i < sumire_result_count(result); ++i) {
+      sumire_candidate row; CHECK(sumire_result_candidate(result, i, &row) == 0);
+      if (!row.segment_count) continue;
+      sumire_segment segment; CHECK(sumire_result_segment(result, i, 0, &segment) == 0);
+      const int auxiliary = (segment.dictionary.size == 5 && !memcmp(segment.dictionary.data, "emoji", 5)) ||
+        (segment.dictionary.size == 8 && !memcmp(segment.dictionary.data, "emoticon", 8)) ||
+        (segment.dictionary.size == 6 && !memcmp(segment.dictionary.data, "symbol", 6));
+      if (!auxiliary) continue;
+      CHECK(row.start_utf16 == 0 && row.length_utf16 == 3 && row.segment_count == 1);
+      CHECK(segment.start_utf16 == 0 && segment.length_utf16 == 3);
+      uint16_t left = 99, right = 99; uint32_t flags = 99;
+      CHECK(sumire_result_segment_context_ids(result, i, 0, &left, &right) == 0);
+      CHECK(left == (modes[m] == 24 ? 1 : 0) && right == (modes[m] == 24 ? 1 : 0));
+      CHECK(sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
+    }
+    if (m == 0) owned = result; else sumire_result_destroy(result);
+  }
+  sumire_session_destroy(session); sumire_engine_close(engine);
+  CHECK(prediction_score(owned, "EMOJI-COMP") == 1100);
+  sumire_result_destroy(owned);
+}
 static void test_bunsetsu_ascii_provider(const char *directory) {
   char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
   sumire_result *result = NULL, *owned = NULL;
@@ -1034,6 +1070,9 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2], "--bunsetsu-prediction") == 0) {
     test_bunsetsu_prediction_flags(argv[1]); return 0;
+  }
+  if (argc == 3 && strcmp(argv[2], "--bunsetsu-auxiliary-completion") == 0) {
+    test_bunsetsu_auxiliary_completion(argv[1]); return 0;
   }
   if (argc == 3 && strcmp(argv[2], "--bunsetsu-ascii-provider") == 0) {
     test_bunsetsu_ascii_provider(argv[1]); return 0;
