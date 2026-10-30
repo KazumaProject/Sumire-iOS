@@ -223,4 +223,23 @@ import UIKit
         XCTAssertEqual(raw.first?.score, 8_100)
         XCTAssertTrue(raw.contains { $0.score >= 30_000 })
     }
+    func testNumericBunsetsuKeepsNumericRouteWithoutDictionaryCompletion() throws {
+        for reading in ["123", "１２３"] {
+            let root = try base(), suffix = reading == "123" ? "4" : "４"
+            try dictionary(reading: reading + suffix, text: "数値system補完", cost: 100).write(to: root.appendingPathComponent("system.sud"))
+            try dictionary(reading: reading + suffix, text: "数値分類補完", cost: 100).write(to: root.appendingPathComponent("actor.sud"))
+            try dictionary(reading: reading + suffix, text: "数値訂正補完\tていせい", cost: 200).write(to: root.appendingPathComponent("reading_correction.sud"))
+            let value = ConversionService(directory: root); value.setEnglishReading(false); value.setCategoryIDs(["actor"])
+            value.setPredictionSettings(.init(lookaheadCharacterCount: 1))
+            let response = try convert(value, reading)
+            XCTAssertFalse(response.candidates.contains { ["数値system補完", "数値分類補完", "数値訂正補完"].contains($0.text) })
+            let numeric = try XCTUnwrap(response.candidates.first { $0.text == "百二十三" })
+            XCTAssertEqual(numeric.leftID, 2040); XCTAssertEqual(numeric.rightID, 2040)
+            XCTAssertEqual(numeric.range, NSRange(location: 0, length: 3))
+            if reading == "123" {
+                let date = try XCTUnwrap(response.candidates.first { $0.text == "1月23日" })
+                XCTAssertEqual(date.leftID, 1851); XCTAssertEqual(date.rightID, 1851)
+            }
+        }
+    }
 }

@@ -1638,7 +1638,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
-  if (japanese_prediction && !numericPredictionInput && impl->reading_correction &&
+  if (japanese_prediction && !numericPredictionInput && !(bunsetsu_search && numericInput) && impl->reading_correction &&
       reading.size() >= 3 && reading.size() <= 16) {
     const auto &d = *impl->reading_correction;
     const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit,
@@ -1663,7 +1663,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     });
     result.complete = result.complete && complete;
   }
-  if (japanese_prediction && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !numericPredictionInput && !(bunsetsu_search && numericInput) && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults to lookahead 3 and standard aggressiveness.
     // Retain token references only; materialize surfaces after top-k selection.
     const auto &d = *impl->dictionaries.front();
@@ -1690,7 +1690,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
               bunsetsu_search ? impl->connection.right[d.pos[prediction.token]] : uint16_t(0)}}});
     }
   }
-  if (japanese_prediction && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !numericPredictionInput && !(bunsetsu_search && numericInput) && reading.size() >= 3 && reading.size() <= 16) {
     // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
     // category, stable token order on ties, 1500 per additional UTF-16 unit.
     // Retain references until selection, including for large posting lists.

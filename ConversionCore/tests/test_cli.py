@@ -949,6 +949,23 @@ class Tests(unittest.TestCase):
         self.assertEqual(shared[0]['score'],8100)
         self.assertTrue(shared[0]['system_ngram_matched'])
 
+    def test_numeric_bunsetsu_never_uses_untyped_dictionary_completion(self):
+        dictionary(self.data/'system.sud',[(r,'SYSTEM-NUMERIC-COMPLETE',1,100) for r in ['1234','１２３４']])
+        dictionary(self.data/'person.sud',[(r,'CATEGORY-NUMERIC-COMPLETE',2,100) for r in ['1234','１２３４']])
+        dictionary(self.data/'reading_correction.sud',[(r,'CORRECTION-NUMERIC-COMPLETE\tていせい',2,200) for r in ['1234','１２３４']])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        unwanted={'SYSTEM-NUMERIC-COMPLETE','CATEGORY-NUMERIC-COMPLETE','CORRECTION-NUMERIC-COMPLETE'}
+        for reading in ['123','１２３']:
+            by_options={}
+            for options in [('--bunsetsu','--predict-japanese'),('--bunsetsu',),('--prefix-candidates','--predict-japanese')]:
+                with self.subTest(reading=reading,options=options):
+                    rows=json.loads(self.run_cli(*options,'--categories','person',reading).stdout)['candidates']
+                    self.assertFalse(any(c['text'] in unwanted for c in rows),rows)
+                    by_options[options]=rows
+            self.assertEqual(by_options[('--bunsetsu','--predict-japanese')],by_options[('--bunsetsu',)])
+
     def test_bunsetsu_prediction_api_preserves_legacy_flags_and_owned_metadata(self):
         dictionary(self.data/'system.sud',[('あいうえお','SYSTEM-COMPLETE',1,100)])
         dictionary(self.data/'reading_correction.sud',[('あいうえお','CORRECTION\tていせい',2,200)])
