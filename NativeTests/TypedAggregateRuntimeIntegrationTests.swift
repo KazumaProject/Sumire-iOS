@@ -195,4 +195,145 @@ final class TypedAggregateRuntimeIntegrationTests: XCTestCase {
         XCTAssertTrue(after.candidates.contains { $0.text == "基準" })
     }
 
+    private enum Kind {
+        case shorts, ints, longs, characters
+        var name: String { switch self { case .shorts: "[S"; case .ints: "[I"; case .longs: "[J"; case .characters: "[C" } }
+        var uid: UInt64 {
+            switch self {
+            case .shorts: 0xef832e06e55db0fa
+            case .ints: 0x4dba602676eab2a5
+            case .longs: 0x782004b512b17593
+            case .characters: 0xb02666b0e25d84ac
+            }
+        }
+        var width: Int { switch self { case .shorts, .characters: 2; case .ints: 4; case .longs: 8 } }
+    }
+    private struct ArrayValue { let kind: Kind; let values: [UInt64] }
+
+    private func appendBE(_ value: UInt64, width: Int, to data: inout Data) {
+        for shift in (0..<width).reversed() { data.append(UInt8(truncatingIfNeeded: value >> (shift * 8))) }
+    }
+    private func appendLE(_ value: UInt64, width: Int, to data: inout Data) {
+        for shift in 0..<width { data.append(UInt8(truncatingIfNeeded: value >> (shift * 8))) }
+    }
+    private func javaStream(_ arrays: [ArrayValue]) -> Data {
+        var data = Data([0xac, 0xed, 0, 5])
+        for array in arrays {
+            data.append(contentsOf: [0x75, 0x72])
+            appendBE(UInt64(array.kind.name.utf8.count), width: 2, to: &data)
+            data.append(contentsOf: array.kind.name.utf8)
+            appendBE(array.kind.uid, width: 8, to: &data)
+            data.append(contentsOf: [2, 0, 0, 0x78, 0x70])
+            appendBE(UInt64(array.values.count), width: 4, to: &data)
+            for value in array.values { appendBE(value, width: array.kind.width, to: &data) }
+        }
+        return data
+    }
+    private func crc32(_ data: Data) -> UInt32 {
+        var value: UInt32 = 0xffff_ffff
+        for byte in data {
+            value ^= UInt32(byte)
+            for _ in 0..<8 { value = (value >> 1) ^ (value & 1 == 0 ? 0 : 0xedb8_8320) }
+        }
+        return ~value
+    }
+    private func storedZIP(_ files: [(String, Data)]) -> Data {
+        struct Central { let name: Data; let crc, size, offset: UInt32 }
+        var data = Data(), central: [Central] = []
+        func append16(_ value: UInt16, to data: inout Data) {
+            data.append(UInt8(truncatingIfNeeded: value)); data.append(UInt8(truncatingIfNeeded: value >> 8))
+        }
+        func append32(_ value: UInt32, to data: inout Data) {
+            append16(UInt16(truncatingIfNeeded: value), to: &data)
+            append16(UInt16(truncatingIfNeeded: value >> 16), to: &data)
+        }
+        for (name, payload) in files {
+            let nameData = Data(name.utf8), size = UInt32(payload.count), checksum = crc32(payload)
+            let offset = UInt32(data.count)
+            append32(0x0403_4b50, to: &data); append16(20, to: &data); append16(0, to: &data)
+            append16(0, to: &data); append16(0, to: &data); append16(0, to: &data)
+            append32(checksum, to: &data); append32(size, to: &data); append32(size, to: &data)
+            append16(UInt16(nameData.count), to: &data); append16(0, to: &data)
+            data.append(nameData); data.append(payload)
+            central.append(Central(name: nameData, crc: checksum, size: size, offset: offset))
+        }
+        let centralOffset = UInt32(data.count)
+        for entry in central {
+            append32(0x0201_4b50, to: &data); append16(20, to: &data); append16(20, to: &data)
+            append16(0, to: &data); append16(0, to: &data); append16(0, to: &data); append16(0, to: &data)
+            append32(entry.crc, to: &data); append32(entry.size, to: &data); append32(entry.size, to: &data)
+            append16(UInt16(entry.name.count), to: &data); append16(0, to: &data); append16(0, to: &data)
+            append16(0, to: &data); append16(0, to: &data); append32(0, to: &data); append32(entry.offset, to: &data)
+            data.append(entry.name)
+        }
+        let centralSize = UInt32(data.count) - centralOffset
+        append32(0x0605_4b50, to: &data); append16(0, to: &data); append16(0, to: &data)
+        append16(UInt16(central.count), to: &data); append16(UInt16(central.count), to: &data)
+        append32(centralSize, to: &data); append32(centralOffset, to: &data); append16(0, to: &data)
+        return data
+    }
+
+    func testRealArchiveImportReachesFullFamilyConversionButNotPartialSelection() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let support = try makeBase(root)
+        let reading = javaStream([
+            .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
+            .init(kind: .characters, values: [0, 0x20, 0x3042]), .init(kind: .ints, values: [1])
+        ])
+        let surface = javaStream([
+            .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
+            .init(kind: .characters, values: [0, 0x20, 0x96c6])
+        ])
+        let tokens = javaStream([
+            .init(kind: .shorts, values: [0]), .init(kind: .shorts, values: [0]),
+            .init(kind: .ints, values: [2]), .init(kind: .longs, values: [0b10])
+        ])
+        let pos = javaStream([.init(kind: .shorts, values: [0]), .init(kind: .shorts, values: [0])])
+        let archive = root.appendingPathComponent("legacy-person.zip")
+        try storedZIP([
+            ("pos_table.dat", pos), ("connectionId.dat", Data([0, 0])),
+            ("categories/person/yomi.dat", reading), ("categories/person/tango.dat", surface),
+            ("categories/person/token.dat", tokens)
+        ]).write(to: archive)
+        let container = root.appendingPathComponent("container")
+        try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
+        // No converter or validator seam: exercise production ZIP conversion,
+        // native validation, publication, authentication and Service conversion.
+        let outcome = DictionaryArchiveImporter.perform(archive: archive, sharedContainer: container,
+            categoryInterpretation: .legacyAggregate, storeImportMode: .typedLegacyAggregate,
+            bundledSupport: support)
+        XCTAssertTrue(outcome.succeeded, outcome.message)
+        XCTAssertEqual(outcome.storedLegacyAggregateIDs, ["person"])
+        XCTAssertTrue(outcome.message.contains("すべて選択"), outcome.message)
+        let store = DictionaryGenerationStore(directory: container.appendingPathComponent("Sumire/Dictionaries"))
+        let loaded = try XCTUnwrap(store.loadCurrent())
+        XCTAssertTrue(loaded.hasCurrentVerifiedReleaseProvenance)
+        let full = try convert(loaded, ids: personLeaves)
+        XCTAssertTrue(full.candidates.contains { $0.text == "集" && $0.dictionaries.contains("legacy_aggregates/person") })
+        XCTAssertFalse(full.candidates.contains { $0.text == "葉候補" })
+        let partial = try convert(loaded, ids: ["actor"])
+        XCTAssertTrue(partial.candidates.contains { $0.text == "葉候補" })
+        XCTAssertFalse(partial.candidates.contains { $0.text == "集" })
+
+        let unmarkedSupport = root.appendingPathComponent("unmarked")
+        try FileManager.default.copyItem(at: support, to: unmarkedSupport)
+        try FileManager.default.removeItem(at: unmarkedSupport.appendingPathComponent(DictionaryCategoryCatalog.releaseMarker))
+        for id in DictionaryCategoryCatalog.legacyIDs {
+            try dictionary("旧分類", cost: 20_000).write(to: unmarkedSupport.appendingPathComponent(id + ".sud"))
+        }
+        let unmarkedContainer = root.appendingPathComponent("unmarked-container")
+        try FileManager.default.createDirectory(at: unmarkedContainer, withIntermediateDirectories: true)
+        let inactiveOutcome = DictionaryArchiveImporter.perform(archive: archive, sharedContainer: unmarkedContainer,
+            categoryInterpretation: .legacyAggregate, storeImportMode: .typedLegacyAggregate,
+            bundledSupport: unmarkedSupport)
+        XCTAssertTrue(inactiveOutcome.succeeded, inactiveOutcome.message)
+        XCTAssertTrue(inactiveOutcome.message.contains("認証がないため"), inactiveOutcome.message)
+        let inactive = try XCTUnwrap(DictionaryGenerationStore(directory:
+            unmarkedContainer.appendingPathComponent("Sumire/Dictionaries")).loadCurrent())
+        XCTAssertFalse(inactive.hasVerifiedReleaseMarker)
+        XCTAssertTrue(inactive.resolveSourceSelection(for: personLeaves).legacyAggregateSources.isEmpty)
+        XCTAssertFalse(try convert(inactive, ids: personLeaves).candidates.contains { $0.text == "集" })
+    }
+
 }

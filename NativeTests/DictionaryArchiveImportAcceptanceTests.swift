@@ -389,7 +389,7 @@ final class DictionaryArchiveImportAcceptanceTests: XCTestCase {
         XCTAssertTrue(outcome.succeeded, outcome.message)
         XCTAssertTrue(outcome.convertedFiles.isEmpty, "A typed aggregate must not be reported as an active release file")
         XCTAssertEqual(outcome.storedLegacyAggregateIDs, ["character"])
-        XCTAssertTrue(outcome.message.contains("現在のキーボード変換には使われません"))
+        XCTAssertTrue(outcome.message.contains("すべて選択"), outcome.message)
         let loaded = try XCTUnwrap(store.loadCurrent())
         XCTAssertNotEqual(loaded.generation, baseline.generation)
         XCTAssertEqual(loaded.legacyAggregateOverlayIDs, [id])
