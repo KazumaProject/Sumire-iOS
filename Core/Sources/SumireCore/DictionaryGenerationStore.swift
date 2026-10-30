@@ -215,7 +215,7 @@ public struct DictionaryGenerationStore {
     ]).map { $0 + ".sud" })
     // Support assets survive publication independently of archive replacements.
     private static let supportGroups = [
-        ["standalone.sud"], ["reading_correction.sud"], ["kotowaza.sud"],
+        ["standalone.sud"], ["reading_correction.sud"],
         ["system_ngram.dat", "system_ngram_unigram.dat"],
         ["mozc/segmenter.dat", "mozc/node_attribute_by_lid.dat"],
         ["single_kanji.sud", "emoji.sud", "emoticon.sud", "symbol.sud"]
