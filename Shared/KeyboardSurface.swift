@@ -481,6 +481,20 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     private var bunsetsuOwnerGeneration: UInt64?
     private var bunsetsuCandidateItems: [BunsetsuCandidateBarItem] = []
     private var bunsetsuRequestGeneration: UInt64 = 0
+    private struct PendingBunsetsuCandidateCycles {
+        let sessionID: UUID
+        let ownerGeneration: UInt64
+        let patternIndex: Int
+        let focusedIndex: Int
+        var directions: [Int]
+
+        func matches(_ session: BunsetsuConversionSession, owner: UInt64?) -> Bool {
+            session.sessionID == sessionID && session.generation == ownerGeneration
+                && owner == ownerGeneration && session.activeSplitPatternIndex == patternIndex
+                && session.focusedSegmentIndex == focusedIndex
+        }
+    }
+    private var pendingBunsetsuCandidateCycles: PendingBunsetsuCandidateCycles?
     private var resultGeneration: UInt64?
     // Selection/learning ranks stay in the Service's converted array. Macro
     // actions may occupy intervening display slots and never own a native rank.
@@ -2015,6 +2029,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     private func cycleBunsetsuSplitPatternIfActive(by delta: Int = 1) -> Bool {
         guard var session = currentBunsetsuSession,
               session.cycleSplitPattern(by: delta) else { return false }
+        pendingBunsetsuCandidateCycles = nil
         bunsetsuSession = session
         renderBunsetsuSession()
         loadNextBunsetsuCandidates()
@@ -2288,6 +2303,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     private func moveCompositionCursor(by offset: Int) {
         if var session = currentBunsetsuSession {
             if session.moveFocus(by: offset) {
+                pendingBunsetsuCandidateCycles = nil
                 bunsetsuSession = session
                 renderBunsetsuSession()
                 loadNextBunsetsuCandidates()
@@ -2412,6 +2428,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
 
     private func clearBunsetsuSession() {
+        pendingBunsetsuCandidateCycles = nil
         bunsetsuSession = nil
         bunsetsuOwnerGeneration = nil
         bunsetsuCandidateItems = []
@@ -2465,13 +2482,45 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                     responseGeneration: token.conversionRequestGeneration, for: token) else { return }
             }
             self.bunsetsuSession = current
+            self.applyPendingBunsetsuCandidateCyclesIfReady()
             self.renderBunsetsuSession()
             self.loadNextBunsetsuCandidates()
         }
     }
 
+    private func applyPendingBunsetsuCandidateCyclesIfReady() {
+        guard let pending = pendingBunsetsuCandidateCycles else { return }
+        guard let session = currentBunsetsuSession,
+              pending.matches(session, owner: bunsetsuOwnerGeneration) else {
+            pendingBunsetsuCandidateCycles = nil
+            return
+        }
+        guard session.focusedSegment?.candidatesLoaded == true else { return }
+        pendingBunsetsuCandidateCycles = nil
+        for direction in pending.directions {
+            guard var current = currentBunsetsuSession,
+                  pending.matches(current, owner: bunsetsuOwnerGeneration) else { return }
+            if current.cycleFocusedCandidate(by: direction) {
+                bunsetsuSession = current
+                renderBunsetsuSession()
+            }
+        }
+    }
+
     private func cycleBunsetsuCandidateIfActive(by delta: Int = 1) -> Bool {
         guard var session = currentBunsetsuSession else { return false }
+        if session.focusedSegment?.candidatesLoaded == false,
+           let owner = bunsetsuOwnerGeneration {
+            if pendingBunsetsuCandidateCycles?.matches(session, owner: owner) != true {
+                pendingBunsetsuCandidateCycles = PendingBunsetsuCandidateCycles(
+                    sessionID: session.sessionID, ownerGeneration: owner,
+                    patternIndex: session.activeSplitPatternIndex,
+                    focusedIndex: session.focusedSegmentIndex, directions: [])
+            }
+            pendingBunsetsuCandidateCycles?.directions.append(delta)
+            loadNextBunsetsuCandidates()
+            return true
+        }
         if session.cycleFocusedCandidate(by: delta) {
             bunsetsuSession = session
             renderBunsetsuSession()
@@ -2925,6 +2974,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     }
 
     private func cancelPhysicalConversion() {
+        pendingBunsetsuCandidateCycles = nil
         cancelLearning()
         guard hasComposition else { return }
         composition.optionsChanged() // Invalidates pending results and returns to editing.

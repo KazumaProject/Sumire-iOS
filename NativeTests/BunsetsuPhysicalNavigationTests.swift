@@ -199,6 +199,8 @@ import SumireCore
         XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertPrevious))
         XCTAssertEqual(marked, preview)
         ready(surface)
+        XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, 0,
+                       "Queued Next then Previous must both be applied after loading")
         XCTAssertEqual(session(surface)?.sessionID, pending.sessionID)
         XCTAssertEqual(session(surface)?.rawInput, reading)
         surface.beforeInput = { surface.invalidateComposition() }
@@ -258,6 +260,103 @@ import SumireCore
         XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
         XCTAssertTrue(commits.isEmpty)
         XCTAssertTrue(try LearningStore(url: url).snapshot().isEmpty)
+    }
+
+    func testOnePendingPhysicalNextIsAppliedAfterFocusedCandidateLoad() throws {
+        let surface = try makeSurface()
+        var marked = ""
+        surface.updateMarkedText = { marked = $0 }
+        surface.updateMarkedSelection = { text, _ in marked = text }
+        try start(surface)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight))
+        let pending = try XCTUnwrap(session(surface))
+        XCTAssertTrue(pending.focusedSegment?.isLoadingCandidates == true)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        ready(surface)
+        let loaded = try XCTUnwrap(session(surface))
+        let segment = try XCTUnwrap(loaded.focusedSegment)
+        XCTAssertGreaterThanOrEqual(segment.candidates.count, 2)
+        XCTAssertEqual(segment.selectedIndex, 1, "The single Next must be applied after loading, not merely consumed")
+        XCTAssertEqual(marked, loaded.displayText)
+        XCTAssertEqual(loaded.sessionID, pending.sessionID)
+    }
+
+    func testMultiplePendingPhysicalCandidateDirectionsApplyInArrivalOrder() throws {
+        let surface = try makeSurface()
+        var observations: [String] = []
+        surface.updateMarkedText = { observations.append($0) }
+        try start(surface)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight))
+        XCTAssertTrue(session(surface)?.focusedSegment?.isLoadingCandidates == true)
+        observations = []
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertPrevious))
+        ready(surface)
+        let loaded = try XCTUnwrap(session(surface)), focused = try XCTUnwrap(loaded.focusedSegment)
+        XCTAssertGreaterThanOrEqual(focused.candidates.count, 2)
+        XCTAssertEqual(focused.selectedIndex, 1)
+        let expected = [1, 2 % focused.candidates.count, 1].map { index in
+            loaded.segments.enumerated().map { offset, segment in
+                offset == loaded.focusedSegmentIndex ? focused.candidates[index] : segment.displayText
+            }.joined()
+        }
+        let distinct = observations.reduce(into: [String]()) { result, text in
+            if result.last != text { result.append(text) }
+        }
+        XCTAssertEqual(Array(distinct.suffix(3)), expected)
+    }
+
+    func testPendingDirectionsCannotLeakAcrossCancelSettingsFocusPatternOrOwner() throws {
+        for boundary in ["cancel", "settings", "focus", "pattern", "owner"] {
+            let url = try temporaryLearningURL(), surface = try makeSurface()
+            surface.configureLearning(url: url); surface.learnFirstCandidate = true
+            var marked = "", commits: [String] = []
+            surface.updateMarkedText = { marked = $0 }
+            surface.updateMarkedSelection = { text, _ in marked = text }
+            surface.commitMarkedText = { commits.append($0) }
+            try start(surface)
+            let initial = try XCTUnwrap(session(surface))
+            XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight))
+            XCTAssertTrue(session(surface)?.focusedSegment?.isLoadingCandidates == true)
+            XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+            switch boundary {
+            case "cancel":
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.cancel)); fence(surface)
+                XCTAssertEqual(marked, reading)
+                XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
+            case "settings":
+                surface.configureTextMacroCandidates(enabled: false)
+                ready(surface, segmented: false)
+                XCTAssertEqual(marked, reading)
+                XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
+            case "focus":
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusLeft)); ready(surface)
+                XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, initial.focusedSegment?.selectedIndex)
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight)); ready(surface)
+                XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, 0)
+            case "pattern":
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentWidthExpand)); ready(surface)
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentWidthShrink)); ready(surface)
+                XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight)); ready(surface)
+                XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, 0)
+            default:
+                surface.beforeInput = { surface.invalidateComposition() }
+                fence(surface)
+                surface.beforeInput = nil
+                XCTAssertFalse(surface.hasComposition)
+                XCTAssertEqual(surface.physicalKeyboardShortcutContext, .any)
+            }
+            fence(surface)
+            XCTAssertTrue(commits.isEmpty, boundary)
+            XCTAssertTrue(try LearningStore(url: url).snapshot().isEmpty, boundary)
+            surface.beforeInput = nil
+            surface.invalidateComposition()
+            try enter("あ", surface); ready(surface, segmented: false)
+            XCTAssertEqual(marked, "あ")
+            XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
+            XCTAssertTrue(try LearningStore(url: url).snapshot().isEmpty, boundary)
+        }
     }
 
 }
