@@ -21,7 +21,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 14)
+        XCTAssertEqual(backup.importedSettingCount, 16)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -119,7 +119,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 14)
+        XCTAssertEqual(backup.importedSettingCount, 16)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +138,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 14)
+        XCTAssertEqual(backup.importedSettingCount, 16)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,7 +155,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 14)
+        XCTAssertEqual(backup.importedSettingCount, 16)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
@@ -496,6 +496,29 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertThrowsError(try invalid.restore(defaults: defaults))
         XCTAssertFalse(defaults.bool(forKey: key))
     }
+
+    func testPredictionSettingsImportNormalizesLegacyValuesAndDefaultsUnknownValues() throws {
+        let legacy = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "string", "long"),
+            entry("prediction_aggressiveness_preference", "string", "unknown")
+        ]))
+        XCTAssertEqual(legacy.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(6))
+        XCTAssertEqual(legacy.settings.values[JapanesePredictionSettings.aggressivenessStorageKey], .text("standard"))
+
+        let numeric = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "int", 99),
+            entry("prediction_aggressiveness_preference", "string", "conservative")
+        ]))
+        XCTAssertEqual(numeric.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(6))
+        XCTAssertEqual(numeric.settings.values[JapanesePredictionSettings.aggressivenessStorageKey], .text("conservative"))
+
+        let unknown = try AndroidPreferenceBackup.decode(json([
+            entry("prediction_lookahead_preference", "string", "not-a-number"),
+            entry("prediction_aggressiveness_preference", "string", "standard")
+        ]))
+        XCTAssertEqual(unknown.settings.values[JapanesePredictionSettings.lookaheadStorageKey], .number(3))
+    }
+
 
     private func entry(_ key: String, _ type: String, _ value: Any) -> [String: Any] {
         ["key": key, "type": type, "value": value]

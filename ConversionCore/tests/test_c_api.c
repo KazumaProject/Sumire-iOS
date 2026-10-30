@@ -207,6 +207,61 @@ static void test_candidate_origin_flags(const char *directory) {
   CHECK(sumire_result_candidate_flags(result,0,NULL) == -1);
   sumire_result_destroy(result);
 }
+static int64_t prediction_score(sumire_result *result, const char *text) {
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate candidate;
+    CHECK(sumire_result_candidate(result, i, &candidate) == 0);
+    if (candidate.text.size == strlen(text) && memcmp(candidate.text.data, text, candidate.text.size) == 0)
+      return candidate.score;
+  }
+  return INT64_MAX;
+}
+static void test_prediction_settings(const char *directory) {
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL; sumire_result *result = NULL;
+  CHECK(sumire_engine_open(directory, 1u << 9, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "あいう", strlen("あいう"), 0, 20, 200000, 8};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == 16100);
+  CHECK(sumire_session_set_prediction_config(NULL, 3, 1, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 0, 1, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 7, 1, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 3, 3, error, sizeof error) < 0);
+  CHECK(sumire_session_set_prediction_config(session, 3, SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 1, 0, error, sizeof error) == 0); // Invalid/no-op setters retain selection.
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == 16100);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 2;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(sumire_session_set_prediction_config(session, 2, SUMIRE_PREDICTION_AGGRESSIVENESS_AGGRESSIVE, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 2, 0, error, sizeof error) < 0);
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == 16100); // Owned snapshot remains immutable.
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 3;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == 8100);
+  CHECK(prediction_score(result, "CATEGORY-PREDICT") == 1600);
+  CHECK(prediction_score(result, "訂正") == 8200);
+  sumire_result_destroy(result); result = NULL;
+  CHECK(sumire_session_set_prediction_config(session, 1, SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) == 0);
+  request.generation = 4;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == INT64_MAX);
+  CHECK(prediction_score(result, "CATEGORY-PREDICT") == INT64_MAX);
+  CHECK(prediction_score(result, "訂正") == INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 3;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) < 0);
+  CHECK(result == NULL); // Settings changes do not rewind request generations.
+  CHECK(sumire_session_set_prediction_config(session, 2, SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) == 0);
+  sumire_session_reset(session);
+  request.generation = 5;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-PREDICT") == 16100); // Reset retains configuration.
+  sumire_session_destroy(session); sumire_engine_close(engine);
+  CHECK(prediction_score(result, "CATEGORY-PREDICT") == 3100);
+  sumire_result_destroy(result);
+}
 static void test_category_prediction(const char *directory) {
   char error[256];
   sumire_engine *engine = NULL;
@@ -645,6 +700,9 @@ int main(int argc, char **argv) {
   if (argc == 3 && strcmp(argv[2],"--aux-completion") == 0) {
     test_auxiliary_completion_ranges(argv[1]);
     return 0;
+  }
+  if (argc == 3 && strcmp(argv[2], "--prediction-settings") == 0) {
+    test_prediction_settings(argv[1]); return 0;
   }
   CHECK(argc == 2);
   test_learning_metadata_overlay(argv[1]);

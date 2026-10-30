@@ -164,6 +164,7 @@ final class ConversionService {
     private var cachedDictionarySources: [NativeDictionaryEngineSource]?
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
+    private var predictionSettings = JapanesePredictionSettings()
     private var categoryIDs: [String]?
     private var categoryMask: UInt32
     private var personal = PersonalLexicon()
@@ -228,6 +229,13 @@ final class ConversionService {
         let state = state
         queue.async { state.close() }
     }
+    func setPredictionSettings(_ settings: JapanesePredictionSettings) {
+        guard predictionSettings != settings else { return }
+        predictionSettings = settings
+        _ = pending.advance()
+        let state = state
+        queue.async { state.lastGeneration = nil }
+    }
     func setPersonal(_ value: PersonalLexicon) {
         guard value != personal else { return }
         personal = value
@@ -269,7 +277,8 @@ final class ConversionService {
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, sourceOverride = sourceOverride
-        let mask = categoryMask, englishReading = englishReadingEnabled, categoryIDs = categoryIDs
+        let mask = categoryMask, englishReading = englishReadingEnabled
+        let predictionSettings = predictionSettings, categoryIDs = categoryIDs
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
@@ -279,6 +288,7 @@ final class ConversionService {
             let response: Result<ConversionResponse, Error>
             do {
                 try state.open(sources: sources, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
+                try state.setPredictionSettings(predictionSettings)
                 let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
@@ -594,6 +604,7 @@ final class ConversionService {
         private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
+        private var appliedPredictionSettings: JapanesePredictionSettings?
         func cancelLearning() { learningSession.cancel(); learningRemainder = nil }
         func appendLearning(_ fragments: [LearningFragment], input: String, remaining: String,
                             learnFirst: Bool, onNotice: @escaping (String) -> Void) {
@@ -683,6 +694,23 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
+        func setPredictionSettings(_ settings: JapanesePredictionSettings) throws {
+            guard appliedPredictionSettings != settings else { return }
+            guard let session else { throw NativeError("変換セッションがありません") }
+            let aggressiveness: UInt32
+            switch settings.aggressiveness {
+            case .conservative: aggressiveness = 0
+            case .standard: aggressiveness = 1
+            case .aggressive: aggressiveness = 2
+            }
+            var error = [CChar](repeating: 0, count: 1024)
+            guard sumire_session_set_prediction_config(session, UInt32(settings.lookaheadCharacterCount),
+                                                         aggressiveness, &error, error.count) == 0 else {
+                throw NativeError(String(cString: error))
+            }
+            appliedPredictionSettings = settings
+        }
+
         func open(sources: [NativeDictionaryEngineSource], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
             let candidates = sources.filter { !rejectedDirectories.contains($0.directory) }
             let requestedDirectory = candidates.first?.directory
@@ -751,6 +779,7 @@ final class ConversionService {
             openedMask = nil
             openedCategoryIDs = nil
             openedEnglishReading = nil
+            appliedPredictionSettings = nil
         }
         deinit { close() }
     }
