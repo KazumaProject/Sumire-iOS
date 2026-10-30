@@ -532,7 +532,7 @@ std::vector<std::string> resolve_category_names(const std::string &directory,
 struct Engine::Impl {
   std::shared_ptr<int> identity = std::make_shared<int>(0);
   Connection connection;
-  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction;
+  std::unique_ptr<Dictionary> english_reading, english_words, reading_correction, kotowaza;
   std::unique_ptr<Dictionary> single_kanji, emoji, emoticon, symbol;
   bool auxiliary_dictionaries_available = false;
   std::unique_ptr<detail::StandaloneDictionary> standalone;
@@ -566,6 +566,12 @@ struct Engine::Impl {
       reading_correction = std::make_unique<Dictionary>(dir, "reading_correction");
       for (auto p : reading_correction->pos)
         require(p < connection.left.size(), "reading correction POS outside table");
+    }
+    // Independent optional Android proverb dictionary; it is not an auxiliary-set member.
+    if (std::filesystem::exists(dir + "/kotowaza.sud")) {
+      kotowaza = std::make_unique<Dictionary>(dir, "kotowaza");
+      for (auto p : kotowaza->pos)
+        require(p < connection.left.size(), "kotowaza POS outside table");
     }
     const auto resolved = resolve_category_names(dir, cats, expand_legacy_categories);
     dictionaries.push_back(std::make_unique<Dictionary>(dir, "system"));
@@ -623,6 +629,7 @@ size_t Engine::mapped_bytes() const {
   if (impl->english_reading) n += impl->english_reading->file.size;
   if (impl->english_words) n += impl->english_words->file.size;
   if (impl->reading_correction) n += impl->reading_correction->file.size;
+  if (impl->kotowaza) n += impl->kotowaza->file.size;
   if (impl->single_kanji) n += impl->single_kanji->file.size;
   if (impl->emoji) n += impl->emoji->file.size;
   if (impl->emoticon) n += impl->emoticon->file.size;
@@ -1017,7 +1024,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
                        const PersonalDictionary *personal,
                        const PersonalDictionary *learned, Workspace *workspace, bool prefix_candidates, bool japanese_prediction, bool bunsetsu_search,
                        const PredictionConfig &prediction_config,
-                       bool numeric_symbol_candidates) const {
+                       bool numeric_symbol_candidates, bool kotowaza_enabled) const {
   auto started = std::chrono::steady_clock::now();
   require(count >= 1 && count <= 100 && limit >= 1 && limit <= 2000000,
           "invalid search limits");
@@ -1776,6 +1783,23 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       add(utf8(capitalized), int64_t(d.costs[token]) + 1500);
       add(utf8(unicode_upper(lower)), int64_t(d.costs[token]) + 3000);
     });
+  }
+  // df1f383: English-reading, proverb, normalized symbols, then English words.
+  // Bunsetsu independently includes proverbs while suppressing system completion.
+  if (impl->kotowaza && kotowaza_enabled && !numericPredictionInput &&
+      (japanese_prediction || bunsetsu_search) && reading.size() >= 3 && reading.size() <= 16) {
+    const auto &d = *impl->kotowaza;
+    const auto &connection = impl->connection;
+    const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit,
+        [&](size_t node, uint32_t token, size_t extra) {
+      const auto yomi = d.nodeReading(node);
+      const auto text = d.surface(token, yomi, 0, yomi.size(), node);
+      const auto pos = d.pos[token];
+      result.candidates.push_back({text, int64_t(d.costs[token]) +
+          prediction_config.completion_penalty(reading.size(), reading.size() + extra, 8000, std::nullopt),
+          {{text, d.name, 0, uint32_t(reading.size()), connection.left[pos], connection.right[pos]}}});
+    });
+    result.complete = result.complete && complete;
   }
   std::vector<Candidate> emoji_and_emoticon_candidates;
   std::vector<Candidate> symbol_candidates;

@@ -23,6 +23,7 @@ struct HomeView: View {
     @AppStorage("theme.brightness", store: KeyboardSettings.appDefaults) private var brightness = 0.7
     @State private var custom = true
     @State private var appearanceRevision = 0
+    @AppStorage(KotowazaSettings.enabledKey, store: KeyboardSettings.appDefaults) private var kotowazaEnabled = true
     @AppStorage("englishReadingEnabled", store: KeyboardSettings.appDefaults) private var englishReadingEnabled = true
     @AppStorage("categoryMask", store: KeyboardSettings.appDefaults) private var categoryMask = 0
     @AppStorage("candidateRowCount", store: KeyboardSettings.appDefaults) private var candidateRowCount = 1
@@ -65,7 +66,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings)
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, kotowazaEnabled: kotowazaEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings)
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -247,6 +248,7 @@ struct InputHarness: UIViewRepresentable {
     let omissionSearch: Bool
     let bunsetsuSeparation: Bool
     let englishReadingEnabled: Bool
+    var kotowazaEnabled = true
     let categoryMask: UInt32
     var categoryIDs: [String]? = nil
     var predictionSettings = JapanesePredictionSettings()
@@ -368,6 +370,7 @@ struct InputHarness: UIViewRepresentable {
         surface.omissionSearch = omissionSearch
         surface.bunsetsuSeparation = bunsetsuSeparation
         surface.englishReadingEnabled = englishReadingEnabled
+        surface.kotowazaEnabled = kotowazaEnabled
         surface.categoryIDs = categoryIDs
         surface.predictionSettings = predictionSettings
         surface.categoryMask = categoryMask

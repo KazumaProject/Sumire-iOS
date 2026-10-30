@@ -4,7 +4,7 @@ import Foundation
 /// Reference: 9506a0b DictionaryZipEntryNameMapper/DictionaryModels/ClassifiedDictionaries.
 public struct DictionaryArchivePlan {
     public enum Group: Hashable {
-        case common, system, category(String), auxiliary(String), english, englishReading, readingCorrection
+        case common, system, category(String), auxiliary(String), english, englishReading, readingCorrection, proverb
         public var id: String {
             switch self {
             case .common: return "common"
@@ -14,6 +14,7 @@ public struct DictionaryArchivePlan {
             case .english: return "english"
             case .englishReading: return "english_reading"
             case .readingCorrection: return "reading_correction"
+            case .proverb: return "kotowaza"
             }
         }
         public var requiredRoles: [Role] {
@@ -141,6 +142,11 @@ public struct DictionaryArchivePlan {
             "yomi_reading_correction.dat": .yomi,
             "token_reading_correction.dat": .token
         ]
+        let proverbRoles: [String: Role] = [
+            "tango_kotowaza.dat": .tango,
+            "yomi_kotowaza.dat": .yomi,
+            "token_kotowaza.dat": .token
+        ]
         if let index = path.firstIndex(of: "reading_correction") {
             let tail = Array(path[index...])
             guard tail.count == 2, let role = readingCorrectionRoles[tail[1]] else {
@@ -150,19 +156,15 @@ public struct DictionaryArchivePlan {
         }
         if let role = readingCorrectionRoles[basename] { return mapped(.readingCorrection, role) }
 
+        // Android's pinned mapper resolves these aliases by basename after its
+        // exact suffix lookup, so nested export/backup paths remain importable.
+        if !nested, let role = proverbRoles[raw] { return mapped(.proverb, role) }
+
         for (group, aliases) in auxiliaryAliases {
             if let role = aliases[raw] { return mapped(.auxiliary(group), role) }
         }
         if let group = path.dropLast().first(where: { auxiliaryAliases[$0] != nil }) {
             return .unknown("\(group)辞書のファイル役割を認識できません")
-        }
-        if path.dropLast().contains("kotowaza") || ["tango_kotowaza.dat", "yomi_kotowaza.dat", "token_kotowaza.dat"].contains(basename) {
-            return .unsupported("kotowaza辞書の差し替えは現在のiOS取込で未対応です")
-        }
-        for suffix in ["kotowaza"] {
-            if ["tango", "yomi", "token"].contains(where: { raw == "\($0)_\(suffix).dat" }) {
-                return .unsupported("\(suffix)の旧形式辞書は現在のiOS取込で未対応です")
-            }
         }
         if raw == "id.def" { return .unsupported("id.defによる品詞定義の差し替えは未対応です") }
         if raw == "qwerty_glide_index.dat" { return .unsupported("Androidの英字グライド索引はiOSで使用しません") }

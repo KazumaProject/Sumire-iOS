@@ -80,6 +80,7 @@ private enum DictionaryArchiveImportMode: String, CaseIterable, Identifiable, Se
 struct DictionarySettings: View {
     @Binding var categoryMask: Int
     @Binding var englishReadingEnabled: Bool
+    @AppStorage(KotowazaSettings.enabledKey, store: KeyboardSettings.appDefaults) private var kotowazaEnabled = true
     @Environment(\.dismiss) private var dismiss
     @State private var selectedCategories = DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults)
     @State private var importingArchive = false
@@ -113,6 +114,12 @@ struct DictionarySettings: View {
                 Section("英単語読み辞書") {
                     Toggle("かなから英単語を表示", isOn: $englishReadingEnabled)
                     Text("学習済み・ユーザー辞書の英単語は、この設定とは別に表示されます。")
+                        .font(.caption).foregroundStyle(.secondary)
+                }
+                Section("諺辞書") {
+                    Toggle("諺を候補に表示", isOn: $kotowazaEnabled)
+                        .accessibilityIdentifier("kotowaza-enabled")
+                    Text("取り込んだ諺辞書から、3〜16文字の読みに続く候補を表示します。先読み長と積極性は辞書補完設定に従います。")
                         .font(.caption).foregroundStyle(.secondary)
                 }
                 Section("外部辞書") {

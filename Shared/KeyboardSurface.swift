@@ -79,6 +79,16 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             refreshConversion()
         }
     }
+    var kotowazaEnabled = true {
+        didSet {
+            guard oldValue != kotowazaEnabled else { return }
+            beforeInput?()
+            converter.setKotowazaEnabled(kotowazaEnabled)
+            guard hasComposition else { return }
+            composition.optionsChanged()
+            refreshConversion()
+        }
+    }
     var bunsetsuSeparation = false
     var englishReadingEnabled = true {
         didSet {

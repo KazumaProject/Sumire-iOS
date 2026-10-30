@@ -132,6 +132,7 @@ final class KeyboardViewController: UIInputViewController {
         let rows = KeyboardSettings.candidateRowCount(from: defaults)
         surface.liveConversion = defaults.bool(forKey: "liveConversion")
         surface.omissionSearch = defaults.bool(forKey: "omissionSearch")
+        surface.kotowazaEnabled = KotowazaSettings.isEnabled(defaults: defaults)
         surface.englishReadingEnabled = defaults.object(forKey: "englishReadingEnabled") as? Bool ?? true
         surface.categoryIDs = DictionaryCategoryCatalog.selection(defaults: defaults)
         surface.categoryMask = UInt32(defaults.integer(forKey: "categoryMask") & 0x3fff_ffff)
