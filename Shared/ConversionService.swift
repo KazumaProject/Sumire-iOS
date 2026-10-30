@@ -16,7 +16,8 @@ struct ConversionCandidate {
     let textMacroID: String?
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
-    /// Full stored reading for a Swift-owned learned prefix row; range remains typed input only.
+    /// Stored readings for Swift-owned UI rows; range remains typed input only.
+    let legacyTemplateReading: String?
     let userDictionaryReading: String?
     let learnedPredictionReading: String?
     let leftID: Int16?
@@ -102,7 +103,7 @@ struct ConversionCandidate {
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
                 presentationKind: first.presentationKind, classifiedCategories: categories,
-                leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading, userDictionaryReading: first.userDictionaryReading)
+                leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading, userDictionaryReading: first.userDictionaryReading, legacyTemplateReading: first.legacyTemplateReading)
         }
         return merged
     }
@@ -115,7 +116,7 @@ struct ConversionCandidate {
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
-         leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil, userDictionaryReading: String? = nil) {
+         leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil, userDictionaryReading: String? = nil, legacyTemplateReading: String? = nil) {
         self.id = id
         self.text = text
         self.score = score
@@ -130,6 +131,7 @@ struct ConversionCandidate {
         self.classifiedCategories = classifiedCategories
         self.learnedPredictionReading = learnedPredictionReading
         self.userDictionaryReading = userDictionaryReading
+        self.legacyTemplateReading = legacyTemplateReading
         self.leftID = leftID
         self.rightID = rightID
     }
@@ -170,6 +172,7 @@ final class ConversionService {
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var predictionSettings = JapanesePredictionSettings()
+    private var legacyTemplatesEnabled = true
     private var userDictionaryPredictionSettings = UserDictionaryPredictionSettings()
     private var learnedPredictionSettings = LearnedPredictionSettings()
     private var kotowazaEnabled = true
@@ -251,6 +254,19 @@ final class ConversionService {
         let state = state
         queue.async { state.lastGeneration = nil }
     }
+    func setLegacyTemplatesEnabled(_ enabled: Bool) {
+        guard legacyTemplatesEnabled != enabled else { return }
+        legacyTemplatesEnabled = enabled
+        _ = pending.advance()
+        _ = learningConfiguration.advance()
+        let state = state
+        queue.async {
+            state.cancelLearning()
+            state.lastGeneration = nil
+            state.lastCandidates.removeAll(keepingCapacity: false)
+            state.lastCandidateOrder = []
+        }
+    }
     func setUserDictionaryPredictionSettings(_ settings: UserDictionaryPredictionSettings) {
         guard userDictionaryPredictionSettings != settings else { return }
         userDictionaryPredictionSettings = settings
@@ -322,6 +338,7 @@ final class ConversionService {
         let state = state, sourceOverride = sourceOverride
         let mask = categoryMask, englishReading = englishReadingEnabled
         let predictionSettings = predictionSettings, categoryIDs = categoryIDs, kotowazaEnabled = kotowazaEnabled
+        let legacyTemplatesEnabled = legacyTemplatesEnabled
         let userDictionaryPredictionSettings = userDictionaryPredictionSettings
         let learnedPredictionSettings = learnedPredictionSettings
         let pending = pending, ticket = pending.advance()
@@ -334,6 +351,9 @@ final class ConversionService {
             do {
                 let englishWords = english || NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading)
                 try state.open(sources: sources, mask: mask, english: englishWords, englishReading: englishReading, categoryIDs: categoryIDs)
+                // Legacy templates are a JP UI provider with their own gate/
+                // eight-row selection. Keep the old native English route only.
+                try state.preparePersonalForConversion(english: english)
                 try state.setPredictionSettings(predictionSettings)
                 try state.setKotowazaEnabled(kotowazaEnabled)
                 let warnings = [try state.prepareLearning(reading: reading, english: english,
@@ -467,6 +487,20 @@ final class ConversionService {
                         learnedPredictionReading: entry.reading))
                     if nextID > 0 { nextID -= 1 }
                 }
+                if !english {
+                    let templates = try LegacyTemplateCandidatePolicy.candidates(in: state.personal.templates,
+                        reading: reading, enabled: legacyTemplatesEnabled)
+                    for entry in templates {
+                        while !reserved.insert(nextID).inserted {
+                            guard nextID > 0 else { throw NativeError("候補IDを確保できません") }
+                            nextID -= 1
+                        }
+                        predictions.append(ConversionCandidate(id: nextID, text: entry.word, score: Int64(entry.posScore),
+                            range: NSRange(location: 0, length: reading.utf16.count), dictionaries: ["template"],
+                            legacyTemplateReading: entry.reading))
+                        if nextID > 0 { nextID -= 1 }
+                    }
+                }
                 if !english && !bunsetsuSearch && userDictionaryPredictionAllowed {
                     let userRows = try UserDictionaryPredictionPolicy.candidates(in: state.personal.words,
                         reading: reading, settings: userDictionaryPredictionSettings)
@@ -580,6 +614,16 @@ final class ConversionService {
             let tail = String(state.lastReading[range.upperBound...])
             guard remaining == nil || tail.utf16.elementsEqual(remaining!.utf16) else {
                 state.cancelLearning(); return
+            }
+            if selected.legacyTemplateReading != nil {
+                // Ordinary type46 tap commits without learning. Focused rows
+                // use commitLearningPlan instead, retaining normal fragments.
+                sumire_session_reset(state.session)
+                state.lastGeneration = nil
+                state.lastCandidates.removeAll(keepingCapacity: false)
+                state.lastCandidateOrder = []
+                state.cancelLearning()
+                return
             }
             if selected.userDictionaryReading != nil {
                 // df1 processCandidate type28 always commits without recording
@@ -729,6 +773,7 @@ final class ConversionService {
         private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
+        private var installedPersonalIncludesTemplates: Bool?
         private var appliedPredictionSettings: JapanesePredictionSettings?
         private var appliedKotowazaEnabled: Bool?
         func cancelLearning() { learningSession.cancel(); learningRemainder = nil }
@@ -872,7 +917,7 @@ final class ConversionService {
             }
             standaloneAvailable = sumire_engine_has_standalone_priority(opened.engine) != 0
             do {
-                try installPersonal()
+                try installPersonal(includeTemplates: false)
                 unavailableCategoryIDs = opened.unavailableCategoryIDs
                 openedDirectory = opened.directory
                 openedMask = mask
@@ -881,9 +926,12 @@ final class ConversionService {
                 englishLoaded = english
             } catch { close(); throw error }
         }
-        private func installPersonal() throws {
+        func preparePersonalForConversion(english: Bool) throws {
+            if installedPersonalIncludesTemplates != english { try installPersonal(includeTemplates: english) }
+        }
+        private func installPersonal(includeTemplates: Bool) throws {
             try personal.validate()
-            let entries = personal.words + personal.templates
+            let entries = personal.words + (includeTemplates ? personal.templates : [])
             var bytes: [CChar] = []
             var ranges: [(Int, Int, Int, Int)] = []
             for entry in entries {
@@ -909,6 +957,7 @@ final class ConversionService {
                 }
             }
             guard status == 0 else { throw NativeError(String(cString: error)) }
+            installedPersonalIncludesTemplates = includeTemplates
         }
         func close() {
             activeLearnedPredictionEntries = []
@@ -925,6 +974,7 @@ final class ConversionService {
             openedMask = nil
             openedCategoryIDs = nil
             openedEnglishReading = nil
+            installedPersonalIncludesTemplates = nil
             appliedPredictionSettings = nil
             appliedKotowazaEnabled = nil
         }

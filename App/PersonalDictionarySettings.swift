@@ -22,6 +22,7 @@ private struct AndroidPersonalListDocument: FileDocument {
 
 struct PersonalDictionarySettings: View {
     @ObservedObject var library: PersonalLibrary
+    @AppStorage(LegacyTemplateSettings.enabledKey, store: KeyboardSettings.appDefaults) private var legacyTemplatesEnabled = true
     @AppStorage(UserDictionaryPredictionSettings.enabledKey, store: KeyboardSettings.appDefaults) private var predictionEnabled = true
     @AppStorage(UserDictionaryPredictionSettings.minimumInputLengthKey, store: KeyboardSettings.appDefaults) private var predictionMinimum = 2
     @AppStorage(UserDictionaryPredictionSettings.candidateLimitKey, store: KeyboardSettings.appDefaults) private var predictionLimit = 4
@@ -87,6 +88,10 @@ struct PersonalDictionarySettings: View {
                     Stepper("ユーザー辞書の候補数: \(predictionLimit)", value: $predictionLimit, in: 1...8)
                         .disabled(!predictionEnabled).accessibilityIdentifier("user-dictionary-prediction-limit")
                 } footer: { Text("入力途中の読みに続く登録語を候補に表示します。") }
+                Section {
+                    Toggle("定型文を候補に表示", isOn: $legacyTemplatesEnabled)
+                        .accessibilityIdentifier("legacy-template-candidates-enabled")
+                }
                 Picker("登録先", selection: $template) {
                     Text("ユーザー辞書").tag(false)
                     Text("定型文").tag(true)
