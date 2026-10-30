@@ -1769,30 +1769,33 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   if (impl->english_reading && !reading.empty() && !numericInput) {
     const auto &d = *impl->english_reading;
     bool addedExactAsciiEnglishCandidate = false;
-    auto add = [&](const std::string &text, int64_t score) {
+    auto add = [&](const std::string &text, int64_t score, uint16_t left, uint16_t right) {
       if (asciiPredictionInput && text == input) {
         // The reference keeps the English dictionary row even when it shares
         // the raw-input surface with the leading fallback row.
         if (addedExactAsciiEnglishCandidate) return;
         addedExactAsciiEnglishCandidate = true;
-        result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size())}}});
+        result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size()), left, right}}});
       } else if (seen.insert(text).second) {
-        result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size())}}});
+        result.candidates.push_back({text, score, {{text, d.name, 0, uint32_t(reading.size()), left, right}}});
       }
     };
     d.prefixes(reading, 0, [&](size_t end, uint32_t token) {
       if (end != reading.size()) return;
       auto text = d.surface(token, reading, 0, end);
-      add(text, d.costs[token]);
+      const bool known = japanese_prediction && bunsetsu_search;
+      const uint16_t left = known ? impl->connection.left[d.pos[token]] : 0;
+      const uint16_t right = known ? impl->connection.right[d.pos[token]] : 0;
+      add(text, d.costs[token], left, right);
       const bool letters = std::any_of(text.begin(), text.end(), [](char c) {
         return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z');
       });
       if (!letters) return;
       auto lower = unicode_lower(utf16(text));
-      add(utf8(lower), d.costs[token]);
+      add(utf8(lower), d.costs[token], left, right);
       auto capitalized = unicode_upper(lower.substr(0, 1)) + lower.substr(1);
-      add(utf8(capitalized), int64_t(d.costs[token]) + 1500);
-      add(utf8(unicode_upper(lower)), int64_t(d.costs[token]) + 3000);
+      add(utf8(capitalized), int64_t(d.costs[token]) + 1500, left, right);
+      add(utf8(unicode_upper(lower)), int64_t(d.costs[token]) + 3000, left, right);
     });
   }
   // df1f383: English-reading, proverb, normalized symbols, then English words.
@@ -1895,7 +1898,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   // English candidates. Single-unit routes keep them after type-13 symbols.
   if (reading.size() > 1) append_candidates(normalized_symbol_candidates);
   const auto englishStart = result.candidates.size();
-  if (japanese_prediction && !bunsetsu_search && !reading.empty()) {
+  if (japanese_prediction && !reading.empty()) {
     auto englishInput = reading;
     const bool letters = std::all_of(reading.begin(), reading.end(), is_ascii_alphabet);
     const bool wide = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
@@ -1913,6 +1916,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         auto english = english_dictionary_candidates(impl->english_words.get(), utf8(englishInput), true);
         // This provider is not the standalone English session: no N-best cap
         // or personal overlay is applied a second time.
+        if (bunsetsu_search) for (auto &candidate : english.candidates) {
+          // EnglishEngine leaves Japanese endpoints unspecified. Keep source
+          // provenance without inventing a Japanese conversion path/segment.
+          candidate.segments.clear();
+          candidate.english_provider = true;
+        }
         append_candidates(english.candidates);
       } else result.complete = false;
     }
@@ -1921,7 +1930,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   // and full-width ASCII choices before the auxiliary/kana/prefix sections.
   // Numeric inputs take an earlier, separate Android route (including temporal
   // candidates); do not claim that route by adding type-30 variants here.
-  if (japanese_prediction && !bunsetsu_search && !reading.empty() &&
+  if (japanese_prediction && !reading.empty() &&
       std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= 0x20 && c <= 0x7e; }) &&
       !std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; })) {
     const bool mixed = std::all_of(reading.begin(), reading.end(), [](char16_t c) {

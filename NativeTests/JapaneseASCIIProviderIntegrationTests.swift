@@ -40,7 +40,7 @@ final class JapaneseASCIIProviderIntegrationTests: XCTestCase {
         XCTAssertTrue(provider(punctuation).contains { $0.text == "a＋b" })
         XCTAssertFalse(provider(punctuation).contains { $0.text == "a+b" })
         XCTAssertTrue(provider(try convert(service, "a1", generation: 4)).isEmpty)
-        XCTAssertTrue(provider(try convert(service, "ab", generation: 5, bunsetsu: true)).isEmpty)
+        XCTAssertFalse(provider(try convert(service, "ab", generation: 5, bunsetsu: true)).isEmpty)
         var personal = PersonalLexicon()
         personal.words = [PersonalWord(word: "UniquePersonal", reading: "ab", posScore: -10000)]
         service.setPersonal(personal)

@@ -187,6 +187,9 @@ int sumire_result_candidate(const sumire_result *result, size_t index,
  * a yomiPartList match consuming strictly less than the complete reading.
  * Returns 0 on success, -1 for invalid result/index/output. */
 #define SUMIRE_CANDIDATE_READING_PREFIX (1u << 0)
+/* Additive provenance for a bunsetsu English word-provider row. It has no
+ * Japanese path/segment or known Japanese context endpoints. */
+#define SUMIRE_CANDIDATE_ENGLISH_PROVIDER (1u << 1)
 int sumire_result_candidate_flags(const sumire_result *result, size_t index,
                                    uint32_t *out);
 /* Additive presentation metadata; never infer origin from the visible surface.

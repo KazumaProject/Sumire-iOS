@@ -34,6 +34,8 @@ struct Candidate {
   CandidatePresentationKind presentation_kind = CandidatePresentationKind::none;
   // Known candidate-level endpoints do not imply a dictionary path/segment.
   std::optional<std::pair<uint16_t, uint16_t>> context_ids{};
+  // Provenance of a non-Japanese-path English row on the additive bunsetsu route.
+  bool english_provider = false;
 };
 struct CandidateSplitPattern {
   std::string surface;

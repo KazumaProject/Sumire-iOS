@@ -976,7 +976,7 @@ class Tests(unittest.TestCase):
         result=subprocess.run([C_API,str(self.data),'--bunsetsu-prediction'],capture_output=True,text=True)
         self.assertEqual(result.returncode,0,result.stderr)
 
-    def test_bunsetsu_prediction_caps_duplicates_utf16_and_english_provider_isolation(self):
+    def test_bunsetsu_prediction_caps_duplicates_utf16_and_english_provider_opt_in(self):
         entries=[('あいうえお',f'S{i}',1,100+i) for i in range(6)]
         dictionary(self.data/'system.sud',entries)
         dictionary(self.data/'person.sud',[('あいうえお','GROUP',2,50)])
@@ -1005,12 +1005,59 @@ class Tests(unittest.TestCase):
         self.assertEqual(probe.returncode,0,probe.stdout+probe.stderr)
         plain=json.loads(probe.stdout)['candidates']
         combined=json.loads(self.run_cli('--bunsetsu','--predict-japanese','cat').stdout)['candidates']
-        self.assertEqual(plain,combined) # This unit does not enable the ordinary English provider for bunsetsu.
+        self.assertFalse(any(c['text']=='English' for c in plain)) # Legacy flag 16 stays isolated.
+        self.assertEqual(next((c['score'] for c in combined if c['text']=='English'),None),1)
         dictionary(self.data/'system.sud',[('あ😀うえ','UTF16',1,100)])
         unicode=json.loads(self.run_cli('--bunsetsu','--predict-japanese','あ😀').stdout)['candidates']
         candidate=next(c for c in unicode if c['text']=='UTF16')
         self.assertEqual(candidate['segments'][0]['length_utf16'],3)
         self.assertEqual(candidate['score'],16100)
+
+    def install_bunsetsu_ascii_provider_fixture(self):
+        connection(self.data/'connection.sud',2671)
+        dictionary(self.data/'english.sud',[('cat','cat',0,100)])
+        dictionary(self.data/'english_reading.sud',[('あ','ReadWord',2,400)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        (self.data/'mozc').mkdir(exist_ok=True)
+        table=[0]*2671;penalties=[0]*5342
+        header=b'MSGM'+struct.pack('<7I',1,2,2,len(table),len(table),1,len(penalties))
+        (self.data/'mozc/segmenter.dat').write_bytes(header+struct.pack('<2671H',*table)*2+b'\xb5'+struct.pack('<5342H',*penalties))
+        (self.data/'mozc/node_attribute_by_lid.dat').write_bytes(b'MNAT'+struct.pack('<2I',1,len(table))+struct.pack('<2671I',*table))
+
+    def test_bunsetsu_ascii_provider_metadata_and_legacy_api_compatibility(self):
+        self.install_bunsetsu_ascii_provider_fixture()
+        result=subprocess.run([C_API,str(self.data),'--bunsetsu-ascii-provider'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_bunsetsu_ascii_provider_order_widths_duplicates_and_numeric_gate(self):
+        self.install_bunsetsu_ascii_provider_fixture()
+        rows=json.loads(self.run_cli('--bunsetsu','--predict-japanese','ca').stdout)['candidates']
+        start=next(i for i,c in enumerate(rows) if c['text']=='cat' and c['score']==100)
+        self.assertGreater(start,0) # English follows the primary Japanese group even at a lower cost.
+        self.assertEqual([(c['text'],c['score']) for c in rows[start:start+8]],
+                         [('cat',100),('ca',500),('Cat',600),('CAT',2100),('Ca',9000),('CA',9001),('ｃａ',30000),('ＣＡ',30000)])
+        self.assertTrue(all(not c['segments'] for c in rows[start:start+8]))
+        for reading,expected in [('a1',[('a1',10000),('A1',10001),('ａ１',30000),('Ａ１',30000)]),
+                                 ('AB12',[('AB12',10000),('ａｂ１２',30000),('ＡＢ１２',30000)]),
+                                 ('a+b',[('ａ＋ｂ',30000),('Ａ＋Ｂ',30000)]),
+                                 ('a b',[('ａ　ｂ',30000),('Ａ　Ｂ',30000)]),
+                                 ('+',[('＋',30000),('＋',30000)]),(' ',[('　',30000),('　',30000)])]:
+            with self.subTest(reading=reading):
+                value=json.loads(self.run_cli('--bunsetsu','--predict-japanese',reading).stdout)['candidates']
+                generated=[c for c in value if not c['segments'] and c['score'] in [10000,10001,10002,30000]]
+                self.assertEqual([(c['text'],c['score']) for c in generated],expected)
+        for reading in ['ｃａ','ＣＡ']:
+            value=json.loads(self.run_cli('--bunsetsu','--predict-japanese',reading).stdout)['candidates']
+            self.assertTrue(any(c['text'] in ['cat','CAT'] and c['score']==100 for c in value))
+            self.assertFalse(any(c['score']==30000 for c in value))
+        for reading,expected in [('ａ＋ｂ','a＋b'),('　',' ')]:
+            value=json.loads(self.run_cli('--bunsetsu','--predict-japanese',reading).stdout)['candidates']
+            self.assertTrue(any(c['text']==expected and c['score']==10000 and not c['segments'] for c in value))
+        for reading in ['123','１２３']:
+            legacy=json.loads(self.run_cli('--bunsetsu',reading).stdout)['candidates']
+            value=json.loads(self.run_cli('--bunsetsu','--predict-japanese',reading).stdout)['candidates']
+            self.assertEqual(value,legacy)
 
     def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
         self.install_auxiliary_dictionary_fixture()

@@ -216,6 +216,63 @@ static int64_t prediction_score(sumire_result *result, const char *text) {
   }
   return INT64_MAX;
 }
+static void test_bunsetsu_ascii_provider(const char *directory) {
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
+  sumire_result *result = NULL, *owned = NULL;
+  CHECK(sumire_engine_open_with_dictionaries(directory, 0, 3, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "ca", 2, 0, 20, 200000, 16};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "cat") == INT64_MAX); // Legacy 16 remains isolated.
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 2; request.flags = 24;
+  CHECK(sumire_session_update(session, &request, &owned, error, sizeof error) == 0);
+  size_t word = SIZE_MAX;
+  for (size_t i = 0; i < sumire_result_count(owned); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(owned, i, &c) == 0);
+    uint32_t flags = 99; CHECK(sumire_result_candidate_flags(owned, i, &flags) == 0);
+    if (c.text.size != 3 || memcmp(c.text.data, "cat", 3)) continue;
+    word = i; CHECK(c.score == 100 && c.length_utf16 == 2 && c.segment_count == 0);
+    CHECK(flags == SUMIRE_CANDIDATE_ENGLISH_PROVIDER);
+    int known = 99; uint16_t left = 99, right = 99;
+    CHECK(sumire_result_candidate_context_ids(owned, i, &known, &left, &right) == 0);
+    CHECK(known == 0 && left == 0 && right == 0);
+  }
+  CHECK(word != SIZE_MAX);
+  request.generation = 3; request.reading = "あ"; request.reading_bytes = strlen("あ");
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int reading_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(result, i, &c) == 0);
+    if (c.text.size != 8 || memcmp(c.text.data, "ReadWord", 8)) continue;
+    uint16_t left = 99, right = 99; uint32_t flags = 99;
+    CHECK(c.segment_count == 1 && c.length_utf16 == 1);
+    CHECK(sumire_result_segment_context_ids(result, i, 0, &left, &right) == 0 && left == 2 && right == 2);
+    CHECK(sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
+    reading_found = 1;
+  }
+  CHECK(reading_found); sumire_result_destroy(result); result = NULL;
+  request.generation = 4; request.reading = "ca"; request.reading_bytes = 2; request.flags = 12;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  int legacy_found = 0;
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(result, i, &c) == 0);
+    if (c.text.size != 3 || memcmp(c.text.data, "cat", 3)) continue;
+    uint32_t flags = 99;
+    CHECK(c.segment_count == 1 && sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
+    legacy_found = 1;
+  }
+  CHECK(legacy_found); sumire_result_destroy(result); result = NULL;
+  request.generation = 5; request.flags = 2;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "cat") == 100);
+  sumire_result_destroy(result); sumire_session_destroy(session); sumire_engine_close(engine);
+  sumire_candidate c; uint32_t flags = 99;
+  CHECK(sumire_result_candidate(owned, word, &c) == 0 && c.text.size == 3 && !memcmp(c.text.data, "cat", 3));
+  CHECK(c.segment_count == 0 && c.length_utf16 == 2);
+  CHECK(sumire_result_candidate_flags(owned, word, &flags) == 0 && flags == SUMIRE_CANDIDATE_ENGLISH_PROVIDER);
+  sumire_result_destroy(owned);
+}
 static void test_bunsetsu_prediction_flags(const char *directory) {
   char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
   sumire_result *result = NULL, *owned = NULL;
@@ -943,6 +1000,9 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2], "--bunsetsu-prediction") == 0) {
     test_bunsetsu_prediction_flags(argv[1]); return 0;
+  }
+  if (argc == 3 && strcmp(argv[2], "--bunsetsu-ascii-provider") == 0) {
+    test_bunsetsu_ascii_provider(argv[1]); return 0;
   }
   CHECK(argc == 2);
   test_learning_metadata_overlay(argv[1]);
