@@ -38,6 +38,9 @@ final class KeyboardViewController: UIInputViewController {
             self.surface.insert?(text)
         }
         surface.delete = { [weak self] in self?.perform { $0.deleteBackward() } }
+        surface.deleteForward = { [weak self] in
+            self?.perform { DocumentForwardDelete.apply(to: $0) }
+        }
         surface.deleteUntilBoundary = { [weak self] in
             guard let self else { return }
             let proxy = self.textDocumentProxy

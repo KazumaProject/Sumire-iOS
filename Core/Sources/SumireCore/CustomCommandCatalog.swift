@@ -13,6 +13,7 @@ public enum CustomCommandCatalog {
         entry(.doNothing, "何もしない", "DoNothing", "DoNothing"),
         entry(.delete, "削除", "Delete", "DELETE"),
         entry(.backspace, "後退削除", "Backspace", "BACKSPACE"),
+        entry(.deleteAfterCursor, "カーソル後を削除", "DeleteAfterCursor", "DELETE_AFTER_CURSOR"),
         entry(.deleteUntilBoundary, "区切りまで削除", "DeleteUntilSymbol", "DeleteUntilSymbol"),
         entry(.space, "空白", "Space", "SPACE"),
         entry(.convert, "変換", "Convert", "CONVERT"),
