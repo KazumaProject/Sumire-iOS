@@ -307,7 +307,7 @@ final class ConversionService {
                 var result: OpaquePointer?
                 let flags: UInt32
                 if english { flags = 2 }
-                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 16 : 12) }
+                else { flags = (omission ? 1 : 0) | (bunsetsuSearch ? 24 : 12) }
                 // UI composition and bunsetsu loads have different generation
                 // domains; the C session requires one strictly increasing one.
                 state.nativeGeneration += 1

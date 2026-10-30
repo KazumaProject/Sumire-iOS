@@ -1040,7 +1040,6 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
             "bunsetsu search requires the pinned system n-gram assets");
     require(impl->mozc_scoring_data != nullptr,
             "bunsetsu search requires the pinned Mozc scoring assets");
-    japanese_prediction = false;
     // The Android bunsetsu API always appends all exact and partial system
     // reading matches after its primary path candidates.
     prefix_candidates = true;
@@ -1639,7 +1638,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       !result.primary_bunsetsu_split_positions.empty())
     result.bunsetsu_split_patterns.push_back(
         result.primary_bunsetsu_split_positions);
-  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && impl->reading_correction &&
+  if (japanese_prediction && !numericPredictionInput && impl->reading_correction &&
       reading.size() >= 3 && reading.size() <= 16) {
     const auto &d = *impl->reading_correction;
     const bool complete = d.completion(reading, prediction_config.lookahead_character_count, limit,
@@ -1655,14 +1654,16 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       }
       auto text = raw.substr(0, tab);
       Candidate candidate{text, int64_t(d.costs[token]) + prediction_config.completion_penalty(reading.size(), reading.size() + extra, 8000, std::nullopt),
-          {{text, d.name, 0, uint32_t(reading.size())}}};
+          {{text, d.name, 0, uint32_t(reading.size()),
+            bunsetsu_search ? impl->connection.left[d.pos[token]] : uint16_t(0),
+            bunsetsu_search ? impl->connection.right[d.pos[token]] : uint16_t(0)}}};
       candidate.corrected_reading = raw.substr(tab + 1);
       candidate.raw_text = std::move(raw);
       result.candidates.push_back(std::move(candidate));
     });
     result.complete = result.complete && complete;
   }
-  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
     // PredictionConfig defaults to lookahead 3 and standard aggressiveness.
     // Retain token references only; materialize surfaces after top-k selection.
     const auto &d = *impl->dictionaries.front();
@@ -1682,10 +1683,12 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
       if (seen.insert(text).second)
         result.candidates.push_back({text, prediction.score,
-            {{text, d.name, 0, uint32_t(reading.size())}}});
+            {{text, d.name, 0, uint32_t(reading.size()),
+              bunsetsu_search ? impl->connection.left[d.pos[prediction.token]] : uint16_t(0),
+              bunsetsu_search ? impl->connection.right[d.pos[prediction.token]] : uint16_t(0)}}});
     }
   }
-  if (japanese_prediction && !bunsetsu_search && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
+  if (japanese_prediction && !numericPredictionInput && reading.size() >= 3 && reading.size() <= 16) {
     // Pinned Android df1f383 predictedClassifiedCandidates: four per enabled
     // category, stable token order on ties, 1500 per additional UTF-16 unit.
     // Retain references until selection, including for large posting lists.
@@ -1729,7 +1732,8 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
           selected.push_back({std::move(completedReading), left, right, position});
           seen.insert(text);
           result.candidates.push_back({text, prediction.score,
-              {{text, d.name, 0, uint32_t(reading.size())}}});
+              {{text, d.name, 0, uint32_t(reading.size()),
+                bunsetsu_search ? left : uint16_t(0), bunsetsu_search ? right : uint16_t(0)}}});
         } else position = previous->candidate;
         auto &candidate = result.candidates[position];
         if (std::find(candidate.classified_categories.begin(), candidate.classified_categories.end(), d.name) == candidate.classified_categories.end())
@@ -1785,7 +1789,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     });
   }
   // df1f383: English-reading, proverb, normalized symbols, then English words.
-  // Bunsetsu independently includes proverbs while suppressing system completion.
+  // Bunsetsu includes proverbs independently of the Japanese completion request flag.
   if (impl->kotowaza && kotowaza_enabled && !numericPredictionInput &&
       (japanese_prediction || bunsetsu_search) && reading.size() >= 3 && reading.size() <= 16) {
     const auto &d = *impl->kotowaza;
@@ -1823,7 +1827,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
       // Android includes an exact symbol/emoji reading regardless of the
       // prediction minimum, then permits up to three extra UTF-16 units when
       // Japanese prediction is enabled (the production default).
-      if (include_completions && japanese_prediction && reading.size() >= 3) {
+      if (include_completions && japanese_prediction && !bunsetsu_search && reading.size() >= 3) {
         const bool complete = dictionary.completion(
             lookup, prediction_config.lookahead_character_count, limit,
             [&](size_t node, uint32_t token, size_t extra) {
@@ -1884,7 +1888,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   // English candidates. Single-unit routes keep them after type-13 symbols.
   if (reading.size() > 1) append_candidates(normalized_symbol_candidates);
   const auto englishStart = result.candidates.size();
-  if (japanese_prediction && !reading.empty()) {
+  if (japanese_prediction && !bunsetsu_search && !reading.empty()) {
     auto englishInput = reading;
     const bool letters = std::all_of(reading.begin(), reading.end(), is_ascii_alphabet);
     const bool wide = std::all_of(reading.begin(), reading.end(), [](char16_t c) {
@@ -1910,7 +1914,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   // and full-width ASCII choices before the auxiliary/kana/prefix sections.
   // Numeric inputs take an earlier, separate Android route (including temporal
   // candidates); do not claim that route by adding type-30 variants here.
-  if (japanese_prediction && !reading.empty() &&
+  if (japanese_prediction && !bunsetsu_search && !reading.empty() &&
       std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= 0x20 && c <= 0x7e; }) &&
       !std::all_of(reading.begin(), reading.end(), [](char16_t c) { return c >= u'0' && c <= u'9'; })) {
     const bool mixed = std::all_of(reading.begin(), reading.end(), [](char16_t c) {

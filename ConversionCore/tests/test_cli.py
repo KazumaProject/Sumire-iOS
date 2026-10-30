@@ -912,6 +912,67 @@ class Tests(unittest.TestCase):
         self.assertTrue(all(not c['is_reading_prefix'] for c in result[:7]))
         self.assertEqual([c['is_reading_prefix'] for c in result[7:]],[False,True,True])
 
+    def test_bunsetsu_japanese_completion_is_opt_in_and_uses_prediction_config(self):
+        dictionary(self.data/'system.sud',[('あいうえお','SYSTEM-COMPLETE',1,100)])
+        dictionary(self.data/'person.sud',[('あいうえお','CATEGORY-COMPLETE',2,100)])
+        dictionary(self.data/'reading_correction.sud',[('あいうえお','CORRECTION\tていせい',2,200)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        plain=json.loads(self.run_cli('--bunsetsu','--categories','person','あいう').stdout)
+        self.assertFalse(any(c['text'] in ['SYSTEM-COMPLETE','CATEGORY-COMPLETE','CORRECTION'] for c in plain['candidates']))
+        enabled=json.loads(self.run_cli('--bunsetsu','--predict-japanese','--categories','person','--prediction-lookahead','2','あいう').stdout)
+        scores={c['text']:c['score'] for c in enabled['candidates']}
+        self.assertEqual(scores.get('SYSTEM-COMPLETE'),16100)
+        self.assertEqual(scores.get('CATEGORY-COMPLETE'),3100)
+        self.assertEqual(scores.get('CORRECTION'),16200)
+
+    def test_bunsetsu_prediction_api_preserves_legacy_flags_and_owned_metadata(self):
+        dictionary(self.data/'system.sud',[('あいうえお','SYSTEM-COMPLETE',1,100)])
+        dictionary(self.data/'reading_correction.sud',[('あいうえお','CORRECTION\tていせい',2,200)])
+        dictionary(self.data/'kotowaza.sud',[('あいうえお','PROVERB',2,300)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        result=subprocess.run([C_API,str(self.data),'--bunsetsu-prediction'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_bunsetsu_prediction_caps_duplicates_utf16_and_english_provider_isolation(self):
+        entries=[('あいうえお',f'S{i}',1,100+i) for i in range(6)]
+        dictionary(self.data/'system.sud',entries)
+        dictionary(self.data/'person.sud',[('あいうえお','GROUP',2,50)])
+        dictionary(self.data/'medical.sud',[('あいうえお','GROUP',2,50)])
+        dictionary(self.data/'kotowaza.sud',[('あいうえお','PROVERB',2,-30000)])
+        dictionary(self.data/'english.sud',[('cat','English',1,1)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        result=json.loads(self.run_cli('--bunsetsu','--predict-japanese','--categories','person,medical','あいう').stdout)
+        rows=result['candidates'];system=[c for c in rows if c['text'].startswith('S')]
+        self.assertEqual([c['text'] for c in system],['S0','S1','S2','S3'])
+        groups=[c for c in rows if c['text']=='GROUP'];self.assertEqual(len(groups),1)
+        self.assertEqual(set(groups[0]['categories']),{'person','medical'})
+        self.assertEqual(groups[0]['score'],3050)
+        self.assertLess(next(i for i,c in enumerate(rows) if c['text']=='S3'),next(i for i,c in enumerate(rows) if c['text']=='PROVERB'))
+        # ASCII unknown nodes use the reference's context 1841. Supply a
+        # matching matrix/scoring range instead of the Japanese-only 3-ID fixture.
+        connection(self.data/'connection.sud',1842)
+        table=[0]*1842
+        penalties=[10,11]*len(table)
+        header=b'MSGM'+struct.pack('<7I',1,2,2,len(table),len(table),1,len(penalties))
+        (self.data/'mozc/segmenter.dat').write_bytes(header+struct.pack('<1842H',*table)*2+b'\xb5'+struct.pack('<'+str(len(penalties))+'H',*penalties))
+        (self.data/'mozc/node_attribute_by_lid.dat').write_bytes(b'MNAT'+struct.pack('<2I',1,len(table))+struct.pack('<1842I',*table))
+        probe=subprocess.run([CLI,'--data',str(self.data),'--bunsetsu','cat'],capture_output=True,text=True)
+        self.assertEqual(probe.returncode,0,probe.stdout+probe.stderr)
+        plain=json.loads(probe.stdout)['candidates']
+        combined=json.loads(self.run_cli('--bunsetsu','--predict-japanese','cat').stdout)['candidates']
+        self.assertEqual(plain,combined) # This unit does not enable the ordinary English provider for bunsetsu.
+        dictionary(self.data/'system.sud',[('あ😀うえ','UTF16',1,100)])
+        unicode=json.loads(self.run_cli('--bunsetsu','--predict-japanese','あ😀').stdout)['candidates']
+        candidate=next(c for c in unicode if c['text']=='UTF16')
+        self.assertEqual(candidate['segments'][0]['length_utf16'],3)
+        self.assertEqual(candidate['score'],16100)
+
     def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
         self.install_auxiliary_dictionary_fixture()
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Primary','Secondary'])

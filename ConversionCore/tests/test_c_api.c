@@ -216,6 +216,56 @@ static int64_t prediction_score(sumire_result *result, const char *text) {
   }
   return INT64_MAX;
 }
+static void test_bunsetsu_prediction_flags(const char *directory) {
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
+  sumire_result *result = NULL, *owned = NULL;
+  CHECK(sumire_engine_open(directory, 0, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "あいう", strlen("あいう"), 0, 20, 200000, 16};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-COMPLETE") == INT64_MAX);
+  CHECK(prediction_score(result, "PROVERB") == 16300); // Legacy 16 keeps its independent proverb route.
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 2; request.flags = 24;
+  CHECK(sumire_session_update(session, &request, &owned, error, sizeof error) == 0);
+  CHECK(prediction_score(owned, "SYSTEM-COMPLETE") == 16100);
+  CHECK(prediction_score(owned, "CORRECTION") == 16200);
+  for (size_t i = 0; i < sumire_result_count(owned); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(owned, i, &c) == 0);
+    if (c.text.size != strlen("SYSTEM-COMPLETE") || memcmp(c.text.data, "SYSTEM-COMPLETE", c.text.size)) continue;
+    uint16_t left = 99, right = 99;
+    CHECK(c.start_utf16 == 0 && c.length_utf16 == 3 && c.segment_count == 1);
+    CHECK(sumire_result_segment_context_ids(owned, i, 0, &left, &right) == 0);
+    CHECK(left == 1 && right == 1);
+  }
+  request.generation = 3; request.flags = 26;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) < 0 && result == NULL);
+  request.flags = 64;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) < 0 && result == NULL);
+  CHECK(sumire_session_commit(session, 2, 0, error, sizeof error) == 0); // Candidate 0 remains usable.
+  CHECK(sumire_session_set_prediction_config(session, 2, SUMIRE_PREDICTION_AGGRESSIVENESS_AGGRESSIVE, error, sizeof error) == 0);
+  CHECK(sumire_session_set_kotowaza_enabled(session, 0, error, sizeof error) == 0);
+  request.flags = 24;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "SYSTEM-COMPLETE") == 8100);
+  CHECK(prediction_score(result, "CORRECTION") == 8200);
+  CHECK(prediction_score(result, "PROVERB") == INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 4; request.reading = "1"; request.reading_bytes = 1;
+  request.flags = 24 | SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "①") == INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 5; request.flags = 24;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "①") != INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 4;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) < 0 && result == NULL);
+  sumire_session_destroy(session); sumire_engine_close(engine);
+  CHECK(prediction_score(owned, "SYSTEM-COMPLETE") == 16100);
+  sumire_result_destroy(owned);
+}
 static void test_kotowaza_settings(const char *directory) {
   char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL; sumire_result *result = NULL;
   CHECK(sumire_engine_open(directory, 0, &engine, error, sizeof error) == 0);
@@ -890,6 +940,9 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2], "--kotowaza-settings") == 0) {
     test_kotowaza_settings(argv[1]); return 0;
+  }
+  if (argc == 3 && strcmp(argv[2], "--bunsetsu-prediction") == 0) {
+    test_bunsetsu_prediction_flags(argv[1]); return 0;
   }
   CHECK(argc == 2);
   test_learning_metadata_overlay(argv[1]);
