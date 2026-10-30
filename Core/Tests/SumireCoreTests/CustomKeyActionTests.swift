@@ -7,6 +7,8 @@ final class CustomKeyActionTests: XCTestCase {
         XCTAssertEqual(CustomKeyAction.tap("Text:Delete", targets: targets), .text("Delete"))
         XCTAssertEqual(CustomKeyAction.tap("InputText:🌸", targets: targets), .inputText("🌸"))
         XCTAssertEqual(CustomKeyAction.tap("Delete", targets: targets), .command(.delete))
+        XCTAssertEqual(CustomKeyAction.tap("DeleteAfterCursor", targets: targets), .command(.deleteAfterCursor))
+        XCTAssertEqual(CustomKeyAction.flick(type: "DELETE_AFTER_CURSOR", value: nil, targets: targets), .command(.deleteAfterCursor))
         XCTAssertEqual(CustomKeyAction.flick(type: "DELETE", value: "表示名", targets: targets), .command(.delete))
         XCTAssertEqual(CustomKeyAction.tap("MoveCustomKeyboardTab", targets: targets), .command(.moveCustomKeyboardTab))
         XCTAssertEqual(CustomKeyAction.flick(type: "MoveCustomKeyboardTab", value: "⇄", targets: targets), .command(.moveCustomKeyboardTab))

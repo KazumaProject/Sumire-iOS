@@ -146,4 +146,52 @@ final class CompositionStateTests: XCTestCase {
         XCTAssertFalse(state.deleteBackward())
         XCTAssertNil(state.commit())
     }
+
+    func testForwardDeletionPreservesExtendedGraphemesAtComposingCursor() {
+        var state = CompositionState()
+        state.append("あ👩‍💻い")
+        XCTAssertTrue(state.moveCursor(by: -1))
+        let old = state.generation
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "あ👩‍💻")
+        XCTAssertEqual(state.cursor, 2)
+        XCTAssertFalse(state.accepts(old))
+
+        XCTAssertTrue(state.moveCursor(by: -1))
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "あ")
+        XCTAssertEqual(state.cursor, 1)
+
+        let atEnd = state.generation
+        XCTAssertFalse(state.deleteForward())
+        XCTAssertEqual(state.reading, "あ")
+        XCTAssertEqual(state.generation, atEnd)
+        XCTAssertTrue(state.moveCursor(by: -1))
+        XCTAssertEqual(state.cursor, 0)
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "")
+    }
+    func testForwardDeletionKeepsUTF16CaretAndCombiningSequencesIntact() {
+        var state = CompositionState()
+        XCTAssertFalse(state.deleteForward())
+        state.append("あか\u{3099}👩‍💻い")
+        XCTAssertTrue(state.moveCursor(toUTF16: 1))
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "あ👩‍💻い")
+        XCTAssertEqual(state.cursorUTF16, 1)
+        let generation = state.generation
+        XCTAssertFalse(state.moveCursor(toUTF16: 2))
+        XCTAssertEqual(state.generation, generation)
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "あい")
+        XCTAssertEqual(state.cursorUTF16, 1)
+        XCTAssertTrue(state.moveCursor(toUTF16: 0))
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "い")
+        XCTAssertEqual(state.cursorUTF16, 0)
+        XCTAssertTrue(state.deleteForward())
+        XCTAssertEqual(state.reading, "")
+        XCTAssertEqual(state.phase, .idle)
+    }
+
 }

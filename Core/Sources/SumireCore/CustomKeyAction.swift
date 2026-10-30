@@ -11,6 +11,7 @@ public enum CustomKeyAction: Codable, Equatable {
 
     public enum Command: String, Codable, CaseIterable {
         case doNothing = "DoNothing", delete = "Delete", backspace = "Backspace"
+        case deleteAfterCursor = "DeleteAfterCursor"
         case space = "Space", enter = "Enter", newLine = "NewLine", confirm = "Confirm", convert = "Convert"
         case paste = "Paste", cursorLeft = "MoveCursorLeft", cursorRight = "MoveCursorRight", nextKeyboard = "SwitchToNextIme"
         case toggleCase = "a/A"
@@ -38,7 +39,7 @@ public enum CustomKeyAction: Codable, Equatable {
         if type == "ShiftKey" { return .command(.shift) }
         if type == "INPUT_TEXT" { return .text(value ?? "") }
         if type == "MoveToCustomKeyboard" { return targets.resolve(value ?? "", raw: type + ":" + (value ?? "")) }
-        let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "SPACE": "Space",
+        let aliases = ["DELETE": "Delete", "BACKSPACE": "Backspace", "DELETE_AFTER_CURSOR": "DeleteAfterCursor", "SPACE": "Space",
                        "NEW_LINE": "NewLine", "ENTER": "Enter", "CONFIRM": "Confirm", "CONVERT": "Convert",
                        "PASTE": "Paste", "MOVE_CURSOR_LEFT": "MoveCursorLeft", "MOVE_CURSOR_RIGHT": "MoveCursorRight",
                        "SWITCH_TO_KANA_LAYOUT": "SwitchToKanaLayout", "SWITCH_TO_ENGLISH_LAYOUT": "SwitchToEnglishLayout",

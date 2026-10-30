@@ -150,6 +150,7 @@ final class KeyFeedbackSettingsTests: XCTestCase {
 
     func testCustomActionSoundCategoryUsesActionInsteadOfDisplayText() {
         XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.delete)), .delete)
+        XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.deleteAfterCursor)), .delete)
         XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.backspace)), .delete)
         XCTAssertEqual(KeyFeedbackKeyKind.resolve(action: .command(.deleteUntilBoundary)), .delete)
         XCTAssertNil(KeyFeedbackKeyKind.resolve(action: .command(.doNothing)))

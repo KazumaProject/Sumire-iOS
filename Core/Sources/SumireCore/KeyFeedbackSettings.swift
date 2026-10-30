@@ -53,7 +53,7 @@ public enum KeyFeedbackKeyKind: String, CaseIterable, Codable {
         switch command {
         case .doNothing:
             return nil
-        case .delete, .backspace, .deleteUntilBoundary:
+        case .delete, .backspace, .deleteUntilBoundary, .deleteAfterCursor:
             return .delete
         case .enter, .newLine, .confirm:
             return .enter
