@@ -355,6 +355,14 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
     private var learningRemainder: String?
     private(set) var learningPausedForSession = false
     var learnFirstCandidate = false
+    var learnMixedSymbolsAndNumbers = true {
+        didSet {
+            guard oldValue != learnMixedSymbolsAndNumbers else { return }
+            cancelLearning()
+            converter.setLearnMixedSymbolsAndNumbers(learnMixedSymbolsAndNumbers)
+            if hasComposition { composition.optionsChanged(); refreshConversion() }
+        }
+    }
     func reloadLearningResults() {
         if hasComposition { composition.optionsChanged(); refreshConversion() }
     }

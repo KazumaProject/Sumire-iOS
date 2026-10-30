@@ -158,6 +158,8 @@ final class ConversionService {
     private let queue = DispatchQueue(label: "sumire.conversion", qos: .userInitiated)
     private let state = NativeState()
     private let pending = PendingRequest()
+    private let learningConfiguration = PendingRequest()
+    private var learnMixedSymbolsAndNumbers = true
     private let sourceOverride: [NativeDictionaryEngineSource]?
     private var cachedDictionarySources: [NativeDictionaryEngineSource]?
     private var lastDictionaryRefresh = 0.0
@@ -245,6 +247,18 @@ final class ConversionService {
                 try localReset?.apply()
                 state.learningURL = url
             } catch { state.learningFailure = "学習データの削除を再試行します: " + error.localizedDescription }
+        }
+    }
+    func setLearnMixedSymbolsAndNumbers(_ enabled: Bool) {
+        guard enabled != learnMixedSymbolsAndNumbers else { return }
+        learnMixedSymbolsAndNumbers = enabled
+        _ = learningConfiguration.advance()
+        _ = pending.advance()
+        let state = state
+        queue.async {
+            state.cancelLearning()
+            state.learnMixedSymbolsAndNumbers = enabled
+            state.lastGeneration = nil
         }
     }
     func setLearningPaused(_ paused: Bool) {
@@ -453,9 +467,10 @@ final class ConversionService {
     private func enqueueCommit(generation: UInt64, candidate: UInt64, rank: Int?, input: String?,
                                remaining: String?, expected: ConversionCandidate?, learnFirst: Bool,
                                enabled: Bool, onNotice: @escaping (String) -> Void) {
-        let state = state
+        let state = state, configuration = learningConfiguration
+        let ticket = configuration.current()
         queue.async {
-            guard state.lastGeneration == generation,
+            guard configuration.isCurrent(ticket), state.lastGeneration == generation,
                   let selected = state.lastCandidates[candidate], selected.range.location == 0,
                   let range = Range(selected.range, in: state.lastReading),
                   let nativeRank = state.lastCandidateOrder.firstIndex(of: candidate),
@@ -484,8 +499,10 @@ final class ConversionService {
     /// and current Surface plan is used; no old native candidate ID is committed.
     func commitLearningPlan(_ plan: BunsetsuFocusedPrefixCommitPlan, learnFirst: Bool,
                             onNotice: @escaping (String) -> Void) {
-        let state = state
+        let state = state, configuration = learningConfiguration
+        let ticket = configuration.current()
         queue.async {
+            guard configuration.isCurrent(ticket) else { state.cancelLearning(); return }
             state.appendLearning(plan.learningFragments.map {
                 LearningFragment(reading: $0.reading, output: $0.output,
                     candidateScore: $0.candidateScore, candidateIndex: $0.candidateIndex,
@@ -544,6 +561,10 @@ final class ConversionService {
             ticket &+= 1
             return ticket
         }
+        func current() -> UInt64 {
+            lock.lock(); defer { lock.unlock() }
+            return ticket
+        }
         func isCurrent(_ value: UInt64) -> Bool {
             lock.lock(); defer { lock.unlock() }
             return ticket == value
@@ -554,6 +575,7 @@ final class ConversionService {
         var personal = PersonalLexicon()
         var learningURL: URL?
         var learningPaused = false
+        var learnMixedSymbolsAndNumbers = true
         var learning: LearningStore?
         var learningFailure: String?
         var standaloneAvailable = false
@@ -587,7 +609,7 @@ final class ConversionService {
             do {
                 if learning == nil { learning = try LearningStore(url: url) }
                 let eligible = records.filter { LearningEligibilityPolicy.isEligible(input: $0.input,
-                    output: $0.output, allowJapaneseWithSymbolsAndNumbers: true) }
+                    output: $0.output, allowJapaneseWithSymbolsAndNumbers: learnMixedSymbolsAndNumbers) }
                 try learning?.upsertLearningEntries(eligible)
                 if !eligible.isEmpty { DispatchQueue.main.async { onNotice("学習しました") } }
             } catch {

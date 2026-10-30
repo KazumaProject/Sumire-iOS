@@ -407,4 +407,71 @@ import SQLite3
         XCTAssertTrue(try rows(url).contains { $0.reading == "わたしはとうきょうにいきます" && $0.isPhrase })
     }
 
+    private func fence(_ service: ConversionService) {
+        let done = expectation(description: "mixed setting queue fence")
+        service.synchronizeLearning { done.fulfill() }; wait(for: [done], timeout: 10)
+    }
+    private func selectWhole(_ service: ConversionService, input: String, generation: UInt64) throws {
+        let response = try convert(service, input, generation: generation)
+        let rank = try XCTUnwrap(response.candidates.indices.first {
+            response.candidates[$0].range == NSRange(location: 0, length: input.utf16.count) &&
+            response.candidates[$0].text == input
+        }, "Actual native result must expose a full raw candidate for this fixed fixture")
+        service.commitSelection(generation: generation, candidate: response.candidates[rank], rank: rank,
+            input: input, remaining: "", learnFirst: true) { _ in }
+        fence(service)
+    }
+    func testMixedSettingControlsOnlyNewWritesAndKeepsPausedStoredSuggestions() throws {
+        for enabled in [true, false] {
+            let url = try database(), service = ConversionService()
+            service.setLearning(url: url)
+            if !enabled { service.setLearnMixedSymbolsAndNumbers(false) } // Absent setting defaults ON.
+            try selectWhole(service, input: "あ1", generation: 1)
+            XCTAssertEqual(try rows(url).contains { $0.reading == "あ1" && $0.text == "あ1" }, enabled)
+            try selectWhole(service, input: "123", generation: 2)
+            try selectWhole(service, input: "!", generation: 3)
+            XCTAssertFalse(try rows(url).contains { $0.reading == "123" || $0.reading == "!" })
+            service.setLearning(url: nil); fence(service)
+        }
+        let url = try database()
+        try LearningStore(url: url).upsertLearningEntries([
+            .init(input: "あ1", output: "保存済1", score: -20_000, leftID: nil, rightID: nil, lastUsedAt: 1, isPhrase: false)
+        ])
+        let service = ConversionService(); service.setLearning(url: url)
+        service.setLearnMixedSymbolsAndNumbers(false); service.setLearningPaused(true)
+        let response = try convert(service, "あ1", generation: 10)
+        XCTAssertTrue(response.candidates.contains { $0.text == "保存済1" && $0.dictionaries.contains("learning") })
+        let original = try rows(url)
+        try selectWhole(service, input: "あ1", generation: 11)
+        XCTAssertEqual(try rows(url), original)
+        service.setLearning(url: nil); fence(service)
+    }
+    func testMixedSettingChangeRejectsOldOrdinaryResponseButFreshPureInputLearns() throws {
+        let url = try database(), service = ConversionService(); service.setLearning(url: url)
+        let response = try convert(service, "あ", generation: 1)
+        let rank = try XCTUnwrap(response.candidates.indices.first { response.candidates[$0].range == NSRange(location: 0, length: 1) })
+        service.setLearnMixedSymbolsAndNumbers(false)
+        service.commitSelection(generation: 1, candidate: response.candidates[rank], rank: rank,
+            input: "あ", remaining: "", learnFirst: true) { _ in }
+        fence(service)
+        XCTAssertTrue(try rows(url).isEmpty, "Old async response cannot save after the setting boundary")
+        try selectWhole(service, input: "あ", generation: 2)
+        XCTAssertFalse(try rows(url).isEmpty, "OFF still learns pure Japanese after a fresh request")
+        service.setLearning(url: nil); fence(service)
+    }
+    func testMixedSettingChangeCancelsSurfacePartialLearningChain() throws {
+        let url = try database(), surface = surface(nil, bunsetsu: true, first: true)
+        surface.configureLearning(url: url)
+        try partial(surface)
+        surface.learnMixedSymbolsAndNumbers = false
+        for _ in 0..<5 where surface.hasComposition {
+            ready(surface); surface.candidateBar.onSelect?(0)
+        }
+        fence(surface)
+        XCTAssertFalse(surface.hasComposition)
+        let saved = try rows(url)
+        XCTAssertFalse(saved.isEmpty)
+        XCTAssertFalse(saved.contains { $0.reading.contains("わたし") || $0.reading.contains("とうきょう") || $0.text.contains("私は東京に") })
+    }
+
 }
