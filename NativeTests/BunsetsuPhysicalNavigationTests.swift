@@ -159,4 +159,105 @@ import SumireCore
         XCTAssertTrue(rows.allSatisfy { $0.usageCount == 1 && $0.count == 1 })
     }
 
+    func testPhysicalNextPreviousCyclesActualFocusedBunsetsuCandidates() throws {
+        let surface = try makeSurface()
+        var marked = ""
+        surface.updateMarkedText = { marked = $0 }
+        surface.updateMarkedSelection = { text, _ in marked = text }
+        try start(surface)
+        let initial = try XCTUnwrap(session(surface))
+        let segment = try XCTUnwrap(initial.focusedSegment)
+        XCTAssertGreaterThanOrEqual(segment.candidates.count, 2)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        let next = try XCTUnwrap(session(surface))
+        XCTAssertEqual(next.focusedSegment?.selectedIndex, (segment.selectedIndex + 1) % segment.candidates.count)
+        XCTAssertEqual(marked, next.displayText)
+        XCTAssertNotEqual(next.displayText, initial.displayText)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertPrevious))
+        XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, segment.selectedIndex)
+        XCTAssertEqual(marked, initial.displayText)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertPrevious))
+        XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex,
+                       (segment.selectedIndex + segment.candidates.count - 1) % segment.candidates.count)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        XCTAssertEqual(session(surface)?.focusedSegment?.selectedIndex, segment.selectedIndex)
+    }
+
+    func testPendingFocusedChoicesAreConsumedAndInvalidatedOwnerDoesNotFallBack() throws {
+        let surface = try makeSurface()
+        var marked = "", hostMoves = 0
+        surface.updateMarkedText = { marked = $0 }
+        surface.updateMarkedSelection = { text, _ in marked = text }
+        surface.moveCursorLeft = { hostMoves += 1 }; surface.moveCursorRight = { hostMoves += 1 }
+        try start(surface)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight))
+        let pending = try XCTUnwrap(session(surface))
+        XCTAssertTrue(pending.focusedSegment?.isLoadingCandidates == true)
+        XCTAssertEqual(pending.focusedSegment?.candidates.count, 1, "Projected fallback is the only pending choice")
+        let preview = marked
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertPrevious))
+        XCTAssertEqual(marked, preview)
+        ready(surface)
+        XCTAssertEqual(session(surface)?.sessionID, pending.sessionID)
+        XCTAssertEqual(session(surface)?.rawInput, reading)
+        surface.beforeInput = { surface.invalidateComposition() }
+        XCTAssertFalse(surface.performPhysicalKeyboardShortcut(.convertNext))
+        surface.beforeInput = nil
+        XCTAssertFalse(surface.hasComposition)
+        XCTAssertEqual(hostMoves, 0)
+        fence(surface)
+        XCTAssertEqual(surface.physicalKeyboardShortcutContext, .any)
+    }
+
+    private func temporaryLearningURL() throws -> URL {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        directories.append(directory)
+        return directory.appendingPathComponent("learning.sqlite")
+    }
+
+    func testPhysicalBunsetsuCommitSavesWholeDisplayAndLearningOnce() throws {
+        let url = try temporaryLearningURL(), surface = try makeSurface()
+        surface.configureLearning(url: url); surface.learnFirstCandidate = true
+        var commits: [String] = []
+        surface.commitMarkedText = { commits.append($0) }
+        try start(surface)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.convertNext))
+        let current = try XCTUnwrap(session(surface))
+        XCTAssertEqual(current.tailText, "", "Production starts this route only at reading end")
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.commit)); fence(surface)
+        XCTAssertEqual(commits, [current.displayText])
+        XCTAssertFalse(surface.hasComposition)
+        let rows = try LearningStore(url: url).snapshot()
+        XCTAssertEqual(rows.filter { $0.reading == reading && $0.text == current.displayText && $0.isPhrase }.count, 1)
+        XCTAssertTrue(rows.allSatisfy { $0.usageCount == 1 && $0.count == 1 })
+        XCTAssertFalse(surface.performPhysicalKeyboardShortcut(.commit)); fence(surface)
+        XCTAssertEqual(commits.count, 1)
+        XCTAssertEqual(try LearningStore(url: url).snapshot(), rows)
+    }
+
+    func testPhysicalBunsetsuCancelKeepsRawReadingAndDoesNotLearnOrRevivePendingResult() throws {
+        let url = try temporaryLearningURL(), surface = try makeSurface()
+        surface.configureLearning(url: url); surface.learnFirstCandidate = true
+        var marked = "", commits: [String] = []
+        surface.updateMarkedText = { marked = $0 }
+        surface.updateMarkedSelection = { text, _ in marked = text }
+        surface.commitMarkedText = { commits.append($0) }
+        try start(surface)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.segmentFocusRight))
+        XCTAssertTrue(session(surface)?.focusedSegment?.isLoadingCandidates == true)
+        XCTAssertTrue(surface.performPhysicalKeyboardShortcut(.cancel)); fence(surface)
+        XCTAssertEqual(marked, reading)
+        XCTAssertTrue(surface.hasComposition)
+        XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
+        XCTAssertTrue(surface.candidateBar.candidates.isEmpty)
+        XCTAssertTrue(try LearningStore(url: url).snapshot().isEmpty)
+        try enter("あ", surface); ready(surface, segmented: false)
+        XCTAssertEqual(marked, reading + "あ")
+        XCTAssertEqual(surface.physicalKeyboardShortcutContext, .composition)
+        XCTAssertTrue(commits.isEmpty)
+        XCTAssertTrue(try LearningStore(url: url).snapshot().isEmpty)
+    }
+
 }

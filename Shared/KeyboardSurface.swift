@@ -2470,9 +2470,9 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         }
     }
 
-    private func cycleBunsetsuCandidateIfActive() -> Bool {
+    private func cycleBunsetsuCandidateIfActive(by delta: Int = 1) -> Bool {
         guard var session = currentBunsetsuSession else { return false }
-        if session.cycleFocusedCandidate(by: 1) {
+        if session.cycleFocusedCandidate(by: delta) {
             bunsetsuSession = session
             renderBunsetsuSession()
         }
@@ -2827,11 +2827,21 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             return true
         case .convertNext:
             guard composition.phase == .selecting else { return false }
+            let hadBunsetsuSession = currentBunsetsuSession != nil
             beforeInput?()
+            if hadBunsetsuSession {
+                guard currentBunsetsuSession != nil else { return false }
+                return cycleBunsetsuCandidateIfActive(by: 1)
+            }
             return movePhysicalConversionCandidate(by: 1)
         case .convertPrevious:
             guard composition.phase == .selecting else { return false }
+            let hadBunsetsuSession = currentBunsetsuSession != nil
             beforeInput?()
+            if hadBunsetsuSession {
+                guard currentBunsetsuSession != nil else { return false }
+                return cycleBunsetsuCandidateIfActive(by: -1)
+            }
             return movePhysicalConversionCandidate(by: -1)
         case .convertToHiragana:
             return transformPhysicalComposition(.hiragana)
