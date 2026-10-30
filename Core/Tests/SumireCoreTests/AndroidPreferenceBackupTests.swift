@@ -21,7 +21,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -119,7 +119,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +138,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,7 +155,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 12)
+        XCTAssertEqual(backup.importedSettingCount, 13)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
@@ -473,6 +473,28 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         XCTAssertThrowsError(try backup.apply(to: defaults))
         XCTAssertNil(defaults.object(forKey: "liveConversion"))
         XCTAssertEqual(defaults.data(forKey: FlickStyleSettings.storageKey), Data("not-json".utf8))
+    }
+
+    func testMixedLearningPreferenceDefaultAndPortableRoundTrip() throws {
+        let key = "learnMixedSymbolsAndNumbers"
+        XCTAssertEqual(try AndroidPreferenceBackup.decode(json([])).settings.values[key], .boolean(true))
+        let name = "mixed-learning-" + UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: name))
+        defer { defaults.removePersistentDomain(forName: name) }
+        let imported = try AndroidPreferenceBackup.decode(json([
+            entry("learn_dictionary_allow_mixed_symbols_numbers_preference", "boolean", false)
+        ]))
+        try imported.apply(to: defaults)
+        XCTAssertEqual(defaults.object(forKey: key) as? Bool, false)
+        let snapshot = try KeyboardSettingsSnapshot.capture(defaults: defaults)
+        XCTAssertEqual(snapshot.values[key], .boolean(false))
+        defaults.set(true, forKey: key)
+        try JSONDecoder().decode(KeyboardSettingsSnapshot.self, from: JSONEncoder().encode(snapshot)).restore(defaults: defaults)
+        XCTAssertFalse(defaults.bool(forKey: key))
+        var invalid = KeyboardSettingsSnapshot()
+        invalid.values[key] = .text("false")
+        XCTAssertThrowsError(try invalid.restore(defaults: defaults))
+        XCTAssertFalse(defaults.bool(forKey: key))
     }
 
     private func entry(_ key: String, _ type: String, _ value: Any) -> [String: Any] {

@@ -15,6 +15,7 @@ struct HomeView: View {
     @State private var clearingLearning = false
     @AppStorage("learningEnabled", store: KeyboardSettings.appDefaults) private var learningEnabled = true
     @AppStorage("learnFirstCandidate", store: KeyboardSettings.appDefaults) private var learnFirstCandidate = false
+    @AppStorage("learnMixedSymbolsAndNumbers", store: KeyboardSettings.appDefaults) private var learnMixedSymbolsAndNumbers = true
     @AppStorage(DeletionBoundary.settingsKey, store: KeyboardSettings.appDefaults) private var deleteBoundarySymbols = DeletionBoundary.defaultSymbols
     @AppStorage("theme.hue", store: KeyboardSettings.appDefaults) private var hue = 0.73
     @AppStorage("theme.mode", store: KeyboardSettings.appDefaults) private var colorMode = KeyboardColorMode.system.rawValue
@@ -60,7 +61,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults))
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults))
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -132,6 +133,7 @@ struct HomeView: View {
                 Section {
                     Toggle("変換を学習", isOn: $learningEnabled)
                     Toggle("第1候補も学習", isOn: $learnFirstCandidate).disabled(!learningEnabled)
+                    Toggle("記号・数字を含む日本語も学習", isOn: $learnMixedSymbolsAndNumbers).disabled(!learningEnabled)
                 } footer: { Text("学習データは端末内に保存します。入力文字をネットワークへ送信しません。") }
                 Section {
                     Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
@@ -205,6 +207,7 @@ struct InputHarness: UIViewRepresentable {
     let personalLexicon: PersonalLexicon
     let learningEnabled: Bool
     let learnFirstCandidate: Bool
+    let learnMixedSymbolsAndNumbers: Bool
     let appearanceRevision: Int
     let hue: Double
     let saturation: Double
@@ -325,6 +328,7 @@ struct InputHarness: UIViewRepresentable {
         surface.personalLexicon = personalLexicon
         surface.configureLearning(url: learningEnabled ? PersonalDataLocation.learningURL(allowShared: true) : nil)
         surface.learnFirstCandidate = learnFirstCandidate
+        surface.learnMixedSymbolsAndNumbers = learnMixedSymbolsAndNumbers
         let rows = min(3, max(1, candidateRowCount))
         if surface.candidateRowCount != rows {
             surface.candidateRowCount = rows
