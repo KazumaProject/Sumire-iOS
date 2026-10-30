@@ -927,6 +927,28 @@ class Tests(unittest.TestCase):
         self.assertEqual(scores.get('CATEGORY-COMPLETE'),3100)
         self.assertEqual(scores.get('CORRECTION'),16200)
 
+    def test_bunsetsu_shared_surface_keeps_lower_cost_system_completion_before_primary(self):
+        dictionary(self.data/'system.sud',[('あいう','SHARED',1,30000),('あいうえ','SHARED',2,100)])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        rows=json.loads(self.run_cli('--bunsetsu','--predict-japanese','あいう').stdout)['candidates']
+        shared=[c for c in rows if c['text']=='SHARED']
+        self.assertEqual(shared[0]['score'],8100) # df1 resultList includes both before score sorting.
+        self.assertTrue(any(c['score']>=30000 for c in shared))
+
+    def test_bunsetsu_shared_matched_surface_uses_same_ngram_priority_for_completion(self):
+        dictionary(self.data/'system.sud',[('あいう','あいう',1,30000),('あいうえ','あいう',2,100)])
+        standalone(self.data/'standalone.sud',['あいう'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Never'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+        rows=json.loads(self.run_cli('--bunsetsu','--predict-japanese','あいう').stdout)['candidates']
+        shared=[c for c in rows if c['text']=='あいう']
+        self.assertTrue(any(c['system_ngram_matched'] for c in shared))
+        self.assertEqual(shared[0]['score'],8100)
+        self.assertTrue(shared[0]['system_ngram_matched'])
+
     def test_bunsetsu_prediction_api_preserves_legacy_flags_and_owned_metadata(self):
         dictionary(self.data/'system.sud',[('あいうえお','SYSTEM-COMPLETE',1,100)])
         dictionary(self.data/'reading_correction.sud',[('あいうえお','CORRECTION\tていせい',2,200)])

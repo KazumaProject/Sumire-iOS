@@ -174,4 +174,53 @@ import UIKit
         _ = try convert(value, "あいう")
         XCTAssertEqual(snapshot.candidates.first { $0.candidateID == row.id }?.identity.surface, "Unicode補完")
     }
+    func testLowerCostSharedSurfaceCompletionWinsDisplayAndKeepsTypedRange() throws {
+        let root = try base(), text = "文節補完同文面試験", bytes = Data(text.utf8)
+        let units = Array("あいうえ".utf16)
+        var tree: UInt64 = 1
+        for index in units.indices { tree |= UInt64(1) << (2 + index * 2) }
+        try file(kind: 1, dimension: 0, sections: [packed([tree]), packed([UInt16(32), 32] + units),
+            packed([UInt64(1) << 6 | UInt64(1) << 8]), packed([UInt32(1), 2]),
+            packed([UInt32(0), 0, 1, 2]), packed([UInt16(0), 0]), packed([Int16(30_000), 100]),
+            packed([UInt32(0), 0]), packed([UInt32(0), UInt32(bytes.count)]), bytes])
+            .write(to: root.appendingPathComponent("system.sud"))
+        let value = ConversionService(directory: root); value.setEnglishReading(false)
+        value.setPredictionSettings(.init(lookaheadCharacterCount: 1))
+        let response = try convert(value)
+        let row = try XCTUnwrap(response.candidates.first { $0.text == text })
+        XCTAssertEqual(row.score, 8_100)
+        XCTAssertEqual(row.range, NSRange(location: 0, length: 3))
+        XCTAssertEqual(row.leftID, 1); XCTAssertEqual(row.rightID, 2)
+        let snapshot = try XCTUnwrap(response.bunsetsuSnapshot)
+        let nativeRows = snapshot.candidates.filter { $0.identity.surface == text }
+        XCTAssertEqual(nativeRows.first?.score, 8_100)
+        XCTAssertTrue(nativeRows.contains { $0.score >= 30_000 })
+        let session = try BunsetsuConversionSession(rawInput: "あいう", conversionInput: "あいう",
+            wholeDisplayText: text, generation: generation, snapshot: snapshot,
+            orderedDisplayCandidates: response.orderedDisplayIdentities)
+        XCTAssertEqual(session.leadingSegmentCommitPlan()?.readingUTF16Length, 3)
+        XCTAssertEqual(session.leadingSegmentCommitPlan()?.committedReading, "あいう")
+    }
+    func testMatchedSharedSurfaceCompletionCompetesAtTheSamePriority() throws {
+        let root = try base(), bytes = Data("あいう".utf8), units = Array("あいうえ".utf16)
+        var tree: UInt64 = 1
+        for index in units.indices { tree |= UInt64(1) << (2 + index * 2) }
+        try file(kind: 1, dimension: 0, sections: [packed([tree]), packed([UInt16(32), 32] + units),
+            packed([UInt64(1) << 6 | UInt64(1) << 8]), packed([UInt32(1), 2]),
+            packed([UInt32(0), 0, 1, 2]), packed([UInt16(0), 0]), packed([Int16(30_000), 100]),
+            packed([UInt32(0), 0]), packed([UInt32(0), UInt32(bytes.count)]), bytes])
+            .write(to: root.appendingPathComponent("system.sud"))
+        try file(kind: 3, dimension: 1, sections: [packed([UInt32(0), UInt32(bytes.count)]), bytes])
+            .write(to: root.appendingPathComponent("standalone.sud"))
+        let value = ConversionService(directory: root); value.setEnglishReading(false)
+        value.setPredictionSettings(.init(lookaheadCharacterCount: 1))
+        let response = try convert(value)
+        let row = try XCTUnwrap(response.candidates.first { $0.text == "あいう" })
+        XCTAssertEqual(row.score, 8_100)
+        XCTAssertEqual(row.range, NSRange(location: 0, length: 3))
+        XCTAssertEqual(row.leftID, 1); XCTAssertEqual(row.rightID, 2)
+        let raw = try XCTUnwrap(response.bunsetsuSnapshot).candidates.filter { $0.identity.surface == "あいう" }
+        XCTAssertEqual(raw.first?.score, 8_100)
+        XCTAssertTrue(raw.contains { $0.score >= 30_000 })
+    }
 }

@@ -1681,7 +1681,9 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
     result.complete = result.complete && complete;
     for (const auto &prediction : best) {
       auto text = d.surface(prediction.token, reading, 0, reading.size(), prediction.node);
-      if (seen.insert(text).second)
+      // Bunsetsu sorts N-best and completion rows together before display merging.
+      // A lower-cost completion with the same surface must remain eligible.
+      if (bunsetsu_search || seen.insert(text).second)
         result.candidates.push_back({text, prediction.score,
             {{text, d.name, 0, uint32_t(reading.size()),
               bunsetsu_search ? impl->connection.left[d.pos[prediction.token]] : uint16_t(0),
@@ -1743,6 +1745,11 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
   }
   if (bunsetsu_search) {
     for (auto &candidate : result.candidates) {
+      // Android ranks this entire group by membership of the surface in its
+      // matched set, including newly added completion rows of the same surface.
+      if (japanese_prediction && std::find(result.system_ngram_matched_candidates.begin(),
+          result.system_ngram_matched_candidates.end(), candidate.text) != result.system_ngram_matched_candidates.end())
+        candidate.system_ngram_matched = true;
       auto it = splitPatternIndex.find(candidate.text);
       if (it != splitPatternIndex.end())
         candidate.bunsetsu_boundaries =
