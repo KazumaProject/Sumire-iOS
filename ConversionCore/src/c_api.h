@@ -112,6 +112,24 @@ const char *sumire_release_category_name(size_t index);
 int sumire_engine_open_with_category_ids(const char *directory, const char *const *ids,
                                          size_t count, uint32_t flags,
                                          sumire_engine **out, char *error, size_t error_size);
+/* Explicit source namespaces. IDs are allowlisted catalog IDs, never paths.
+ * Aggregate data is read from legacy_aggregates/<id>.sud and retains that
+ * namespace in result origins. Caller validates generation manifest/provenance
+ * and complete-family coverage; the native loader validates selected SUD files.
+ * Aggregate sources require a regular release marker. Repeated (kind,id) pairs
+ * are ignored. Existing leaf-only and legacy-mask entry points are unchanged. */
+enum {
+  SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF = 1,
+  SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE = 2
+};
+typedef struct {
+  uint32_t kind;
+  const char *id;
+} sumire_dictionary_source;
+int sumire_engine_open_with_sources(const char *directory,
+                                     const sumire_dictionary_source *sources,
+                                     size_t count, uint32_t flags,
+                                     sumire_engine **out, char *error, size_t error_size);
 int sumire_engine_open(const char *directory, uint32_t category_mask,
                        sumire_engine **out, char *error, size_t error_size);
 /* Additive ABI v1 entry point. Dictionary flags: bit 0 loads English words,

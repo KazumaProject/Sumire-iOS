@@ -35,8 +35,15 @@ struct ConversionCandidate {
             }
         }
         let legacy = Set(Self.categoryLabels.map(\.0))
-        let labels = Self.categoryLabels.filter { classifiedCategories.contains($0.0) }.map(\.1) +
-            classifiedCategories.filter { !legacy.contains($0) }.map { DictionaryCategoryCatalog.label(for: $0) }
+        // Keep source identities typed; only the user-visible family label is shared.
+        let displayCategoryIDs = classifiedCategories.map { id -> String in
+            let prefix = "legacy_aggregates/"
+            guard id.hasPrefix(prefix) else { return id }
+            let family = String(id.dropFirst(prefix.count))
+            return legacy.contains(family) ? family : id
+        }
+        let labels = Self.categoryLabels.filter { displayCategoryIDs.contains($0.0) }.map(\.1) +
+            displayCategoryIDs.filter { !legacy.contains($0) }.map { DictionaryCategoryCatalog.label(for: $0) }
         let categoryBadge = labels.isEmpty ? "" : "[" + labels.joined(separator: "・") + "]"
         let value = [badge, categoryBadge].filter { !$0.isEmpty }.joined(separator: " ")
         return value.isEmpty ? nil : value
@@ -151,8 +158,8 @@ final class ConversionService {
     private let queue = DispatchQueue(label: "sumire.conversion", qos: .userInitiated)
     private let state = NativeState()
     private let pending = PendingRequest()
-    private let directoryOverride: URL?
-    private var cachedDictionaryDirectories: [URL]?
+    private let sourceOverride: [NativeDictionaryEngineSource]?
+    private var cachedDictionarySources: [NativeDictionaryEngineSource]?
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var categoryIDs: [String]?
@@ -161,28 +168,33 @@ final class ConversionService {
     private var learningURL: URL?
 
     init(categoryMask: UInt32 = 0) {
-        self.directoryOverride = nil
+        self.sourceOverride = nil
         self.categoryMask = categoryMask
     }
     init(directory: URL?, categoryMask: UInt32 = 0) {
-        self.directoryOverride = directory
+        self.sourceOverride = directory.map { [NativeDictionaryEngineSource(directory: $0)] }
         self.categoryMask = categoryMask
     }
-    private static var activeDictionaries: [URL] {
-        var directories = PersonalDataLocation.readableDictionaryGenerations().map(\.directory)
-        if let bundledDictionary, !directories.contains(bundledDictionary) {
-            directories.append(bundledDictionary)
-        }
-        return directories
+    init(sources: [NativeDictionaryEngineSource], categoryMask: UInt32 = 0) {
+        self.sourceOverride = sources
+        self.categoryMask = categoryMask
     }
-    // Called only on the serial conversion queue. Avoid resolving App Group
-    // metadata on the keyboard's main thread for every keystroke.
-    private func resolveActiveDictionaries() -> [URL] {
+    private static var activeDictionarySources: [NativeDictionaryEngineSource] {
+        var sources = PersonalDataLocation.readableDictionaryGenerations()
+            .map { NativeDictionaryEngineSource(generation: $0) }
+        if let bundledDictionary, !sources.contains(where: { $0.directory == bundledDictionary }) {
+            sources.append(NativeDictionaryEngineSource(directory: bundledDictionary))
+        }
+        return sources
+    }
+    // Called only on the serial conversion queue. Keep the verified generation
+    // record, not only its URL, while avoiding main-thread App Group reads.
+    private func resolveActiveDictionaries() -> [NativeDictionaryEngineSource] {
         let now = ProcessInfo.processInfo.systemUptime
-        if now - lastDictionaryRefresh < 0.5 { return cachedDictionaryDirectories ?? [] }
+        if now - lastDictionaryRefresh < 0.5 { return cachedDictionarySources ?? [] }
         lastDictionaryRefresh = now
-        cachedDictionaryDirectories = Self.activeDictionaries
-        return cachedDictionaryDirectories ?? []
+        cachedDictionarySources = Self.activeDictionarySources
+        return cachedDictionarySources ?? []
     }
     static var bundledDictionary: URL? {
         let bundle = Bundle.main.bundleURL
@@ -242,17 +254,17 @@ final class ConversionService {
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
                  includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
-        let state = state, directoryOverride = directoryOverride
+        let state = state, sourceOverride = sourceOverride
         let mask = categoryMask, englishReading = englishReadingEnabled, categoryIDs = categoryIDs
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
-            let directories = directoryOverride.map { [$0] } ?? self.resolveActiveDictionaries()
+            let sources = sourceOverride ?? self.resolveActiveDictionaries()
             ProcessMemory.record("conversion.begin")
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(directories: directories, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
+                try state.open(sources: sources, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
                 let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
@@ -649,14 +661,14 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
-        func open(directories: [URL], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
-            let candidates = directories.map(\.standardizedFileURL).filter { !rejectedDirectories.contains($0) }
-            let requestedDirectory = candidates.first
+        func open(sources: [NativeDictionaryEngineSource], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
+            let candidates = sources.filter { !rejectedDirectories.contains($0.directory) }
+            let requestedDirectory = candidates.first?.directory
             let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&
                 openedMask == mask && openedEnglishReading == englishReading && openedCategoryIDs == categoryIDs
             if sameConfiguration && (!english || englishLoaded) { return }
             if session != nil { close() }
-            let opened = try NativeDictionaryEngineOpener.open(directories: candidates, mask: mask,
+            let opened = try NativeDictionaryEngineOpener.open(sources: candidates, mask: mask,
                 english: english, englishReading: englishReading, rejecting: &rejectedDirectories, categoryIDs: categoryIDs)
             defer { sumire_engine_close(opened.engine) }
             var error = [CChar](repeating: 0, count: 1024)

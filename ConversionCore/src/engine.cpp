@@ -333,7 +333,7 @@ struct Engine::Impl {
   std::vector<std::unique_ptr<Dictionary>> dictionaries;
   std::unique_ptr<detail::SystemNgram> system_ngram;
   std::unique_ptr<detail::MozcScoringData> mozc_scoring_data;
-  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority, bool expand_legacy_categories)
+  Impl(const std::string &dir, const std::vector<std::string> &cats, bool english, bool words, bool standalone_priority, bool expand_legacy_categories, const std::vector<std::string> &legacy_aggregate_ids)
       : connection(dir) {
     const auto path = dir + "/standalone.sud";
     if (standalone_priority && std::filesystem::exists(path))
@@ -365,6 +365,22 @@ struct Engine::Impl {
     dictionaries.push_back(std::make_unique<Dictionary>(dir, "system"));
     for (const auto &n : resolved)
       dictionaries.push_back(std::make_unique<Dictionary>(dir, n));
+    if (!legacy_aggregate_ids.empty()) {
+      require(std::filesystem::symlink_status(dir + "/release-categories-v1.7.277").type() ==
+                  std::filesystem::file_type::regular,
+              "typed aggregates require a release marker");
+      const auto allowed = category_names();
+      std::unordered_set<std::string> loaded;
+      for (const auto &id : legacy_aggregate_ids) {
+        require(std::find(allowed.begin(), allowed.end(), id) != allowed.end(),
+                "unknown legacy aggregate ID");
+        // Keep path and result identity in a separate namespace. A release
+        // leaf and an aggregate may have the same raw ID, but are not one source.
+        const auto name = "legacy_aggregates/" + id;
+        if (loaded.insert(name).second)
+          dictionaries.push_back(std::make_unique<Dictionary>(dir, name));
+      }
+    }
     for (auto &d : dictionaries)
       for (auto p : d->pos)
         require(p < connection.left.size(), "token POS outside table");
@@ -389,8 +405,8 @@ struct Engine::Impl {
     }
   }
 };
-Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority, bool expand_legacy_categories)
-    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority, expand_legacy_categories)) {}
+Engine::Engine(const std::string &dir, const std::vector<std::string> &c, bool english, bool words, bool standalone_priority, bool expand_legacy_categories, const std::vector<std::string> &legacy_aggregate_ids)
+    : impl(std::make_unique<Impl>(dir, c, english, words, standalone_priority, expand_legacy_categories, legacy_aggregate_ids)) {}
 Engine::~Engine() = default;
 bool Engine::standalone_priority_available() const { return impl->standalone != nullptr; }
 size_t Engine::mapped_bytes() const {

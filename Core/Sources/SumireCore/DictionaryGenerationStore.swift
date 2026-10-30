@@ -21,9 +21,9 @@ public struct DictionaryGenerationStore {
             public let fileURL: URL
         }
 
-        /// Typed source request for a future native consumer. It identifies
-        /// release leaves and aggregate files separately; it does not load or
-        /// convert either source itself.
+        /// Typed source request consumed by the native opener. It identifies
+        /// release leaves and aggregate files separately; selection itself does
+        /// not load or convert either source.
         public struct SourceSelection: Equatable, Sendable {
             public let releaseLeafIDs: [String]
             public let legacyAggregateSources: [LegacyAggregateSource]
@@ -36,7 +36,7 @@ public struct DictionaryGenerationStore {
         /// True only when the release marker is a checksum-matched manifest member.
         public let hasVerifiedReleaseMarker: Bool
         /// Old aggregate dictionaries retained beside a dictionary generation.
-        /// They are not yet consumed by the native-engine path.
+        /// The native opener uses them only through the complete-family resolver.
         public let legacyAggregateOverlayIDs: [DictionaryCategoryCatalog.LegacyAggregateID]
         fileprivate let legacyAggregateOverlaySHA256: [DictionaryCategoryCatalog.LegacyAggregateID: String]
         fileprivate let releaseLeafSHA256: [String: String]
@@ -74,7 +74,7 @@ public struct DictionaryGenerationStore {
                 .filter { requestedSet.contains($0.id) }
                 .flatMap(\.legacyFamilies))
             // Import validation checks the newly published leaf bytes, independently
-            // of the optional aggregate-substitution plan for a future consumer.
+            // of the optional aggregate-substitution plan used by the native opener.
             let eligibleOverlayIDs = allowingLegacyAggregates ? legacyAggregateOverlayIDs : []
             let completeFamilyCandidates = eligibleOverlayIDs.filter { id in
                 guard selectedFamilies.contains(id.rawValue) else { return false }
@@ -223,8 +223,8 @@ public struct DictionaryGenerationStore {
     }))
 
     /// Verifies pointer/manifest metadata and referenced regular files. The C++
-    /// loader verifies selected native dictionaries; typed overlays are not
-    /// consumed by that loader yet, so verify their recorded hashes here.
+    /// loader verifies selected native dictionaries. Verify typed overlays'
+    /// recorded hashes here before the opener can select them.
     public func loadCurrent() -> Loaded? {
         if let loaded = try? load(currentPointer, recoveredPrevious: false) { return loaded }
         return try? load(previousPointer, recoveredPrevious: true)
@@ -253,8 +253,8 @@ public struct DictionaryGenerationStore {
     /// On a marked release generation, `importedFiles` names are release output IDs.
     /// Legacy family aggregates must be supplied separately with typed IDs. Overlapping
     /// raw names are therefore valid release IDs here, never an aggregate identity.
-    /// Typed overlays can be stored beside either generation taxonomy, but remain
-    /// metadata-only until a native-engine consumer is implemented. Callers importing
+    /// Typed overlays can be stored beside either generation taxonomy, but only
+    /// verified release generations may select them for the native opener. Callers importing
     /// converter output must pass its interpretation so release leaves cannot overwrite
     /// an unmarked legacy generation merely because their filenames overlap.
     @discardableResult

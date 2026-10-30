@@ -586,8 +586,55 @@ static void test_learning_metadata_overlay(const char *directory) {
   sumire_result_destroy(owned);
 }
 
+static void test_typed_dictionary_sources(const char *directory) {
+  const sumire_dictionary_source unique[] = {
+      {SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF, "character"},
+      {SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE, "character"}};
+  const sumire_dictionary_source duplicate[] = {unique[0], unique[1], unique[0], unique[1]};
+  char error[1024]; sumire_engine *a = NULL, *b = NULL;
+  CHECK(sumire_engine_open_with_sources(directory, duplicate, 4, 0, &a, error, sizeof error) == 0);
+  CHECK(sumire_engine_open_with_sources(directory, unique, 2, 0, &b, error, sizeof error) == 0);
+  sumire_session *sa = NULL, *sb = NULL;
+  CHECK(sumire_session_create(a, &sa, error, sizeof error) == 0);
+  CHECK(sumire_session_create(b, &sb, error, sizeof error) == 0);
+  sumire_request request = {1, "あい", 6, 0, 20, 10000, 0};
+  sumire_result *ra = NULL, *rb = NULL;
+  CHECK(sumire_session_update(sa, &request, &ra, error, sizeof error) == 0);
+  CHECK(sumire_session_update(sb, &request, &rb, error, sizeof error) == 0);
+  compare_results(ra, rb);
+  const size_t leaf = metadata_candidate(ra, "SOURCE-LEAF"), aggregate = metadata_candidate(ra, "SOURCE-AGG");
+  CHECK(leaf != (size_t)-1 && aggregate != (size_t)-1);
+  sumire_segment ls, ag;
+  CHECK(sumire_result_segment(ra, leaf, 0, &ls) == 0);
+  CHECK(sumire_result_segment(ra, aggregate, 0, &ag) == 0);
+  CHECK(ls.dictionary.size == strlen("character") && memcmp(ls.dictionary.data, "character", ls.dictionary.size) == 0);
+  CHECK(ag.dictionary.size == strlen("legacy_aggregates/character") && memcmp(ag.dictionary.data, "legacy_aggregates/character", ag.dictionary.size) == 0);
+  sumire_result_destroy(ra); sumire_result_destroy(rb);
+  sumire_session_destroy(sa); sumire_session_destroy(sb); sumire_engine_close(a); sumire_engine_close(b);
+  const sumire_dictionary_source invalid[] = {
+      {9, "character"}, {SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF, "../character"},
+      {SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE, "unknown"},
+      {SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE, "legacy_aggregates/character"},
+      {SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF, NULL}};
+  for (size_t i = 0; i < sizeof invalid / sizeof invalid[0]; ++i) {
+    a = (sumire_engine *)1;
+    CHECK(sumire_engine_open_with_sources(directory, invalid + i, 1, 0, &a, error, sizeof error) != 0 && a == NULL);
+  }
+  CHECK(sumire_engine_open_with_sources(directory, unique, 100001, 0, &a, error, sizeof error) != 0 && a == NULL);
+  CHECK(sumire_engine_open_with_sources(directory, NULL, 1, 0, &a, error, sizeof error) != 0 && a == NULL);
+  CHECK(sumire_engine_open_with_sources(directory, unique, 2, 8, &a, error, sizeof error) != 0 && a == NULL);
+  char marker[4096], hidden[4096];
+  CHECK(snprintf(marker, sizeof marker, "%s/release-categories-v1.7.277", directory) > 0);
+  CHECK(snprintf(hidden, sizeof hidden, "%s/marker.saved", directory) > 0);
+  CHECK(rename(marker, hidden) == 0);
+  CHECK(sumire_engine_open_with_sources(directory, unique, 2, 0, &a, error, sizeof error) != 0 && a == NULL);
+  CHECK(rename(hidden, marker) == 0);
+}
 int main(int argc, char **argv) {
   test_bunsetsu_metadata_invalid_arguments();
+  if (argc == 3 && strcmp(argv[2], "--typed-sources") == 0) {
+    test_typed_dictionary_sources(argv[1]); return 0;
+  }
   if (argc == 3 && strcmp(argv[2], "--release-categories") == 0) {
     test_release_categories(argv[1]); return 0;
   }
