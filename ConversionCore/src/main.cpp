@@ -287,6 +287,7 @@ int main(int argc, char **argv) {
                     << ",\"raw_text\":" << json(c.raw_text)
                     << ",\"corrected_reading\":" << json(c.corrected_reading)
                     << ",\"is_reading_prefix\":" << (c.is_reading_prefix ? "true" : "false")
+                    << ",\"is_english_provider\":" << (c.english_provider ? "true" : "false")
                     << ",\"segments\":[";
           for (size_t j = 0; j < c.segments.size(); ++j) {
             if (j)
