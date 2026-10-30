@@ -115,6 +115,18 @@ class Tests(unittest.TestCase):
             r=subprocess.run([C_API,str(self.data),'--release-categories'],capture_output=True)
             self.assertEqual(r.returncode,0,r.stderr.decode())
 
+    def test_typed_leaf_and_legacy_aggregate_sources_keep_distinct_identities(self):
+        (self.data/'release-categories-v1.7.277').write_text('v1.7.277\n')
+        (self.data/'legacy_aggregates').mkdir()
+        dictionary(self.data/'character.sud', [('あい','SOURCE-LEAF',1,0)])
+        dictionary(self.data/'legacy_aggregates/character.sud', [('あい','SOURCE-AGG',1,-20)])
+        self.assertIsNotNone(C_API, 'Typed source ABI executable is required')
+        result=subprocess.run([C_API,str(self.data),'--typed-sources'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+        self.assertIsNotNone(INCREMENTAL, 'Typed C++ Engine fixture executable is required')
+        result=subprocess.run([INCREMENTAL,str(self.data),'--typed-sources'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+
     def install_auxiliary_dictionary_fixture(self):
         dictionary(self.data/'emoji.sud',[
             ('あいう','EMOJI',0,6000),('あいうえ','EMOJI-PREDICT',0,6000),

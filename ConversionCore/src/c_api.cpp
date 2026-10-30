@@ -181,6 +181,38 @@ int sumire_engine_open_with_category_ids(const char *directory, const char *cons
     *out = engine.release();
   });
 }
+int sumire_engine_open_with_sources(const char *directory,
+                                     const sumire_dictionary_source *sources,
+                                     size_t count, uint32_t flags,
+                                     sumire_engine **out, char *error, size_t size) {
+  if (out) *out = nullptr;
+  return guarded(error, size, [&] {
+    check(out && directory && (sources || count == 0), "null engine argument");
+    check((flags & ~uint32_t(7)) == 0, "unknown dictionary flags");
+    check(count <= 100000, "too many dictionary sources");
+    const auto leaves = sumire::release_category_names();
+    const auto aggregates = sumire::category_names();
+    std::vector<std::string> categories, aggregate_ids;
+    for (size_t i = 0; i < count; ++i) {
+      const auto &source = sources[i];
+      check(source.id, "null source ID");
+      check(source.kind == SUMIRE_DICTIONARY_SOURCE_RELEASE_LEAF ||
+                source.kind == SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE,
+            "unknown dictionary source kind");
+      const bool aggregate = source.kind == SUMIRE_DICTIONARY_SOURCE_LEGACY_AGGREGATE;
+      const auto &allowed = aggregate ? aggregates : leaves;
+      const auto found = std::find(allowed.begin(), allowed.end(), source.id);
+      check(found != allowed.end(), "unknown dictionary source ID");
+      auto &selected = aggregate ? aggregate_ids : categories;
+      if (std::find(selected.begin(), selected.end(), *found) == selected.end())
+        selected.push_back(*found);
+    }
+    auto engine = std::make_unique<sumire_engine>();
+    engine->value = std::make_shared<sumire::Engine>(directory, categories, (flags & 2) != 0,
+        (flags & 1) != 0, (flags & 4) == 0, false, aggregate_ids);
+    *out = engine.release();
+  });
+}
 int sumire_engine_open(const char *directory, uint32_t mask,
                        sumire_engine **out, char *error, size_t size) {
   return sumire_engine_open_with_dictionaries(directory, mask, 0, out, error, size);

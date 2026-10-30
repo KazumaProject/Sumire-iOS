@@ -99,7 +99,8 @@ class Engine {
 public:
   Engine(const std::string &directory,
          const std::vector<std::string> &categories, bool english_reading = false, bool english_words = false,
-         bool standalone_priority = true, bool expand_legacy_categories = true);
+         bool standalone_priority = true, bool expand_legacy_categories = true,
+         const std::vector<std::string> &legacy_aggregate_ids = {});
   ~Engine();
   Result convert(const std::string &reading, size_t count = 10,
                  size_t state_limit = 200000, bool omission = false,

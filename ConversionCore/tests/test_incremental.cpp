@@ -59,6 +59,24 @@ void learning_metadata(const Engine &engine) {
 }
 int main(int argc, char **argv) {
  try {
+  if (argc == 3 && std::string(argv[2]) == "--typed-sources") {
+    Engine unique(argv[1], {"character"}, false, false, true, false, {"character"});
+    Engine duplicate(argv[1], {"character", "character"}, false, false, true, false, {"character", "character"});
+    equal(unique.convert("あい", 20), duplicate.convert("あい", 20));
+    check(unique.mapped_bytes() == duplicate.mapped_bytes(), "duplicate typed source was mapped twice");
+    const auto result = unique.convert("あい", 20);
+    bool leaf = false, aggregate = false;
+    for (const auto &candidate : result.candidates) {
+      if (candidate.text == "SOURCE-LEAF") leaf = candidate.segments.front().dictionary == "character";
+      if (candidate.text == "SOURCE-AGG") aggregate = candidate.segments.front().dictionary == "legacy_aggregates/character";
+    }
+    check(leaf && aggregate, "overlapping raw IDs lost their typed identity");
+    bool rejected = false;
+    try { Engine invalid(argv[1], {}, false, false, true, false, {"../character"}); }
+    catch (...) { rejected = true; }
+    check(rejected, "invalid typed aggregate ID accepted");
+    return 0;
+  }
   check(argc == 2, "dictionary directory required");
   Engine engine(argv[1], {});
   learning_metadata(engine);

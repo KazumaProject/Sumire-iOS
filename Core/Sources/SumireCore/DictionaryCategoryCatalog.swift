@@ -9,8 +9,8 @@ public enum DictionaryCategoryCatalog {
         public init(rawValue: String) { self.rawValue = rawValue }
     }
 
-    /// A deterministic family/leaf coverage plan for a future legacy-aggregate engine path.
-    /// This plan does not imply that the current native engine accepts aggregate IDs.
+    /// A deterministic family/leaf coverage plan for the typed native source path.
+    /// Raw aggregate IDs are separate from release leaf IDs throughout that path.
     public struct LegacyOverlaySelection: Equatable, Sendable {
         public let legacyAggregateIDs: [LegacyAggregateID]
         public let releaseLeafIDs: [String]

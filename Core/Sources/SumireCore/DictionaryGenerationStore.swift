@@ -21,9 +21,9 @@ public struct DictionaryGenerationStore {
             public let fileURL: URL
         }
 
-        /// Typed source request for a future native consumer. It identifies
-        /// release leaves and aggregate files separately; it does not load or
-        /// convert either source itself.
+        /// Typed source request consumed by the native opener. It identifies
+        /// release leaves and aggregate files separately; selection itself does
+        /// not load or convert either source.
         public struct SourceSelection: Equatable, Sendable {
             public let releaseLeafIDs: [String]
             public let legacyAggregateSources: [LegacyAggregateSource]
@@ -35,8 +35,24 @@ public struct DictionaryGenerationStore {
         public let recoveredPrevious: Bool
         /// True only when the release marker is a checksum-matched manifest member.
         public let hasVerifiedReleaseMarker: Bool
+        fileprivate let verifiedReleaseMarkerSHA256: String?
+        fileprivate let verifiedManifestSHA256: String
+
+        /// Revalidates the provenance retained by this snapshot before granting
+        /// release-taxonomy authority to a newly opened native engine.
+        public var hasCurrentVerifiedReleaseProvenance: Bool {
+            guard hasVerifiedReleaseMarker, let markerHash = verifiedReleaseMarkerSHA256 else { return false }
+            return [(DictionaryCategoryCatalog.releaseMarker, markerHash), ("manifest.json", verifiedManifestSHA256)]
+                .allSatisfy { name, expected in
+                    let url = directory.appendingPathComponent(name)
+                    guard let attributes = try? FileManager.default.attributesOfItem(atPath: url.path),
+                          attributes[.type] as? FileAttributeType == .typeRegular,
+                          let actual = try? DictionaryGenerationStore.sha256(of: url) else { return false }
+                    return actual == expected
+                }
+        }
         /// Old aggregate dictionaries retained beside a dictionary generation.
-        /// They are not yet consumed by the native-engine path.
+        /// The native opener uses them only through the complete-family resolver.
         public let legacyAggregateOverlayIDs: [DictionaryCategoryCatalog.LegacyAggregateID]
         fileprivate let legacyAggregateOverlaySHA256: [DictionaryCategoryCatalog.LegacyAggregateID: String]
         fileprivate let releaseLeafSHA256: [String: String]
@@ -58,7 +74,7 @@ public struct DictionaryGenerationStore {
             let knownCategoryIDs = Set(DictionaryCategoryCatalog.ids)
             let unknownIDs = Set(selectedIDs).subtracting(knownCategoryIDs).sorted()
             let allRequestedIDs = requested + unknownIDs
-            guard hasVerifiedReleaseMarker else {
+            guard hasCurrentVerifiedReleaseProvenance else {
                 return SourceSelection(releaseLeafIDs: [], legacyAggregateSources: [],
                                       unavailableCategoryIDs: allRequestedIDs)
             }
@@ -74,7 +90,7 @@ public struct DictionaryGenerationStore {
                 .filter { requestedSet.contains($0.id) }
                 .flatMap(\.legacyFamilies))
             // Import validation checks the newly published leaf bytes, independently
-            // of the optional aggregate-substitution plan for a future consumer.
+            // of the optional aggregate-substitution plan used by the native opener.
             let eligibleOverlayIDs = allowingLegacyAggregates ? legacyAggregateOverlayIDs : []
             let completeFamilyCandidates = eligibleOverlayIDs.filter { id in
                 guard selectedFamilies.contains(id.rawValue) else { return false }
@@ -142,6 +158,7 @@ public struct DictionaryGenerationStore {
     private struct VerifiedPointer {
         let pointer: Pointer
         let hasVerifiedReleaseMarker: Bool
+        let verifiedReleaseMarkerSHA256: String?
         let legacyAggregateOverlayIDs: [DictionaryCategoryCatalog.LegacyAggregateID]
         let legacyAggregateOverlaySHA256: [DictionaryCategoryCatalog.LegacyAggregateID: String]
         let releaseLeafSHA256: [String: String]
@@ -223,8 +240,8 @@ public struct DictionaryGenerationStore {
     }))
 
     /// Verifies pointer/manifest metadata and referenced regular files. The C++
-    /// loader verifies selected native dictionaries; typed overlays are not
-    /// consumed by that loader yet, so verify their recorded hashes here.
+    /// loader verifies selected native dictionaries. Verify typed overlays'
+    /// recorded hashes here before the opener can select them.
     public func loadCurrent() -> Loaded? {
         if let loaded = try? load(currentPointer, recoveredPrevious: false) { return loaded }
         return try? load(previousPointer, recoveredPrevious: true)
@@ -253,8 +270,8 @@ public struct DictionaryGenerationStore {
     /// On a marked release generation, `importedFiles` names are release output IDs.
     /// Legacy family aggregates must be supplied separately with typed IDs. Overlapping
     /// raw names are therefore valid release IDs here, never an aggregate identity.
-    /// Typed overlays can be stored beside either generation taxonomy, but remain
-    /// metadata-only until a native-engine consumer is implemented. Callers importing
+    /// Typed overlays can be stored beside either generation taxonomy, but only
+    /// verified release generations may select them for the native opener. Callers importing
     /// converter output must pass its interpretation so release leaves cannot overwrite
     /// an unmarked legacy generation merely because their filenames overlap.
     @discardableResult
@@ -480,6 +497,8 @@ public struct DictionaryGenerationStore {
         Self.removeUnreferencedGenerations(in: directory, keeping: [name, previous?.generation].compactMap { $0 })
         return Loaded(directory: final, generation: name, recoveredPrevious: false,
                       hasVerifiedReleaseMarker: hashes[DictionaryCategoryCatalog.releaseMarker] != nil,
+                      verifiedReleaseMarkerSHA256: hashes[DictionaryCategoryCatalog.releaseMarker],
+                      verifiedManifestSHA256: Self.digest(manifestData),
                       legacyAggregateOverlayIDs: publishedLegacyOverlays,
                       legacyAggregateOverlaySHA256: Dictionary(uniqueKeysWithValues:
                         publishedLegacyOverlays.compactMap { id in
@@ -500,6 +519,8 @@ public struct DictionaryGenerationStore {
         let target = directory.appendingPathComponent(pointer.generation, isDirectory: true)
         return Loaded(directory: target, generation: pointer.generation, recoveredPrevious: recoveredPrevious,
                       hasVerifiedReleaseMarker: verified.hasVerifiedReleaseMarker,
+                      verifiedReleaseMarkerSHA256: verified.verifiedReleaseMarkerSHA256,
+                      verifiedManifestSHA256: pointer.manifestSHA256,
                       legacyAggregateOverlayIDs: verified.legacyAggregateOverlayIDs,
                       legacyAggregateOverlaySHA256: verified.legacyAggregateOverlaySHA256,
                       releaseLeafSHA256: verified.releaseLeafSHA256,
@@ -608,6 +629,7 @@ public struct DictionaryGenerationStore {
         }
         return VerifiedPointer(pointer: pointer,
                               hasVerifiedReleaseMarker: hasVerifiedReleaseMarker,
+                              verifiedReleaseMarkerSHA256: manifest.outputSHA256[releaseMarkerFile],
                               legacyAggregateOverlayIDs: legacyAggregateOverlayIDs.sorted { $0.rawValue < $1.rawValue },
                               legacyAggregateOverlaySHA256: Dictionary(uniqueKeysWithValues:
                                 legacyAggregateOverlayIDs.compactMap { id in
