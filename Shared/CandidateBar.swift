@@ -147,6 +147,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
                     if let thumbnail {
                         self.clipboard.setImage(UIImage(cgImage: thumbnail).withRenderingMode(.alwaysOriginal), for: .normal)
                         self.clipboard.setTitle("入力欄で貼り付け", for: .normal)
+                        if insertText && !self.clipboardAccessAllowed { self.clipboard.isHidden = false }
                         if insertText { self.onClipboardNotice?("画像は入力先の貼り付けメニューから挿入してください") }
                     } else { self.onClipboardNotice?("この画像のプレビューを読み込めませんでした") }
                 }
