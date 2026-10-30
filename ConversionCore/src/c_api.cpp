@@ -21,6 +21,7 @@ struct sumire_session {
   std::shared_ptr<const sumire::PersonalDictionary> personal;
   std::shared_ptr<const sumire::PersonalDictionary> learned;
   sumire::PredictionConfig prediction_config;
+  bool kotowaza_enabled = true;
   uint64_t generation = 0;
   bool has_generation = false;
 };
@@ -252,6 +253,16 @@ int sumire_session_create(sumire_engine *engine, sumire_session **out,
   });
 }
 void sumire_session_destroy(sumire_session *session) { delete session; }
+int sumire_session_set_kotowaza_enabled(sumire_session *session, int enabled,
+                                        char *error, size_t size) {
+  return guarded(error, size, [&] {
+    check(session && (enabled == 0 || enabled == 1), "invalid kotowaza setting");
+    const bool value = enabled != 0;
+    if (session->kotowaza_enabled == value) return;
+    session->kotowaza_enabled = value;
+    session->latest.reset();
+  });
+}
 int sumire_session_set_prediction_config(sumire_session *session,
                                          uint32_t lookahead,
                                          uint32_t aggressiveness,
@@ -302,7 +313,7 @@ int sumire_session_update(sumire_session *session,
         : session->engine->convert(
         reading, request->candidate_count, request->max_states,
         (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0, session->prediction_config,
-        (request->flags & SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES) == 0);
+        (request->flags & SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES) == 0, session->kotowaza_enabled);
     snapshot->generation = request->generation;
     snapshot->length = uint32_t(units.size());
     auto result = std::make_unique<sumire_result>();

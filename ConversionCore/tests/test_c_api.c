@@ -216,6 +216,52 @@ static int64_t prediction_score(sumire_result *result, const char *text) {
   }
   return INT64_MAX;
 }
+static void test_kotowaza_settings(const char *directory) {
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL; sumire_result *result = NULL;
+  CHECK(sumire_engine_open(directory, 0, &engine, error, sizeof error) == 0);
+  CHECK(sumire_session_create(engine, &session, error, sizeof error) == 0);
+  sumire_request request = {1, "あいう", strlen("あいう"), 0, 20, 200000, 8};
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "PROVERB") == 16100);
+  for (size_t i = 0; i < sumire_result_count(result); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(result, i, &c) == 0);
+    if (c.text.size != 7 || memcmp(c.text.data, "PROVERB", 7)) continue;
+    CHECK(c.start_utf16 == 0 && c.length_utf16 == 3 && c.segment_count == 1);
+    uint16_t left = 99, right = 99;
+    CHECK(sumire_result_segment_context_ids(result, i, 0, &left, &right) == 0);
+    CHECK(left == 2 && right == 2);
+  }
+  CHECK(sumire_session_set_kotowaza_enabled(NULL, 0, error, sizeof error) < 0);
+  CHECK(sumire_session_set_kotowaza_enabled(session, 2, error, sizeof error) < 0);
+  CHECK(sumire_session_set_kotowaza_enabled(session, 1, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 1, 0, error, sizeof error) == 0);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 2;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(sumire_session_set_kotowaza_enabled(session, 0, error, sizeof error) == 0);
+  CHECK(sumire_session_commit(session, 2, 0, error, sizeof error) < 0);
+  CHECK(prediction_score(result, "PROVERB") == 16100); // Independently owned snapshot.
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 3;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "PROVERB") == INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  CHECK(sumire_session_set_kotowaza_enabled(session, 1, error, sizeof error) == 0);
+  CHECK(sumire_session_set_prediction_config(session, 2, SUMIRE_PREDICTION_AGGRESSIVENESS_AGGRESSIVE, error, sizeof error) == 0);
+  sumire_session_reset(session);
+  request.generation = 4; request.flags = 8 | SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "PROVERB") == 8100); // Bit 32 remains numeric-only.
+  sumire_result_destroy(result); result = NULL;
+  CHECK(sumire_session_set_prediction_config(session, 1, SUMIRE_PREDICTION_AGGRESSIVENESS_STANDARD, error, sizeof error) == 0);
+  request.generation = 5;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) == 0);
+  CHECK(prediction_score(result, "PROVERB") == INT64_MAX);
+  sumire_result_destroy(result); result = NULL;
+  request.generation = 4;
+  CHECK(sumire_session_update(session, &request, &result, error, sizeof error) < 0 && result == NULL);
+  sumire_session_destroy(session); sumire_engine_close(engine);
+}
 static void test_prediction_settings(const char *directory) {
   char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL; sumire_result *result = NULL;
   CHECK(sumire_engine_open(directory, 1u << 9, &engine, error, sizeof error) == 0);
@@ -841,6 +887,9 @@ int main(int argc, char **argv) {
   }
   if (argc == 3 && strcmp(argv[2], "--prediction-settings") == 0) {
     test_prediction_settings(argv[1]); return 0;
+  }
+  if (argc == 3 && strcmp(argv[2], "--kotowaza-settings") == 0) {
+    test_kotowaza_settings(argv[1]); return 0;
   }
   CHECK(argc == 2);
   test_learning_metadata_overlay(argv[1]);

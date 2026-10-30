@@ -2,6 +2,12 @@ import XCTest
 @testable import SumireCore
 
 final class DictionaryArchivePlanTests: XCTestCase {
+    func testKotowazaRawSourceTripleIsAnIndependentImportGroup() throws {
+        let plan = try DictionaryArchivePlan(entryNames: ["kotowaza/tango_kotowaza.dat", "kotowaza/yomi_kotowaza.dat", "kotowaza/token_kotowaza.dat"])
+        XCTAssertEqual(plan.validationCandidates.map { $0.group.id }, ["kotowaza"])
+        XCTAssertEqual(plan.recognizedEntries, 3)
+    }
+
     func testSystemThirtyCategoriesAndBothEnglishFormats() throws {
         XCTAssertEqual(DictionaryArchivePlan.categoryIDs.count, 30)
         var names = ["backup/system/tango.dat.zip", "backup/system/yomi.dat", "backup/system/token.dat.zip"]
@@ -98,8 +104,7 @@ final class DictionaryArchivePlanTests: XCTestCase {
         for name in ["__MACOSX/yomi.dat", "backup/__MACOSX/system/yomi.dat", "folder/.DS_Store", "folder/._yomi.dat", "folder/"] {
             guard case .ignored = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
         }
-        for name in ["token_kotowaza.dat",
-                     "id.def", "english/qwerty_glide_index.dat"] {
+        for name in ["id.def", "english/qwerty_glide_index.dat"] {
             guard case .unsupported(let reason) = DictionaryArchivePlan.resolve(name) else { return XCTFail(name) }
             XCTAssertFalse(reason.isEmpty)
         }

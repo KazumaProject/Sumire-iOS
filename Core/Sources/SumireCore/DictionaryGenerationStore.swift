@@ -205,13 +205,13 @@ public struct DictionaryGenerationStore {
     private var previousPointer: URL { directory.appendingPathComponent("previous.json") }
     private static let releaseReplacementFiles = Set((DictionaryCategoryCatalog.ids + [
         "system", "english", "english_reading", "connection", "reading_correction",
-        "single_kanji", "emoji", "emoticon", "symbol"
+        "single_kanji", "emoji", "emoticon", "symbol", "kotowaza"
     ]).map { $0 + ".sud" })
     private static let releaseCategoryFiles = Set(DictionaryCategoryCatalog.ids.map { $0 + ".sud" })
     // Older, unmarked generations can still receive legacy family filenames.
     private static let replacementFiles = Set((DictionaryArchivePlan.categoryIDs + DictionaryCategoryCatalog.ids + [
         "system", "english", "english_reading", "connection", "reading_correction",
-        "single_kanji", "emoji", "emoticon", "symbol"
+        "single_kanji", "emoji", "emoticon", "symbol", "kotowaza"
     ]).map { $0 + ".sud" })
     // Support assets survive publication independently of archive replacements.
     private static let supportGroups = [

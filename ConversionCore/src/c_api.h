@@ -160,6 +160,10 @@ void sumire_session_destroy(sumire_session *session);
 /* Updates per-session Japanese completion settings without changing ABI structs.
  * lookahead is 1..6 additional UTF-16 units. Aggressiveness uses the enum above.
  * A successful change invalidates the previous commit selection. */
+/* Optional Japanese proverb completion, default enabled. Changing it invalidates
+ * the current commit result; request flags and public struct layouts are unchanged. */
+int sumire_session_set_kotowaza_enabled(sumire_session *session, int enabled,
+                                        char *error, size_t error_size);
 int sumire_session_set_prediction_config(sumire_session *session,
                                          uint32_t lookahead,
                                          uint32_t aggressiveness,

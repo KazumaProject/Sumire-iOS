@@ -84,7 +84,8 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
     private func sourceFiles(includeMacMetadata: Bool = true, ambiguousInnerZIP: Bool = false,
                              corruptSystemTokens: Bool = false,
                              includeReadingCorrection: Bool = false,
-                             includeAuxiliaryDictionaries: Bool = false) -> [(String, Data)] {
+                             includeAuxiliaryDictionaries: Bool = false,
+                             includeKotowaza: Bool = false) -> [(String, Data)] {
         let reading = javaStream([
             .init(kind: .longs, values: [0b101]), .init(kind: .longs, values: [0b100]),
             .init(kind: .characters, values: [0, 0x20, 0x3042]), .init(kind: .ints, values: [1])
@@ -131,6 +132,11 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
                           ("\(group)/yomi_\(suffix).dat", reading),
                           ("\(group)/token_\(suffix).dat", tokens)]
             }
+        }
+        if includeKotowaza {
+            files += [("kotowaza/tango_kotowaza.dat", surface),
+                      ("kotowaza/yomi_kotowaza.dat", reading),
+                      ("kotowaza/token_kotowaza.dat", tokens)]
         }
         return files
     }
@@ -244,6 +250,22 @@ final class DictionarySourceArchiveConverterTests: XCTestCase {
             let data = try Data(contentsOf: output.appendingPathComponent(name))
             XCTAssertEqual(String(data: data.prefix(8), encoding: .ascii), "SUMIRE01", name)
         }
+    }
+
+    func testConvertsAndroidKotowazaDictionaryGroup() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: false)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let archiveURL = root.appendingPathComponent("dictionary.zip")
+        try storedZIP(sourceFiles(includeKotowaza: true)).write(to: archiveURL)
+        let output = root.appendingPathComponent("converted", isDirectory: true)
+
+        let report = try DictionarySourceArchiveConverter.convert(archiveAt: archiveURL, into: output)
+
+        XCTAssertEqual(report.convertedFiles, ["connection.sud", "kotowaza.sud", "system.sud"])
+        XCTAssertTrue(report.skippedGroups.isEmpty)
+        let data = try Data(contentsOf: output.appendingPathComponent("kotowaza.sud"))
+        XCTAssertEqual(String(data: data.prefix(8), encoding: .ascii), "SUMIRE01")
     }
 
     func testConvertsPinnedAndroidReadingCorrectionArchiveByteForByteWhenConfigured() throws {

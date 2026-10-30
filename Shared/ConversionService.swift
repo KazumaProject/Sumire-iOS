@@ -165,6 +165,7 @@ final class ConversionService {
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var predictionSettings = JapanesePredictionSettings()
+    private var kotowazaEnabled = true
     private var categoryIDs: [String]?
     private var categoryMask: UInt32
     private var personal = PersonalLexicon()
@@ -229,6 +230,13 @@ final class ConversionService {
         let state = state
         queue.async { state.close() }
     }
+    func setKotowazaEnabled(_ enabled: Bool) {
+        guard kotowazaEnabled != enabled else { return }
+        kotowazaEnabled = enabled
+        _ = pending.advance()
+        let state = state
+        queue.async { state.lastGeneration = nil; state.cancelLearning() }
+    }
     func setPredictionSettings(_ settings: JapanesePredictionSettings) {
         guard predictionSettings != settings else { return }
         predictionSettings = settings
@@ -278,7 +286,7 @@ final class ConversionService {
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, sourceOverride = sourceOverride
         let mask = categoryMask, englishReading = englishReadingEnabled
-        let predictionSettings = predictionSettings, categoryIDs = categoryIDs
+        let predictionSettings = predictionSettings, categoryIDs = categoryIDs, kotowazaEnabled = kotowazaEnabled
         let pending = pending, ticket = pending.advance()
         queue.async {
             guard pending.isCurrent(ticket) else { return }
@@ -290,6 +298,7 @@ final class ConversionService {
                 let englishWords = english || (!bunsetsuSearch && NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading))
                 try state.open(sources: sources, mask: mask, english: englishWords, englishReading: englishReading, categoryIDs: categoryIDs)
                 try state.setPredictionSettings(predictionSettings)
+                try state.setKotowazaEnabled(kotowazaEnabled)
                 let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
                     !english && !state.standaloneAvailable ? "優先候補辞書がありません。新しい辞書世代への更新が必要です" : nil].compactMap { $0 }
@@ -620,6 +629,7 @@ final class ConversionService {
         private var openedMask: UInt32?
         private var openedEnglishReading: Bool?
         private var appliedPredictionSettings: JapanesePredictionSettings?
+        private var appliedKotowazaEnabled: Bool?
         func cancelLearning() { learningSession.cancel(); learningRemainder = nil }
         func appendLearning(_ fragments: [LearningFragment], input: String, remaining: String,
                             learnFirst: Bool, onNotice: @escaping (String) -> Void) {
@@ -709,6 +719,15 @@ final class ConversionService {
             return learningFailure
         }
         private var englishLoaded = false
+        func setKotowazaEnabled(_ enabled: Bool) throws {
+            guard appliedKotowazaEnabled != enabled else { return }
+            guard let session else { throw NativeError("変換セッションがありません") }
+            var error = [CChar](repeating: 0, count: 1024)
+            guard sumire_session_set_kotowaza_enabled(session, enabled ? 1 : 0, &error, error.count) == 0 else {
+                throw NativeError(String(cString: error))
+            }
+            appliedKotowazaEnabled = enabled
+        }
         func setPredictionSettings(_ settings: JapanesePredictionSettings) throws {
             guard appliedPredictionSettings != settings else { return }
             guard let session else { throw NativeError("変換セッションがありません") }
@@ -797,6 +816,7 @@ final class ConversionService {
             openedCategoryIDs = nil
             openedEnglishReading = nil
             appliedPredictionSettings = nil
+            appliedKotowazaEnabled = nil
         }
         deinit { close() }
     }

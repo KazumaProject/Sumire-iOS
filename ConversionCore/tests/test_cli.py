@@ -573,6 +573,91 @@ class Tests(unittest.TestCase):
         short=json.loads(self.run_cli('--predict-japanese','あい').stdout)
         self.assertNotIn('Next',[c['text'] for c in short['candidates']])
 
+    def test_kotowaza_completion_matches_android_gate_penalty_range_and_order(self):
+        dictionary(self.data/'kotowaza.sud', [
+            ('あいう', 'KotowazaExact', 1, 5),
+            ('あいうえ', 'KotowazaNext', 1, 100),
+            ('あいうお', 'KotowazaOther', 2, 200),
+            ('あいうえお', 'KotowazaLookahead2', 1, 300),
+            ('あいうえおか', 'KotowazaLookahead3', 1, 400),
+            ('あいうえおかき', 'KotowazaTooFar', 1, -30000),
+        ])
+        self.install_auxiliary_dictionary_fixture()
+
+        predicted=json.loads(self.run_cli('--predict-japanese','--nbest','1','あいう').stdout)
+        by_text={candidate['text']: candidate for candidate in predicted['candidates']}
+        self.assertNotIn('KotowazaExact', by_text)  # Android's proverb route is completion-only.
+        self.assertEqual(by_text['KotowazaNext']['score'], 8100)
+        self.assertEqual(by_text['KotowazaOther']['score'], 8200)
+        self.assertEqual(by_text['KotowazaLookahead2']['score'], 16300)
+        self.assertEqual(by_text['KotowazaLookahead3']['score'], 24400)
+        self.assertNotIn('KotowazaTooFar', by_text)
+        for text in ['KotowazaNext', 'KotowazaOther', 'KotowazaLookahead2', 'KotowazaLookahead3']:
+            candidate=by_text[text]
+            self.assertEqual(candidate['segments'], [{
+                'text': text, 'dictionary': 'kotowaza', 'start_utf16': 0,
+                'length_utf16': 3,
+            }])
+
+        plain=[candidate['text'] for candidate in json.loads(self.run_cli('あいう').stdout)['candidates']]
+        short=[candidate['text'] for candidate in json.loads(self.run_cli('--predict-japanese','あい').stdout)['candidates']]
+        disabled=[candidate['text'] for candidate in json.loads(self.run_cli('--predict-japanese','--no-kotowaza','あいう').stdout)['candidates']]
+        self.assertNotIn('KotowazaNext', plain)
+        self.assertNotIn('KotowazaNext', short)
+        self.assertNotIn('KotowazaNext', disabled)
+        self.assertLess([candidate['text'] for candidate in predicted['candidates']].index('KotowazaNext'),
+                        [candidate['text'] for candidate in predicted['candidates']].index('あいう'))
+        predicted_order=[candidate['text'] for candidate in predicted['candidates']]
+        self.assertLess(predicted_order.index('KotowazaNext'), predicted_order.index('EMOJI'))
+        self.assertLess(predicted_order.index('KotowazaNext'), predicted_order.index('SYMBOL'))
+
+    def test_bunsetsu_includes_kotowaza_and_respects_its_independent_toggle(self):
+        self.install_auxiliary_dictionary_fixture()
+        dictionary(self.data/'kotowaza.sud', [
+            ('あいうえ', 'KotowazaBunsetsu', 1, 100),
+        ])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Never','Occurs'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['A11'])
+        MOZC_SCORING_FIXTURE.write_assets(self.data)
+
+        enabled=json.loads(self.run_cli('--bunsetsu','--nbest','1','あいう').stdout)
+        candidate=next(c for c in enabled['candidates'] if c['text']=='KotowazaBunsetsu')
+        self.assertEqual(candidate['score'],8100)
+        self.assertEqual(candidate['segments'],[{
+            'text':'KotowazaBunsetsu','dictionary':'kotowaza',
+            'start_utf16':0,'length_utf16':3,
+        }])
+
+        disabled=json.loads(self.run_cli('--bunsetsu','--no-kotowaza','--nbest','1','あいう').stdout)
+        self.assertNotIn('KotowazaBunsetsu',[c['text'] for c in disabled['candidates']])
+
+    def test_kotowaza_session_config_and_metadata_do_not_reuse_numeric_flag(self):
+        dictionary(self.data/'kotowaza.sud', [('あいうえお', 'PROVERB', 2, 100)])
+        completed=subprocess.run([C_API,str(self.data),'--kotowaza-settings'],capture_output=True,text=True)
+        self.assertEqual(completed.returncode,0,completed.stderr)
+
+    def test_kotowaza_config_long_input_and_utf16_boundaries(self):
+        dictionary(self.data/'kotowaza.sud', [
+            ('あいうえおかきく', 'LONG', 1, 100),
+            ('あ😀う', 'UNICODE', 2, 200),
+            ('あ'*17, 'MAX', 1, 300),
+        ])
+        for mode, score in [('standard',16100),('conservative',24100),('aggressive',8100)]:
+            result=json.loads(self.run_cli('--predict-japanese','--prediction-aggressiveness',mode,'あいうえおか').stdout)
+            self.assertEqual(next(c['score'] for c in result['candidates'] if c['text']=='LONG'),score)
+        # Three UTF-16 units, including a complete surrogate pair, remain the consumed range.
+        unicode=json.loads(self.run_cli('--predict-japanese','あ😀').stdout)
+        self.assertEqual(next(c['segments'][0]['length_utf16'] for c in unicode['candidates'] if c['text']=='UNICODE'),3)
+        at_max=json.loads(self.run_cli('--predict-japanese','あ'*16).stdout)
+        self.assertIn('MAX',[c['text'] for c in at_max['candidates']])
+        beyond=json.loads(self.run_cli('--predict-japanese','あ'*17).stdout)
+        self.assertNotIn('MAX',[c['text'] for c in beyond['candidates']])
+
+    def test_kotowaza_dictionary_is_optional_but_invalid_files_fail_closed(self):
+        self.run_cli('--predict-japanese','あいう')  # A missing optional file keeps the baseline usable.
+        (self.data/'kotowaza.sud').write_bytes(b'invalid')
+        self.run_cli('--predict-japanese','あいう',ok=False)
+
     def test_japanese_prediction_deduplicates_against_final_primary_list(self):
         entries=[('あいう','あいうえ',1,-25000)]
         entries.extend(('あいう',f'候補{i:02}',1,-24000+i*100) for i in range(15))
