@@ -10,6 +10,7 @@ struct KeyAppearanceSettings: View {
     @State private var sizingOrientation = KeyboardOrientation.portrait
     @State private var sizingSaveFailed = false
     @AppStorage("sumire.keyArrangement", store: KeyboardSettings.appDefaults) private var sumireArrangement = SumireKeyArrangement.toggle.rawValue
+    @AppStorage(SumireModePreferences.englishQWERTYKey, store: KeyboardSettings.appDefaults) private var sumireEnglishQWERTY = false
     private var sizingStore: KeyboardSizingStore {
         KeyboardSizingStore(defaults: KeyboardSettings.appDefaults)
     }
@@ -66,6 +67,15 @@ struct KeyAppearanceSettings: View {
                     ForEach(KeyboardKeyGroup.allCases, id: \.self) { Text($0.title).tag($0) }
                 }.pickerStyle(.segmented).padding(.horizontal)
                 Form {
+                    if kind == .sumire {
+                        Section("Sumire") {
+                            Toggle("英語モードを QWERTY で表示", isOn: $sumireEnglishQWERTY)
+                                .accessibilityIdentifier("sumireEnglishQwertyToggle")
+                            Text("Sumireの英語モードで英語QWERTY配列を表示します。下段の「あ」キーで日本語モードへ戻れます。")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                        }
+                    }
                     Section("キーボード全体のサイズ") {
                         Picker("画面の向き", selection: $sizingOrientation) {
                             Text("縦向き").tag(KeyboardOrientation.portrait)
