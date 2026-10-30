@@ -35,6 +35,9 @@ struct HomeView: View {
     private var predictionLookaheadCharacterCount = JapanesePredictionSettings.defaultLookaheadCharacterCount
     @AppStorage(JapanesePredictionSettings.aggressivenessStorageKey, store: KeyboardSettings.appDefaults)
     private var predictionAggressivenessRawValue = JapanesePredictionAggressiveness.standard.rawValue
+    @AppStorage(LearnedPredictionSettings.enabledKey, store: KeyboardSettings.appDefaults) private var learnedPredictionEnabled = false
+    @AppStorage(LearnedPredictionSettings.minimumInputLengthKey, store: KeyboardSettings.appDefaults) private var learnedPredictionMinimumInputLength = 4
+    @AppStorage(LearnedPredictionSettings.candidateLimitKey, store: KeyboardSettings.appDefaults) private var learnedPredictionCandidateLimit = 4
     @State private var destination: SettingsDestination?
     @State private var showPreview = false
     var body: some View {
@@ -66,7 +69,7 @@ struct HomeView: View {
                 .padding(.horizontal, 20).padding(.vertical, 8)
             }
             .frame(maxHeight: 165)
-            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, kotowazaEnabled: kotowazaEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings)
+            InputHarness(preserveCompositionForAppearance: destination != nil, clipboardAutomaticPreview: clipboardAutomaticPreview, personalLexicon: personalLibrary.lexicon, learningEnabled: learningEnabled, learnFirstCandidate: learnFirstCandidate, learnMixedSymbolsAndNumbers: learnMixedSymbolsAndNumbers, appearanceRevision: appearanceRevision, hue: hue, saturation: saturation, brightness: brightness, colorMode: KeyboardColorMode(rawValue: colorMode) ?? .system, custom: custom, candidateRowCount: candidateRowCount, liveConversion: liveConversion, omissionSearch: omissionSearch, bunsetsuSeparation: bunsetsuSeparation, englishReadingEnabled: englishReadingEnabled, kotowazaEnabled: kotowazaEnabled, categoryMask: UInt32(categoryMask & 0x3fff_ffff), categoryIDs: DictionaryCategoryCatalog.selection(defaults: KeyboardSettings.appDefaults), predictionSettings: predictionSettings, learnedPredictionSettings: .init(enabled: learnedPredictionEnabled, minimumInputLength: learnedPredictionMinimumInputLength, candidateLimit: learnedPredictionCandidateLimit))
                 .frame(minHeight: 80, maxHeight: .infinity).padding(.horizontal, 16)
         }
         .navigationTitle("試し書き").navigationBarTitleDisplayMode(.inline)
@@ -158,6 +161,18 @@ struct HomeView: View {
                     Toggle("第1候補も学習", isOn: $learnFirstCandidate).disabled(!learningEnabled)
                     Toggle("記号・数字を含む日本語も学習", isOn: $learnMixedSymbolsAndNumbers).disabled(!learningEnabled)
                 } footer: { Text("学習データは端末内に保存します。入力文字をネットワークへ送信しません。") }
+                Section {
+                    Toggle("学習辞書の補完候補", isOn: $learnedPredictionEnabled)
+                        .disabled(!learningEnabled).accessibilityIdentifier("learned-prediction-enabled")
+                    Stepper("補完を始める文字数: \(learnedPredictionMinimumInputLength)文字",
+                            value: $learnedPredictionMinimumInputLength, in: 1...8)
+                        .disabled(!learningEnabled || !learnedPredictionEnabled)
+                        .accessibilityIdentifier("learned-prediction-minimum")
+                    Stepper("学習辞書の候補数: \(learnedPredictionCandidateLimit)",
+                            value: $learnedPredictionCandidateLimit, in: 1...8)
+                        .disabled(!learningEnabled || !learnedPredictionEnabled)
+                        .accessibilityIdentifier("learned-prediction-limit")
+                } footer: { Text("入力の先頭に一致する学習辞書の候補を表示します。初期状態はOFFです。") }
                 Section {
                     Button("学習データをすべて削除", role: .destructive) { confirmClearLearning = true }.disabled(clearingLearning)
                     if let learningNotice { Text(learningNotice).font(.footnote) }
@@ -252,6 +267,7 @@ struct InputHarness: UIViewRepresentable {
     let categoryMask: UInt32
     var categoryIDs: [String]? = nil
     var predictionSettings = JapanesePredictionSettings()
+    var learnedPredictionSettings = LearnedPredictionSettings()
     func makeCoordinator() -> Coordinator { Coordinator() }
     func makeUIView(context: Context) -> UITextView {
         #if DEBUG
@@ -373,6 +389,7 @@ struct InputHarness: UIViewRepresentable {
         surface.kotowazaEnabled = kotowazaEnabled
         surface.categoryIDs = categoryIDs
         surface.predictionSettings = predictionSettings
+        surface.configureLearnedPrediction(settings: learnedPredictionSettings)
         surface.categoryMask = categoryMask
         if surface.hue != CGFloat(hue) { surface.hue = CGFloat(hue) }
         surface.saturation = CGFloat(saturation)

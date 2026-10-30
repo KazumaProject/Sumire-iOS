@@ -37,6 +37,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         )
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)
+        result[LearnedPredictionSettings.enabledKey] = .boolean
+        result[LearnedPredictionSettings.minimumInputLengthKey] = .number(1...8, integer: true)
+        result[LearnedPredictionSettings.candidateLimitKey] = .number(1...8, integer: true)
         result[JapanesePredictionSettings.lookaheadStorageKey] = .number(1...6, integer: true)
         result[JapanesePredictionSettings.aggressivenessStorageKey] = .text(Set(JapanesePredictionAggressiveness.allCases.map(\.rawValue)))
         result[DictionaryCategoryCatalog.selectionKey] = .textArray(DictionaryCategoryCatalog.idSet, maximumCount: DictionaryCategoryCatalog.ids.count, maximumElementBytes: 256)

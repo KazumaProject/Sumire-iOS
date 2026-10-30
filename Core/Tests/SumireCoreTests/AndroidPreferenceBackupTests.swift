@@ -2,6 +2,22 @@ import XCTest
 @testable import SumireCore
 
 final class AndroidPreferenceBackupTests: XCTestCase {
+    func testLearnedPredictionThreeAndroidKeysAndDefaults() throws {
+        let backup = try AndroidPreferenceBackup.decode(json([
+            entry("enable_prediction_search_learn_dictionary_preference", "boolean", true),
+            entry("learn_prediction_preference", "int", 2),
+            entry("learn_dictionary_prediction_candidate_limit_preference", "int", 7)
+        ]))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.enabledKey], .boolean(true))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.minimumInputLengthKey], .number(2))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.candidateLimitKey], .number(7))
+        let domain = UUID().uuidString
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: domain))
+        defer { defaults.removePersistentDomain(forName: domain) }
+        try backup.apply(to: defaults)
+        XCTAssertEqual(LearnedPredictionSettings.load(defaults: defaults), .init(enabled: true, minimumInputLength: 2, candidateLimit: 7))
+    }
+
     func testMapsSupportedAndroidSettingsAndPreservesUnrepresentedIOSSettings() throws {
         let backup = try AndroidPreferenceBackup.decode(json([
             entry("live_conversion_preference", "boolean", true),
@@ -21,7 +37,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
         ]))
 
         XCTAssertEqual(backup.version, 1)
-        XCTAssertEqual(backup.importedSettingCount, 17)
+        XCTAssertEqual(backup.importedSettingCount, 20)
         XCTAssertEqual(backup.unsupportedEntryCount, 2)
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(true))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(false))
@@ -119,7 +135,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertEqual(backup.enabledClipboardExpiryRetentionHours, 1)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 17)
+        XCTAssertEqual(backup.importedSettingCount, 20)
         XCTAssertEqual(backup.importedKeys, ["clipboard_delete_unpinned_after_hours_preference"])
 
         let suite = "AndroidPreferenceBackupDefaultRetention." + UUID().uuidString
@@ -138,7 +154,7 @@ final class AndroidPreferenceBackupTests: XCTestCase {
 
         XCTAssertNil(backup.enabledClipboardExpiryRetentionHours)
         XCTAssertEqual(backup.settings.values["clipboard.retentionHours"], .number(1))
-        XCTAssertEqual(backup.importedSettingCount, 17)
+        XCTAssertEqual(backup.importedSettingCount, 20)
 
         let suite = "AndroidPreferenceBackupOmittedRetention." + UUID().uuidString
         let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
@@ -155,8 +171,11 @@ final class AndroidPreferenceBackupTests: XCTestCase {
             entry("android.only.setting", "string", "ignored")
         ]))
 
-        XCTAssertEqual(backup.importedSettingCount, 17)
+        XCTAssertEqual(backup.importedSettingCount, 20)
         XCTAssertEqual(backup.unsupportedEntryCount, 1)
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.enabledKey], .boolean(false))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.minimumInputLengthKey], .number(4))
+        XCTAssertEqual(backup.settings.values[LearnedPredictionSettings.candidateLimitKey], .number(4))
         XCTAssertEqual(backup.settings.values["liveConversion"], .boolean(false))
         XCTAssertEqual(backup.settings.values["omissionSearch"], .boolean(true))
         XCTAssertEqual(backup.settings.values["bunsetsuSeparation"], .boolean(false))

@@ -240,6 +240,71 @@ public final class LearningStore {
         return entries
     }
 
+    /// Matches Android's learned-dictionary autocomplete query. The limit is
+    /// applied after exact-reading priority, score, recency, reading length,
+    /// and insertion order have been considered. The caller may then perform
+    /// Android's stable score-only ordering without losing the selected set.
+    public func predictiveCandidates(readingPrefix: String, limit: Int = 4) throws -> [Entry] {
+        guard (1...8).contains(limit), readingPrefix.utf16.count <= 8192,
+              readingPrefix.utf8.count <= 32768, !readingPrefix.contains("\0") else {
+            throw PersonalDataError("学習検索条件が不正です")
+        }
+        guard !readingPrefix.isEmpty else { return [] }
+
+        let select = "SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned WHERE reading>=?"
+        let bounded = try prepare(select + " AND reading<? ORDER BY CASE WHEN reading=? THEN 0 ELSE 1 END,score ASC,last_used_at DESC,length(reading) ASC,rowid DESC LIMIT ?")
+        defer { sqlite3_finalize(bounded) }
+        let unbounded = try prepare(select + " ORDER BY CASE WHEN reading=? THEN 0 ELSE 1 END,score ASC,last_used_at DESC,length(reading) ASC,rowid DESC LIMIT ?")
+        defer { sqlite3_finalize(unbounded) }
+
+        let upperBound = Self.prefixUpperBound(readingPrefix)
+        let statement = upperBound == nil ? unbounded : bounded
+        try bind(readingPrefix, to: statement, at: 1)
+        var exactParameter: Int32 = 2
+        if let upperBound {
+            try bind(upperBound, to: statement, at: 2)
+            exactParameter = 3
+        }
+        try bind(readingPrefix, to: statement, at: exactParameter)
+        sqlite3_bind_int(statement, exactParameter + 1, Int32(limit))
+        defer { sqlite3_reset(statement) }
+
+        var entries: [Entry] = []
+        while true {
+            let status = sqlite3_step(statement)
+            if status == SQLITE_DONE { return entries }
+            guard status == SQLITE_ROW,
+                  let readingBytes = sqlite3_column_text(statement, 0),
+                  let textBytes = sqlite3_column_text(statement, 1),
+                  let reading = String(bytes: UnsafeBufferPointer(start: readingBytes, count: Int(sqlite3_column_bytes(statement, 0))), encoding: .utf8),
+                  let text = String(bytes: UnsafeBufferPointer(start: textBytes, count: Int(sqlite3_column_bytes(statement, 1))), encoding: .utf8) else {
+                throw failure()
+            }
+            entries.append(try decodeEntry(reading: reading, text: text, statement: statement,
+                                           countColumn: 2, metadataColumn: 3))
+        }
+    }
+    private static func nextUnicodeScalar(after scalar: Unicode.Scalar) -> Unicode.Scalar? {
+        var value = scalar.value + 1
+        if value == 0xD800 { value = 0xE000 }
+        return Unicode.Scalar(value)
+    }
+
+    /// Smallest scalar-string bound greater than every string beginning with
+    /// `prefix`, using SQLite's binary UTF-8 ordering. If the final scalar is
+    /// maximal, carry into the preceding scalar; all-maximal prefixes are
+    /// safely queried with only a lower bound.
+    private static func prefixUpperBound(_ prefix: String) -> String? {
+        let scalars = Array(prefix.unicodeScalars)
+        for index in scalars.indices.reversed() {
+            guard let incremented = nextUnicodeScalar(after: scalars[index]) else { continue }
+            var result = String.UnicodeScalarView(scalars[..<index])
+            result.append(incremented)
+            return String(result)
+        }
+        return nil
+    }
+
     /// Entries are oldest first, retaining recency for equal-frequency candidates.
     public func snapshot() throws -> [Entry] {
         let statement = try prepare("SELECT reading,text,frequency,score,left_id,right_id,usage_count,last_used_at,is_phrase FROM learned ORDER BY last_used ASC,rowid ASC")
