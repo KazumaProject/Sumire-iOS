@@ -134,7 +134,7 @@ enum SettingsDestination: String, CaseIterable, Identifiable {
         case .keyboards: return "テンキー TenKey QWERTY 50音 五十音 Sumire 配列"
         case .toolbar: return "ショートカット toolbar shortcut 並べ替え"
         case .customKeyboard: return "カスタム 配列 編集 JSON"
-        case .conversion: return "文節 文節区切り 文節ごと かな漢字変換"
+        case .conversion: return "文節 文節区切り 文節ごと かな漢字変換 先読み 予測 積極性"
         case .touchFeedback: return "フリック ポップアップ popup マルチタッチ 二本指 長押し"
         case .appearance: return "フォント ガイド フリック 通常キー 特殊キー 大きさ"
         case .theme: return "マテリアル Material ライト ダーク 色"
