@@ -23,6 +23,15 @@ struct OpenedNativeDictionaryEngine {
 }
 
 enum NativeDictionaryEngineOpener {
+    /// Pinned Japanese Original English provider; digit-only input uses a
+    /// separate numeric route. Half-width punctuation/mixed alphanumerics do not.
+    static func requiresJapaneseEnglishWords(_ reading: String) -> Bool {
+        let units = Array(reading.utf16)
+        guard !units.isEmpty else { return false }
+        if units.allSatisfy({ (65...90).contains($0) || (97...122).contains($0) }) { return true }
+        guard units.allSatisfy({ $0 == 0x3000 || (0xff01...0xff5e).contains($0) }) else { return false }
+        return !units.allSatisfy { (0xff10...0xff19).contains($0) }
+    }
     /// Opens the first usable immutable generation. A failed native load is
     /// remembered for the process lifetime, then recovery tries the previous
     /// generation and the bundled baseline in order.

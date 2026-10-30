@@ -287,7 +287,8 @@ final class ConversionService {
             defer { ProcessMemory.record("conversion.end") }
             let response: Result<ConversionResponse, Error>
             do {
-                try state.open(sources: sources, mask: mask, english: english, englishReading: englishReading, categoryIDs: categoryIDs)
+                let englishWords = english || (!bunsetsuSearch && NativeDictionaryEngineOpener.requiresJapaneseEnglishWords(reading))
+                try state.open(sources: sources, mask: mask, english: englishWords, englishReading: englishReading, categoryIDs: categoryIDs)
                 try state.setPredictionSettings(predictionSettings)
                 let warnings = [try state.prepareLearning(reading: reading, english: english),
                     state.unavailableCategoryIDs.isEmpty ? nil : "この辞書世代では選択した分類の一部が未提供、または旧分類単位で適用されます（\(state.unavailableCategoryIDs.count)分類）",
@@ -342,15 +343,18 @@ final class ConversionService {
                           let consumedRange = Range(range, in: reading) else { continue }
                     var dictionaries: [String] = []
                     var tokens: [BunsetsuToken] = []
-                    var leftID: Int16?, rightID: Int16?
+                    let candidateIDs = try Self.candidateContextIDs(result, index: index)
+                    var leftID = candidateIDs?.0, rightID = candidateIDs?.1
                     for segmentIndex in 0..<candidate.segment_count {
                         var segment = sumire_segment()
                         guard sumire_result_segment(result, index, segmentIndex, &segment) == 0 else { throw NativeError("候補範囲が不正です") }
                         var nativeLeft: UInt16 = 0, nativeRight: UInt16 = 0
                         guard sumire_result_segment_context_ids(result, index, segmentIndex,
                             &nativeLeft, &nativeRight) == 0 else { throw NativeError("候補接続IDを取得できません") }
-                        if segmentIndex == 0 { leftID = Int16(bitPattern: nativeLeft) }
-                        rightID = Int16(bitPattern: nativeRight)
+                        if candidateIDs == nil {
+                            if segmentIndex == 0 { leftID = Int16(bitPattern: nativeLeft) }
+                            rightID = Int16(bitPattern: nativeRight)
+                        }
                         if includeBunsetsu || bunsetsuSearch {
                             tokens.append(BunsetsuToken(
                                 readingRange: NSRange(location: Int(segment.start_utf16), length: Int(segment.length_utf16)),
@@ -451,10 +455,12 @@ final class ConversionService {
             let mapped: [Int]? = hasMapping == 0 ? nil : try boundaries(sumire_result_bunsetsu_count(result, index)) {
                 sumire_result_bunsetsu_boundary(result, index, $0, $1)
             }
+            let candidateIDs = try candidateContextIDs(result, index: index)
             return BunsetsuSnapshotCandidate(nativeIndex: index, candidateID: row.candidate_id, score: row.score,
                 identity: BunsetsuCandidateDisplayIdentity(surface: copy(row.text), readingUTF16Length: Int(row.length_utf16)),
                 tokenPath: tokens.isEmpty ? nil : tokens, mappedSplitPositions: mapped,
-                leftID: tokens.first?.leftID, rightID: tokens.last?.rightID)
+                leftID: candidateIDs?.0 ?? tokens.first?.leftID,
+                rightID: candidateIDs?.1 ?? tokens.last?.rightID)
         }
         return BunsetsuConversionSnapshot(requestGeneration: generation, reading: reading,
             splitPatterns: patterns, primarySplitPositions: primary, candidates: candidates)
@@ -551,6 +557,15 @@ final class ConversionService {
         let state = state
         queue.async { sumire_session_purge_cache(state.session) }
     }
+    private static func candidateContextIDs(_ result: OpaquePointer, index: Int) throws -> (Int16, Int16)? {
+        var known: Int32 = 0
+        var left: UInt16 = 0, right: UInt16 = 0
+        guard sumire_result_candidate_context_ids(result, index, &known, &left, &right) == 0 else {
+            throw NativeError("候補接続IDを取得できません")
+        }
+        return known == 0 ? nil : (Int16(bitPattern: left), Int16(bitPattern: right))
+    }
+
     private static func copy(_ string: sumire_string) -> String {
         guard let bytes = string.data, string.size > 0 else { return "" }
         return String(decoding: UnsafeRawBufferPointer(start: bytes, count: string.size), as: UTF8.self)
@@ -597,9 +612,9 @@ final class ConversionService {
         var learningRemainder: String?
         var lastCandidates: [UInt64: ConversionCandidate] = [:]
         private var openedDirectory: URL?
-        // Generations are immutable. Once a native open rejects one, skip it for
-        // this process and try the previous pointer or bundled baseline.
-        private var rejectedDirectories = Set<URL>()
+        // Keep immutable-generation failures for each English-word requirement.
+        // A missing optional English file must not blacklist Japanese-only use.
+        private var rejectedDirectoriesByEnglishRequirement: [Bool: Set<URL>] = [:]
         var unavailableCategoryIDs: [String] = []
         private var openedCategoryIDs: [String]?
         private var openedMask: UInt32?
@@ -712,6 +727,8 @@ final class ConversionService {
         }
 
         func open(sources: [NativeDictionaryEngineSource], mask: UInt32, english: Bool, englishReading: Bool, categoryIDs: [String]? = nil) throws {
+            var rejectedDirectories = rejectedDirectoriesByEnglishRequirement[english] ?? []
+            defer { rejectedDirectoriesByEnglishRequirement[english] = rejectedDirectories }
             let candidates = sources.filter { !rejectedDirectories.contains($0.directory) }
             let requestedDirectory = candidates.first?.directory
             let sameConfiguration = session != nil && openedDirectory == requestedDirectory &&

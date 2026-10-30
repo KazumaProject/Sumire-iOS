@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 namespace sumire {
@@ -31,6 +32,8 @@ struct Candidate {
   // Reference type 5: a yomiPartList match shorter than the input (type 2 otherwise).
   bool is_reading_prefix = false;
   CandidatePresentationKind presentation_kind = CandidatePresentationKind::none;
+  // Known candidate-level endpoints do not imply a dictionary path/segment.
+  std::optional<std::pair<uint16_t, uint16_t>> context_ids{};
 };
 struct CandidateSplitPattern {
   std::string surface;
@@ -133,7 +136,8 @@ public:
                  const PersonalDictionary *learned = nullptr,
                  Workspace *workspace = nullptr, bool prefix_candidates = false,
                  bool japanese_prediction = false, bool bunsetsu_search = false,
-                 const PredictionConfig &prediction_config = {}) const;
+                 const PredictionConfig &prediction_config = {},
+                 bool numeric_symbol_candidates = true) const;
   Result lookup(const std::string &reading, size_t count = 10) const;
   Result lookup_english_reading(const std::string &reading, size_t count = 10) const;
   Result lookup_english(const std::string &reading, size_t count = 10) const;

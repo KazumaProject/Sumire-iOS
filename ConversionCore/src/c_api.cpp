@@ -279,7 +279,7 @@ int sumire_session_update(sumire_session *session,
   return guarded(error, size, [&] {
     check(out && session && request, "null update argument");
     check(request->reading || request->reading_bytes == 0, "null reading");
-    check((request->flags & ~uint32_t(31)) == 0 &&
+    check((request->flags & ~uint32_t(63)) == 0 &&
           ((request->flags & 16) == 0 || (request->flags & 8) == 0) &&
           ((request->flags & 2) == 0 || request->flags == 2), "unsupported or incompatible conversion flags");
     check(!session->has_generation || request->generation > session->generation,
@@ -301,7 +301,8 @@ int sumire_session_update(sumire_session *session,
         ? session->engine->predict_english(reading, request->candidate_count, true, session->personal.get(), session->learned.get())
         : session->engine->convert(
         reading, request->candidate_count, request->max_states,
-        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0, session->prediction_config);
+        (request->flags & 1) != 0, session->personal.get(), session->learned.get(), &session->workspace, (request->flags & 4) != 0, (request->flags & 8) != 0, (request->flags & 16) != 0, session->prediction_config,
+        (request->flags & SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES) == 0);
     snapshot->generation = request->generation;
     snapshot->length = uint32_t(units.size());
     auto result = std::make_unique<sumire_result>();
@@ -370,6 +371,16 @@ int sumire_result_category(const sumire_result *result, size_t candidate,
                            size_t index, sumire_string *out) {
   if (!out || index >= sumire_result_category_count(result, candidate)) return -1;
   *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
+  return 0;
+}
+int sumire_result_candidate_context_ids(const sumire_result *result, size_t candidate,
+                                        int *has_ids, uint16_t *left_id, uint16_t *right_id) {
+  if (!result || !has_ids || !left_id || !right_id || candidate >= sumire_result_count(result))
+    return -1;
+  const auto &ids = result->snapshot->value.candidates[candidate].context_ids;
+  *has_ids = ids ? 1 : 0;
+  *left_id = ids ? ids->first : 0;
+  *right_id = ids ? ids->second : 0;
   return 0;
 }
 int sumire_result_segment_context_ids(const sumire_result *result,

@@ -37,8 +37,9 @@ typedef struct {
    * Also includes kana forms and optional reading-correction completions
    * (3..16 input units, per-session lookahead, no four-candidate cap). All consume only
    * the typed input. Correction metadata is queried separately below. */
-  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking. */
+  uint32_t flags; /* bit 0: kana omission; bit 1: English candidates (exclusive); bit 2: system reading-prefix candidates; bit 4: bunsetsu n-gram candidate ranking; bit 5: disable numeric value-symbol candidates (default enabled). */
 } sumire_request;
+#define SUMIRE_REQUEST_DISABLE_NUMERIC_SYMBOL_CANDIDATES (1u << 5)
 typedef struct {
   uint64_t candidate_id;
   sumire_string text;
@@ -197,6 +198,11 @@ int sumire_result_reading_correction(const sumire_result *result, size_t index,
                                      sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
+/* Optional candidate-level endpoints (e.g. generated numeric surfaces) without
+ * inventing a dictionary segment. Valid absence: has_ids=0, IDs=0. Invalid
+ * arguments/index: -1. Existing ABI structs/version and segment getter unchanged. */
+int sumire_result_candidate_context_ids(const sumire_result *result, size_t candidate,
+                                        int *has_ids, uint16_t *left_id, uint16_t *right_id);
 /* Copies both path-node endpoints; errors leave outputs unchanged. */
 int sumire_result_segment_context_ids(const sumire_result *result,
                                      size_t candidate_index, size_t segment_index,
