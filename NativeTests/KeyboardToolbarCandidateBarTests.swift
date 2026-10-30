@@ -167,6 +167,133 @@ final class KeyboardToolbarCandidateBarTests: XCTestCase {
     }
 
     @MainActor
+    func testExplicitImageProviderWithoutFullAccessShowsThumbnailWithoutHistory() async throws {
+        let suite = "ExplicitImagePaste.\(UUID().uuidString)"
+        let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+        defer { defaults.removePersistentDomain(forName: suite) }
+        KeyboardToolbarPreferences.save([.paste], defaults: defaults)
+        let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 100))
+        window.rootViewController = UIViewController()
+        let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+        bar.clipboardAccessAllowed = false
+        bar.captureClipboardHistory = true
+        bar.reloadToolbarSettings(defaults: defaults)
+        window.rootViewController?.view.addSubview(bar)
+        window.isHidden = false
+        defer { window.isHidden = true }
+        window.layoutIfNeeded(); bar.layoutIfNeeded()
+        let toolbar = try XCTUnwrap(bar.subviews.compactMap { $0 as? UIStackView }
+            .first { $0.accessibilityIdentifier == "keyboard-toolbar-actions" })
+        let group = try XCTUnwrap(toolbar.arrangedSubviews.first {
+            $0.accessibilityIdentifier == "toolbar-paste-group"
+        } as? UIStackView)
+        let preview = try XCTUnwrap(group.arrangedSubviews.first {
+            $0.accessibilityIdentifier == "clipboard-description"
+        } as? UIButton)
+        let control = try XCTUnwrap(group.arrangedSubviews.first {
+            $0.accessibilityIdentifier == "clipboard-preview"
+        } as? UIPasteControl)
+        print("EXPLICIT_IMAGE_SYSTEM_ACCESSIBILITY=" + String(describing: control.accessibilityLabel)
+              + " hint=" + String(describing: control.accessibilityHint))
+        XCTAssertFalse(group.isHidden)
+        XCTAssertFalse(control.isHidden)
+        XCTAssertTrue(preview.isHidden)
+        let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+            .appendingPathExtension("png")
+        defer { try? FileManager.default.removeItem(at: url) }
+        let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+            UIColor.systemPink.setFill()
+            context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+        }
+        try XCTUnwrap(image.pngData()).write(to: url)
+        let provider = try XCTUnwrap(NSItemProvider(contentsOf: url))
+        let notified = expectation(description: "Explicit image provider notice")
+        var notices = 0
+        var inserts = 0
+        var captures = 0
+        bar.onClipboardNotice = { text in
+            notices += 1
+            XCTAssertTrue(text.contains("貼り付け"))
+            notified.fulfill()
+        }
+        bar.onPasteText = { _ in inserts += 1 }
+        bar.onClipboardCaptured = { _, _ in captures += 1 }
+        bar.paste(itemProviders: [provider])
+        await fulfillment(of: [notified], timeout: 5)
+        XCTAssertNotNil(preview.image(for: .normal), "The real provider must decode a thumbnail")
+        XCTAssertFalse(preview.isHidden, "Explicit OFF image paste must reveal its decoded thumbnail")
+        XCTAssertEqual(notices, 1)
+        XCTAssertEqual(inserts, 0)
+        XCTAssertEqual(captures, 0)
+        XCTAssertFalse(bar.clipboardAccessAllowed)
+    }
+
+    @MainActor
+    func testDelayedExplicitImageIsRejectedAfterToolbarHideOrWindowDetach() async throws {
+        for detach in [false, true] {
+            let suite = "DelayedExplicitImage.\(UUID().uuidString)"
+            let defaults = try XCTUnwrap(UserDefaults(suiteName: suite))
+            defer { defaults.removePersistentDomain(forName: suite) }
+            KeyboardToolbarPreferences.save([.paste], defaults: defaults)
+            let window = UIWindow(frame: CGRect(x: 0, y: 0, width: 390, height: 100))
+            window.rootViewController = UIViewController()
+            let bar = CandidateBar(frame: CGRect(x: 0, y: 0, width: 390, height: 44))
+            bar.clipboardAccessAllowed = false
+            bar.captureClipboardHistory = true
+            window.rootViewController?.view.addSubview(bar)
+            window.isHidden = false
+            defer { window.isHidden = true }
+            bar.reloadToolbarSettings(defaults: defaults)
+            let toolbar = try XCTUnwrap(bar.subviews.compactMap { $0 as? UIStackView }
+                .first { $0.accessibilityIdentifier == "keyboard-toolbar-actions" })
+            let group = try XCTUnwrap(toolbar.arrangedSubviews.first {
+                $0.accessibilityIdentifier == "toolbar-paste-group"
+            } as? UIStackView)
+            let preview = try XCTUnwrap(group.arrangedSubviews.first {
+                $0.accessibilityIdentifier == "clipboard-description"
+            } as? UIButton)
+            let url = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+                .appendingPathExtension("png")
+            defer { try? FileManager.default.removeItem(at: url) }
+            let image = UIGraphicsImageRenderer(size: CGSize(width: 8, height: 8)).image { context in
+                UIColor.systemPink.setFill(); context.fill(CGRect(x: 0, y: 0, width: 8, height: 8))
+            }
+            try XCTUnwrap(image.pngData()).write(to: url)
+            let requested = expectation(description: "Image request is pending")
+            let unexpected = expectation(description: "Invalidated image produces no callback")
+            unexpected.isInverted = true
+            let lock = NSLock()
+            var complete: ((URL?, Bool, Error?) -> Void)?
+            let provider = NSItemProvider()
+            provider.registerFileRepresentation(forTypeIdentifier: "public.png", fileOptions: [], visibility: .all) { callback in
+                lock.lock(); complete = callback; lock.unlock()
+                requested.fulfill()
+                return nil
+            }
+            bar.onClipboardNotice = { _ in unexpected.fulfill() }
+            bar.onPasteText = { _ in unexpected.fulfill() }
+            bar.onClipboardCaptured = { _, _ in unexpected.fulfill() }
+            bar.paste(itemProviders: [provider])
+            await fulfillment(of: [requested], timeout: 5)
+            if detach {
+                bar.removeFromSuperview()
+                XCTAssertNil(bar.window)
+                window.rootViewController?.view.addSubview(bar)
+                bar.reloadToolbarSettings(defaults: defaults)
+            } else {
+                bar.showsShortcuts = false
+                bar.showsShortcuts = true
+            }
+            lock.lock(); let callback = complete; lock.unlock()
+            try XCTUnwrap(callback)(url, false, nil)
+            await fulfillment(of: [unexpected], timeout: 1)
+            XCTAssertNil(preview.image(for: .normal))
+            XCTAssertTrue(preview.isHidden)
+            XCTAssertFalse(bar.clipboardAccessAllowed)
+        }
+    }
+
+    @MainActor
     func testUserInitiatedPasteProviderInsertsTextWithFullAccessOffWithoutCapturingHistory() async {
         let suite = "KeyboardToolbarCandidateBarTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suite)!
