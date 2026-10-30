@@ -1,5 +1,9 @@
 import Foundation
 
+public enum SumireModePreferences {
+    public static let englishQWERTYKey = "sumire.englishQwerty"
+}
+
 /// Base output slots from df1f383 KeyboardDefaultLayouts. Gesture geometry is
 /// separate: these slots represent tap, upper-left, up, upper-right, down.
 public enum SumireInput {
