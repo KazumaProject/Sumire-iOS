@@ -36,7 +36,9 @@ public struct DictionaryGenerationStore {
         /// True only when the release marker is a checksum-matched manifest member.
         public let hasVerifiedReleaseMarker: Bool
         fileprivate let verifiedReleaseMarkerSHA256: String?
-        fileprivate let verifiedManifestSHA256: String
+        /// Manifest identity authenticated by the generation pointer at load/publish.
+        /// Consumers opening individual files must revalidate it before use.
+        public let verifiedManifestSHA256: String
 
         /// Revalidates the provenance retained by this snapshot before granting
         /// release-taxonomy authority to a newly opened native engine.

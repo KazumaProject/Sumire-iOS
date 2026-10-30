@@ -11,6 +11,10 @@ final class DictionaryBrowserTests: XCTestCase {
     }
     func testSystemPagingAndPrefixSearch() {
         let app = XCUIApplication(); open(app)
+        let source = app.staticTexts["dictionary-browser-source"]
+        XCTAssertTrue(source.waitForExistence(timeout: 10))
+        XCTAssertTrue(source.label.contains("生成元:"))
+        XCTAssertTrue(source.label.contains("manifest SHA-256:"))
         // SwiftUI may expose combined rows as cells, so inspect all descendants.
         let first = app.descendants(matching: .any).matching(NSPredicate(format: "identifier BEGINSWITH %@", "dictionary-browser-row-")).firstMatch
         XCTAssertTrue(first.waitForExistence(timeout: 10))
@@ -50,4 +54,32 @@ final class DictionaryBrowserTests: XCTestCase {
         XCTAssertTrue(app.staticTexts["hello"].firstMatch.waitForExistence(timeout: 10))
         app.buttons["完了"].tap()
     }
+    func testActualBrowserDisplaysOpenedSourceAndManifestIdentity() {
+        executionTimeAllowance = 240
+        let app = XCUIApplication()
+        app.launch()
+        let category = app.buttons["settings-category-dictionaries"]
+        XCTAssertTrue(category.waitForExistence(timeout: 45))
+        for _ in 0..<4 where !category.isHittable { app.swipeUp() }
+        category.tap()
+        app.buttons["settings-destination-dictionaryBrowser"].tap()
+        let choice = app.buttons["dictionary-browser-choice"]
+        XCTAssertTrue(choice.waitForExistence(timeout: 30))
+        choice.tap(); app.buttons["英単語"].tap()
+        let query = app.textFields["dictionary-browser-query"]
+        XCTAssertTrue(query.waitForExistence(timeout: 10))
+        query.tap(); query.typeText("hello")
+        XCTAssertTrue(app.staticTexts["hello"].firstMatch.waitForExistence(timeout: 30))
+        app.buttons["検索を閉じる"].tap()
+        let provenance = app.staticTexts["dictionary-browser-source"]
+        XCTAssertTrue(provenance.waitForExistence(timeout: 15))
+        XCTAssertTrue(provenance.label.contains("同梱辞書"))
+        XCTAssertTrue(provenance.label.contains("生成元:"))
+        XCTAssertNotNil(provenance.label.range(of: "辞書 SHA-256: [0-9a-f]{64}", options: .regularExpression))
+        XCTAssertNotNil(provenance.label.range(of: "manifest SHA-256: [0-9a-f]{64}", options: .regularExpression))
+        XCTAssertFalse(provenance.label.contains("未記載"))
+        app.buttons["完了"].tap()
+        app.terminate()
+    }
+
 }
