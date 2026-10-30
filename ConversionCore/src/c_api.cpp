@@ -291,7 +291,6 @@ int sumire_session_update(sumire_session *session,
     check(out && session && request, "null update argument");
     check(request->reading || request->reading_bytes == 0, "null reading");
     check((request->flags & ~uint32_t(63)) == 0 &&
-          ((request->flags & 16) == 0 || (request->flags & 8) == 0) &&
           ((request->flags & 2) == 0 || request->flags == 2), "unsupported or incompatible conversion flags");
     check(!session->has_generation || request->generation > session->generation,
           "stale generation");

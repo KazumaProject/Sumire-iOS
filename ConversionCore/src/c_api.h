@@ -32,7 +32,9 @@ typedef struct {
   uint32_t edit_start_utf16;
   uint32_t candidate_count; /* N-best limit, not total result limit: exact category matches, Japanese predictions and auxiliaries may add results. */
   uint32_t max_states;
-  /* Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
+  /* Bits 3 and 4 may be combined for Japanese completion with bunsetsu ranking.
+   * Bit 4 alone retains the original completion-disabled route.
+   * Bit 3 enables Japanese system/category completion: defaults 3..16 input units,
    * per-session lookahead (default 3), up to 4 system and 4 per enabled category candidates.
    * Also includes kana forms and optional reading-correction completions
    * (3..16 input units, per-session lookahead, no four-candidate cap). All consume only
