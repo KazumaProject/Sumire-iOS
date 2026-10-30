@@ -1060,6 +1060,47 @@ class Tests(unittest.TestCase):
             value=json.loads(self.run_cli('--bunsetsu','--predict-japanese',reading).stdout)['candidates']
             self.assertEqual(value,legacy)
 
+    def install_bunsetsu_auxiliary_completion_fixture(self):
+        connection(self.data/'connection.sud',2671)
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Primary','Secondary'])
+        SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram_unigram.dat',4,['Primary'])
+        (self.data/'mozc').mkdir(exist_ok=True)
+        table=[0]*2671;penalties=[0]*5342
+        header=b'MSGM'+struct.pack('<7I',1,2,2,len(table),len(table),1,len(penalties))
+        (self.data/'mozc/segmenter.dat').write_bytes(header+struct.pack('<2671H',*table)*2+b'\xb5'+struct.pack('<5342H',*penalties))
+        (self.data/'mozc/node_attribute_by_lid.dat').write_bytes(b'MNAT'+struct.pack('<2I',1,len(table))+struct.pack('<2671I',*table))
+        dictionary(self.data/'single_kanji.sud',[('unused','unused',1,100)])
+        for name,cost in [('emoji',100),('emoticon',200),('symbol',300)]:
+            dictionary(self.data/(name+'.sud'),[
+                ('あいう',name.upper()+'-EXACT',1,cost),
+                ('あいうえ',name.upper()+'-COMP',1,cost),
+                ('あいうえおか',name.upper()+'-FAR',1,cost),
+                ('1234',name.upper()+'-NUMERIC',1,cost),
+                ('１２３４',name.upper()+'-WIDE-NUMERIC',1,cost)])
+
+    def test_bunsetsu_auxiliary_completion_c_api_metadata_and_old_modes(self):
+        self.install_bunsetsu_auxiliary_completion_fixture()
+        result=subprocess.run([C_API,str(self.data),'--bunsetsu-auxiliary-completion'],capture_output=True,text=True)
+        self.assertEqual(result.returncode,0,result.stderr)
+
+    def test_bunsetsu_auxiliary_completion_android_bounds_order_and_settings(self):
+        self.install_bunsetsu_auxiliary_completion_fixture()
+        def candidates(reading,*settings):
+            return json.loads(self.run_cli('--bunsetsu','--predict-japanese',*settings,reading).stdout)['candidates']
+        values=candidates('あいう')
+        aux=[c for c in values if c['segments'] and c['segments'][0]['dictionary'] in ['emoji','emoticon','symbol']]
+        self.assertEqual([(c['text'],c['score']) for c in aux], [
+            ('EMOJI-EXACT',100),('EMOTICON-EXACT',200),('EMOJI-COMP',1100),
+            ('EMOTICON-COMP',1200),('EMOJI-FAR',3100),('EMOTICON-FAR',3200),
+            ('SYMBOL-EXACT',300),('SYMBOL-COMP',1300),('SYMBOL-FAR',3300)])
+        for aggressiveness,multiplier in [('conservative',1500),('standard',1000),('aggressive',500)]:
+            rows=candidates('あいう','--prediction-aggressiveness',aggressiveness)
+            self.assertEqual(next(c['score'] for c in rows if c['text']=='EMOJI-COMP'),100+multiplier)
+        self.assertFalse(any(c['text'].endswith('-FAR') for c in candidates('あいう','--prediction-lookahead','1')))
+        self.assertFalse(any(c['text'].endswith(('-COMP','-FAR')) for c in candidates('あい')))
+        for reading in ['123','１２３','あ'*17]:
+            self.assertFalse(any(c['text'].endswith(('-NUMERIC','-EXACT','-COMP','-FAR')) for c in candidates(reading)),reading)
+
     def test_bunsetsu_auxiliary_exact_candidates_do_not_ignore_disabled_prediction(self):
         self.install_auxiliary_dictionary_fixture()
         SYSTEM_NGRAM_FIXTURE.make_asset(self.data/'system_ngram.dat',3,['Primary','Secondary'])
