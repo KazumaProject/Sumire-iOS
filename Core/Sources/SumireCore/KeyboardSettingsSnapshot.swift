@@ -37,6 +37,9 @@ public struct KeyboardSettingsSnapshot: Codable, Equatable {
         )
         result[DeletionBoundary.settingsKey] = .boundedText(4096)
         result["candidateRowCount"] = .number(1...3, integer: true)
+        result[UserDictionaryPredictionSettings.enabledKey] = .boolean
+        result[UserDictionaryPredictionSettings.minimumInputLengthKey] = .number(2...8, integer: true)
+        result[UserDictionaryPredictionSettings.candidateLimitKey] = .number(1...8, integer: true)
         result[LearnedPredictionSettings.enabledKey] = .boolean
         result[LearnedPredictionSettings.minimumInputLengthKey] = .number(1...8, integer: true)
         result[LearnedPredictionSettings.candidateLimitKey] = .number(1...8, integer: true)

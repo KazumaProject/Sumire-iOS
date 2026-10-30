@@ -384,6 +384,18 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             if hasComposition { composition.optionsChanged(); refreshConversion() }
         }
     }
+    private var userDictionaryPredictionSettings = UserDictionaryPredictionSettings()
+    func configureUserDictionaryPrediction(settings: UserDictionaryPredictionSettings) {
+        guard userDictionaryPredictionSettings != settings else { return }
+        beforeInput?()
+        cancelLearning()
+        userDictionaryPredictionSettings = settings
+        converter.setUserDictionaryPredictionSettings(settings)
+        guard hasComposition else { return }
+        clearBunsetsuSession()
+        composition.optionsChanged()
+        refreshConversion()
+    }
     private var learnedPredictionSettings = LearnedPredictionSettings()
     func configureLearnedPrediction(settings: LearnedPredictionSettings) {
         guard learnedPredictionSettings != settings else { return }
@@ -2375,7 +2387,7 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
         bunsetsuSession = session
         renderBunsetsuSession()
         converter.convert(token.segmentReading, generation: token.conversionRequestGeneration, editStart: 0,
-                          omission: omissionSearch, learnedPredictionAllowed: false) { [weak self] response in
+                          omission: omissionSearch, learnedPredictionAllowed: false, userDictionaryPredictionAllowed: false) { [weak self] response in
             guard let self else { return }
             self.beforeInput?()
             guard var current = self.currentBunsetsuSession,

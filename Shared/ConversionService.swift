@@ -17,6 +17,7 @@ struct ConversionCandidate {
     let presentationKind: PresentationKind
     let classifiedCategories: [String]
     /// Full stored reading for a Swift-owned learned prefix row; range remains typed input only.
+    let userDictionaryReading: String?
     let learnedPredictionReading: String?
     let leftID: Int16?
     let rightID: Int16?
@@ -101,7 +102,7 @@ struct ConversionCandidate {
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
                 presentationKind: first.presentationKind, classifiedCategories: categories,
-                leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading)
+                leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading, userDictionaryReading: first.userDictionaryReading)
         }
         return merged
     }
@@ -114,7 +115,7 @@ struct ConversionCandidate {
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
-         leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil) {
+         leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil, userDictionaryReading: String? = nil) {
         self.id = id
         self.text = text
         self.score = score
@@ -128,6 +129,7 @@ struct ConversionCandidate {
         self.presentationKind = presentationKind
         self.classifiedCategories = classifiedCategories
         self.learnedPredictionReading = learnedPredictionReading
+        self.userDictionaryReading = userDictionaryReading
         self.leftID = leftID
         self.rightID = rightID
     }
@@ -168,6 +170,7 @@ final class ConversionService {
     private var lastDictionaryRefresh = 0.0
     private var englishReadingEnabled = true
     private var predictionSettings = JapanesePredictionSettings()
+    private var userDictionaryPredictionSettings = UserDictionaryPredictionSettings()
     private var learnedPredictionSettings = LearnedPredictionSettings()
     private var kotowazaEnabled = true
     private var categoryIDs: [String]?
@@ -248,6 +251,19 @@ final class ConversionService {
         let state = state
         queue.async { state.lastGeneration = nil }
     }
+    func setUserDictionaryPredictionSettings(_ settings: UserDictionaryPredictionSettings) {
+        guard userDictionaryPredictionSettings != settings else { return }
+        userDictionaryPredictionSettings = settings
+        _ = pending.advance()
+        _ = learningConfiguration.advance()
+        let state = state
+        queue.async {
+            state.cancelLearning()
+            state.lastGeneration = nil
+            state.lastCandidates.removeAll(keepingCapacity: false)
+            state.lastCandidateOrder = []
+        }
+    }
     func setLearnedPredictionSettings(_ settings: LearnedPredictionSettings) {
         guard learnedPredictionSettings != settings else { return }
         learnedPredictionSettings = settings
@@ -301,11 +317,12 @@ final class ConversionService {
         queue.async { state.learningPaused = paused; if paused { state.cancelLearning() } }
     }
     func convert(_ reading: String, generation: UInt64, editStart: Int, omission: Bool = false, english: Bool = false,
-                 includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false, learnedPredictionAllowed: Bool = true,
+                 includeBunsetsu: Bool = false, bunsetsuSearch: Bool = false, learnedPredictionAllowed: Bool = true, userDictionaryPredictionAllowed: Bool = true,
                  completion: @escaping (Result<ConversionResponse, Error>) -> Void) {
         let state = state, sourceOverride = sourceOverride
         let mask = categoryMask, englishReading = englishReadingEnabled
         let predictionSettings = predictionSettings, categoryIDs = categoryIDs, kotowazaEnabled = kotowazaEnabled
+        let userDictionaryPredictionSettings = userDictionaryPredictionSettings
         let learnedPredictionSettings = learnedPredictionSettings
         let pending = pending, ticket = pending.advance()
         queue.async {
@@ -450,6 +467,23 @@ final class ConversionService {
                         learnedPredictionReading: entry.reading))
                     if nextID > 0 { nextID -= 1 }
                 }
+                if !english && !bunsetsuSearch && userDictionaryPredictionAllowed {
+                    let userRows = try UserDictionaryPredictionPolicy.candidates(in: state.personal.words,
+                        reading: reading, settings: userDictionaryPredictionSettings)
+                    for entry in userRows {
+                        while !reserved.insert(nextID).inserted {
+                            guard nextID > 0 else { throw NativeError("候補IDを確保できません") }
+                            nextID -= 1
+                        }
+                        // df1 type28 keeps saved reading length but no yomi or
+                        // endpoints. The host consumes typed input, even if LIKE
+                        // wildcards matched a shorter stored reading.
+                        predictions.append(ConversionCandidate(id: nextID, text: entry.word, score: Int64(entry.posScore),
+                            range: NSRange(location: 0, length: reading.utf16.count), dictionaries: ["user"],
+                            userDictionaryReading: entry.reading))
+                        if nextID > 0 { nextID -= 1 }
+                    }
+                }
                 candidates = ConversionCandidate.mergedForDisplay(predictions + candidates)
                 state.lastGeneration = generation
                 state.lastCandidateOrder = candidates.map(\.id)
@@ -546,6 +580,16 @@ final class ConversionService {
             let tail = String(state.lastReading[range.upperBound...])
             guard remaining == nil || tail.utf16.elementsEqual(remaining!.utf16) else {
                 state.cancelLearning(); return
+            }
+            if selected.userDictionaryReading != nil {
+                // df1 processCandidate type28 always commits without recording
+                // candidate learning, for exact/shorter/longer saved readings.
+                sumire_session_reset(state.session)
+                state.lastGeneration = nil
+                state.lastCandidates.removeAll(keepingCapacity: false)
+                state.lastCandidateOrder = []
+                state.cancelLearning()
+                return
             }
             if let storedReading = selected.learnedPredictionReading {
                 guard Array(storedReading.utf16).starts(with: state.lastReading.utf16),

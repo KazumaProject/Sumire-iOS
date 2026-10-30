@@ -22,6 +22,9 @@ private struct AndroidPersonalListDocument: FileDocument {
 
 struct PersonalDictionarySettings: View {
     @ObservedObject var library: PersonalLibrary
+    @AppStorage(UserDictionaryPredictionSettings.enabledKey, store: KeyboardSettings.appDefaults) private var predictionEnabled = true
+    @AppStorage(UserDictionaryPredictionSettings.minimumInputLengthKey, store: KeyboardSettings.appDefaults) private var predictionMinimum = 2
+    @AppStorage(UserDictionaryPredictionSettings.candidateLimitKey, store: KeyboardSettings.appDefaults) private var predictionLimit = 4
     @Environment(\.dismiss) private var dismiss
     @State private var template = false
     @State private var editing: EditItem?
@@ -76,6 +79,14 @@ struct PersonalDictionarySettings: View {
         let visibleEntries = PersonalDictionarySearch.results(for: entries, query: searchQuery)
         NavigationStack {
             List {
+                Section {
+                    Toggle("ユーザー辞書の補完候補", isOn: $predictionEnabled)
+                        .accessibilityIdentifier("user-dictionary-prediction-enabled")
+                    Stepper("補完を始める文字数: \(predictionMinimum)文字", value: $predictionMinimum, in: 2...8)
+                        .disabled(!predictionEnabled).accessibilityIdentifier("user-dictionary-prediction-minimum")
+                    Stepper("ユーザー辞書の候補数: \(predictionLimit)", value: $predictionLimit, in: 1...8)
+                        .disabled(!predictionEnabled).accessibilityIdentifier("user-dictionary-prediction-limit")
+                } footer: { Text("入力途中の読みに続く登録語を候補に表示します。") }
                 Picker("登録先", selection: $template) {
                     Text("ユーザー辞書").tag(false)
                     Text("定型文").tag(true)
