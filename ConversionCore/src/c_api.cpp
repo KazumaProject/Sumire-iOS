@@ -373,6 +373,16 @@ int sumire_result_category(const sumire_result *result, size_t candidate,
   *out = string(result->snapshot->value.candidates[candidate].classified_categories[index]);
   return 0;
 }
+int sumire_result_candidate_context_ids(const sumire_result *result, size_t candidate,
+                                        int *has_ids, uint16_t *left_id, uint16_t *right_id) {
+  if (!result || !has_ids || !left_id || !right_id || candidate >= sumire_result_count(result))
+    return -1;
+  const auto &ids = result->snapshot->value.candidates[candidate].context_ids;
+  *has_ids = ids ? 1 : 0;
+  *left_id = ids ? ids->first : 0;
+  *right_id = ids ? ids->second : 0;
+  return 0;
+}
 int sumire_result_segment_context_ids(const sumire_result *result,
                                       size_t candidate, size_t index,
                                       uint16_t *left_id, uint16_t *right_id) {

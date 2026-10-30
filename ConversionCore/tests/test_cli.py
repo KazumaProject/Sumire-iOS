@@ -100,6 +100,12 @@ class Tests(unittest.TestCase):
     def setUp(self):
         self.temp=tempfile.TemporaryDirectory();self.data=pathlib.Path(self.temp.name)
         dictionary(self.data/'system.sud',ENTRIES);dictionary(self.data/'medical.sud',[('あい','Medical',1,-20)]);connection(self.data/'connection.sud')
+    def test_numeric_candidate_endpoint_api_keeps_segments_lifetime_and_abi(self):
+        self.assertIsNotNone(C_API, "Numeric candidate endpoint ABI executable is required")
+        connection(self.data/'connection.sud', dimension=1842)
+        result=subprocess.run([C_API,str(self.data),'--numeric-contexts'],capture_output=True)
+        self.assertEqual(result.returncode,0,result.stderr.decode())
+
     def test_nfkc_symbol_expansion_consumes_original_utf16_input(self):
         self.install_auxiliary_dictionary_fixture()
         connection(self.data/'connection.sud', dimension=1842)

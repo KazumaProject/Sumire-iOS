@@ -742,8 +742,85 @@ static void test_typed_dictionary_sources(const char *directory) {
   CHECK(sumire_engine_open_with_sources(directory, unique, 2, 0, &a, error, sizeof error) != 0 && a == NULL);
   CHECK(rename(hidden, marker) == 0);
 }
+static void test_numeric_candidate_contexts(const char *directory) {
+  CHECK(sumire_abi_version() == 1);
+  if (sizeof(void *) == 8) {
+    CHECK(sizeof(sumire_request) == 40 && sizeof(sumire_candidate) == 48 && sizeof(sumire_segment) == 40);
+  }
+  char error[256]; sumire_engine *engine = NULL; sumire_session *session = NULL;
+  CHECK(sumire_engine_open(directory,0,&engine,error,sizeof error) == 0);
+  CHECK(sumire_session_create(engine,&session,error,sizeof error) == 0);
+  sumire_request request = {1,"1",1,0,100,200000,12};
+  sumire_result *one = NULL, *time = NULL, *kana = NULL;
+  CHECK(sumire_session_update(session,&request,&one,error,sizeof error) == 0);
+  size_t superscript = (size_t)-1; int raw_absent = 0, generated = 0;
+  for (size_t i = 0; i < sumire_result_count(one); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(one,i,&c) == 0);
+    int known = 77; uint16_t left = 88, right = 99;
+    CHECK(sumire_result_candidate_context_ids(one,i,&known,&left,&right) == 0);
+    if (c.segment_count == 0) {
+      CHECK(known == 1 && left == 2040 && right == 2040);
+      CHECK(c.start_utf16 == 0 && c.length_utf16 == 1 && sumire_result_category_count(one,i) == 0);
+      uint32_t flags = 99; CHECK(sumire_result_candidate_flags(one,i,&flags) == 0 && flags == 0);
+      uint32_t kind = 99; CHECK(sumire_result_candidate_presentation_kind(one,i,&kind) == 0);
+      if (c.text.size == strlen("１") && !memcmp(c.text.data,"１",c.text.size)) CHECK(kind == SUMIRE_PRESENTATION_FULL_WIDTH);
+      if (c.text.size == 1 && c.text.data[0] == '1' && c.score == 8000) CHECK(kind == SUMIRE_PRESENTATION_HALF_WIDTH);
+      if (c.text.size == strlen("①") && !memcmp(c.text.data,"①",c.text.size)) CHECK(kind == SUMIRE_PRESENTATION_NUMERIC_SYMBOL);
+      if (c.text.size == strlen("¹") && !memcmp(c.text.data,"¹",c.text.size)) superscript = i;
+      ++generated;
+    } else if (c.score == 4000 && c.text.size == 1 && c.text.data[0] == '1') {
+      CHECK(known == 0 && left == 0 && right == 0);
+      CHECK(sumire_result_segment_context_ids(one,i,0,&left,&right) == 0);
+      CHECK(left == 0 && right == 0); raw_absent = 1; // Existing segment contract remains unchanged.
+    }
+  }
+  CHECK(generated > 8 && raw_absent && superscript != (size_t)-1);
+  int known = 77; uint16_t left = 88, right = 99;
+  CHECK(sumire_result_candidate_context_ids(NULL,0,&known,&left,&right) == -1 && known == 77 && left == 88 && right == 99);
+  CHECK(sumire_result_candidate_context_ids(one,sumire_result_count(one),&known,&left,&right) == -1 && known == 77 && left == 88 && right == 99);
+  CHECK(sumire_result_candidate_context_ids(one,0,NULL,&left,&right) == -1 && left == 88 && right == 99);
+  CHECK(sumire_result_candidate_context_ids(one,0,&known,NULL,&right) == -1 && known == 77 && right == 99);
+  CHECK(sumire_result_candidate_context_ids(one,0,&known,&left,NULL) == -1 && known == 77 && left == 88);
+  request = (sumire_request){2,"0101",4,0,100,200000,12};
+  CHECK(sumire_session_update(session,&request,&time,error,sizeof error) == 0);
+  size_t time_index = (size_t)-1; int dated = 0;
+  for (size_t i = 0; i < sumire_result_count(time); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(time,i,&c) == 0);
+    if (c.segment_count != 0) continue;
+    CHECK(sumire_result_candidate_context_ids(time,i,&known,&left,&right) == 0 && known == 1);
+    int temporal = (c.text.size == strlen("01:01") && !memcmp(c.text.data,"01:01",c.text.size)) ||
+      (c.text.size == strlen("01時01分") && !memcmp(c.text.data,"01時01分",c.text.size)) ||
+      (c.text.size == strlen("1月1日") && !memcmp(c.text.data,"1月1日",c.text.size));
+    CHECK(left == (temporal ? 1851 : 2040) && right == left);
+    CHECK(c.start_utf16 == 0 && c.length_utf16 == 4 && c.segment_count == 0);
+    if (temporal) { ++dated; time_index = i; }
+  }
+  CHECK(dated == 3 && time_index != (size_t)-1);
+  request = (sumire_request){3,"あ",strlen("あ"),0,100,200000,12};
+  CHECK(sumire_session_update(session,&request,&kana,error,sizeof error) == 0);
+  int nil_utility = 0;
+  for (size_t i = 0; i < sumire_result_count(kana); ++i) {
+    sumire_candidate c; CHECK(sumire_result_candidate(kana,i,&c) == 0);
+    if (!c.segment_count && c.score == 6000) {
+      CHECK(sumire_result_candidate_context_ids(kana,i,&known,&left,&right) == 0 && known == 0 && left == 0 && right == 0);
+      nil_utility = 1;
+    }
+  }
+  CHECK(nil_utility);
+  sumire_session_reset(session); sumire_session_destroy(session); sumire_engine_close(engine);
+  CHECK(sumire_result_candidate_context_ids(one,superscript,&known,&left,&right) == 0 && known == 1 && left == 2040 && right == 2040);
+  CHECK(sumire_result_candidate_context_ids(time,time_index,&known,&left,&right) == 0 && known == 1 && left == 1851 && right == 1851);
+  sumire_candidate retained; uint32_t kind = 99;
+  CHECK(sumire_result_candidate(one,superscript,&retained) == 0 && retained.segment_count == 0 && retained.length_utf16 == 1);
+  CHECK(sumire_result_candidate_presentation_kind(one,superscript,&kind) == 0 && kind == SUMIRE_PRESENTATION_NONE);
+  sumire_result_destroy(one); sumire_result_destroy(time); sumire_result_destroy(kana);
+}
+
 int main(int argc, char **argv) {
   test_bunsetsu_metadata_invalid_arguments();
+  if (argc == 3 && strcmp(argv[2],"--numeric-contexts") == 0) {
+    test_numeric_candidate_contexts(argv[1]); return 0;
+  }
   if (argc == 3 && strcmp(argv[2], "--typed-sources") == 0) {
     test_typed_dictionary_sources(argv[1]); return 0;
   }

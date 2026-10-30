@@ -3,6 +3,7 @@
 #include <cstddef>
 #include <memory>
 #include <optional>
+#include <utility>
 #include <string>
 #include <vector>
 namespace sumire {
@@ -31,6 +32,8 @@ struct Candidate {
   // Reference type 5: a yomiPartList match shorter than the input (type 2 otherwise).
   bool is_reading_prefix = false;
   CandidatePresentationKind presentation_kind = CandidatePresentationKind::none;
+  // Known candidate-level endpoints do not imply a dictionary path/segment.
+  std::optional<std::pair<uint16_t, uint16_t>> context_ids{};
 };
 struct CandidateSplitPattern {
   std::string surface;

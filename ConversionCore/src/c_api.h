@@ -198,6 +198,11 @@ int sumire_result_reading_correction(const sumire_result *result, size_t index,
                                      sumire_string *raw, sumire_string *reading);
 int sumire_result_segment(const sumire_result *result, size_t candidate_index,
                           size_t segment_index, sumire_segment *out);
+/* Optional candidate-level endpoints (e.g. generated numeric surfaces) without
+ * inventing a dictionary segment. Valid absence: has_ids=0, IDs=0. Invalid
+ * arguments/index: -1. Existing ABI structs/version and segment getter unchanged. */
+int sumire_result_candidate_context_ids(const sumire_result *result, size_t candidate,
+                                        int *has_ids, uint16_t *left_id, uint16_t *right_id);
 /* Copies both path-node endpoints; errors leave outputs unchanged. */
 int sumire_result_segment_context_ids(const sumire_result *result,
                                      size_t candidate_index, size_t segment_index,

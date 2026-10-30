@@ -147,6 +147,7 @@ void append_value_based_numeric_symbols(std::vector<Candidate> &candidates,
   auto append = [&](char16_t surface, int64_t score) {
     Candidate candidate{utf8(std::u16string(1, surface)), score, {}};
     candidate.presentation_kind = CandidatePresentationKind::numeric_symbol;
+    candidate.context_ids = std::pair<uint16_t, uint16_t>{2040, 2040};
     candidates.push_back(std::move(candidate));
   };
   if (narrowed == 0) {
@@ -177,9 +178,11 @@ void append_digit_prediction_candidates(std::vector<Candidate> &candidates,
                                         std::u16string_view input,
                                         bool numeric_symbol_candidates) {
   auto append = [&](std::string text, int64_t score,
-                    CandidatePresentationKind kind = CandidatePresentationKind::none) {
+                    CandidatePresentationKind kind = CandidatePresentationKind::none,
+                    uint16_t context_id = 2040) {
     Candidate candidate{std::move(text), score, {}};
     candidate.presentation_kind = kind;
+    candidate.context_ids = std::pair<uint16_t, uint16_t>{context_id, context_id};
     candidates.push_back(std::move(candidate));
   };
   const std::u16string digits = normalize_numeric_input(input);
@@ -200,7 +203,8 @@ void append_digit_prediction_candidates(std::vector<Candidate> &candidates,
     time_candidates.emplace_back(hours + ":" + minutes, 8000);
     time_candidates.emplace_back(hours + "時" + minutes + "分", 8000);
   }
-  for (auto &candidate : time_candidates) append(std::move(candidate.first), candidate.second);
+  for (auto &candidate : time_candidates)
+    append(std::move(candidate.first), candidate.second, CandidatePresentationKind::none, 1851);
 
   if (ascii_digits && (input.size() == 3 || input.size() == 4) && has_long_value) {
     int64_t month = 0, day = 0;
@@ -208,7 +212,8 @@ void append_digit_prediction_candidates(std::vector<Candidate> &candidates,
     const bool valid_month = parse_ascii_nonnegative_long(digits.substr(0, split), month);
     const bool valid_day = parse_ascii_nonnegative_long(digits.substr(split), day);
     if (valid_month && valid_day && month >= 1 && month <= 12 && day >= 1 && day <= 31)
-      append(std::to_string(month) + "月" + std::to_string(day) + "日", 8000);
+      append(std::to_string(month) + "月" + std::to_string(day) + "日", 8000,
+             CandidatePresentationKind::none, 1851);
   }
   append(utf8(full_width), 8000, CandidatePresentationKind::full_width);
   append(utf8(digits), 8000, CandidatePresentationKind::half_width);
