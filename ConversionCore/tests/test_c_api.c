@@ -243,7 +243,7 @@ static void test_bunsetsu_auxiliary_completion(const char *directory) {
       CHECK(segment.start_utf16 == 0 && segment.length_utf16 == 3);
       uint16_t left = 99, right = 99; uint32_t flags = 99;
       CHECK(sumire_result_segment_context_ids(result, i, 0, &left, &right) == 0);
-      CHECK(left == (modes[m] == 24 ? 1 : 0) && right == (modes[m] == 24 ? 1 : 0));
+      CHECK(left == (modes[m] == 16 ? 0 : 1) && right == (modes[m] == 16 ? 0 : 1));
       CHECK(sumire_result_candidate_flags(result, i, &flags) == 0 && flags == 0);
     }
     if (m == 0) owned = result; else sumire_result_destroy(result);

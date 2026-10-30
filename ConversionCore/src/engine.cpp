@@ -1827,7 +1827,7 @@ Result Engine::convert(const std::string &input, size_t count, size_t limit,
         return candidates;
       auto segment = [&](const std::string &text, uint32_t token) {
         const auto pos = dictionary.pos[token];
-        const bool known = japanese_prediction && bunsetsu_search;
+        const bool known = japanese_prediction;
         return Segment{text, dictionary.name, 0, uint32_t(reading.size()),
                        uint16_t(known ? impl->connection.left[pos] : 0),
                        uint16_t(known ? impl->connection.right[pos] : 0)};
