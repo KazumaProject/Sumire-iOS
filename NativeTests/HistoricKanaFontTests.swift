@@ -7,7 +7,7 @@ final class HistoricKanaFontTests: XCTestCase {
     func testBundledFontHasRealGlyphsForHistoricKanaCandidates() throws {
         let font = try XCTUnwrap(HistoricKanaFont.fallback(size: 18))
         XCTAssertEqual(font.fontName, "NotoSerifHentaigana-Regular")
-        for point: UInt32 in [0x1B005, 0x1B116, 0x1B117, 0x1B118, 0x1B119, 0x1B11A, 0x1B11B, 0x1B11C] {
+        for point: UInt32 in [0x1B002, 0x1B003, 0x1B004, 0x1B005, 0x1B116, 0x1B117, 0x1B118, 0x1B119, 0x1B11A, 0x1B11B, 0x1B11C] {
             let text = String(UnicodeScalar(point)!)
             let line = CTLineCreateWithAttributedString(HistoricKanaFont.attributed(text))
             let runs = CTLineGetGlyphRuns(line) as! [CTRun]
