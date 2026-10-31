@@ -133,6 +133,17 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x⌊1⌋"), "Android does not allow a floor delimiter as implicit multiplication")
     }
 
+    func testDelimitedFunctionAliasesPassAndroidFormulaGate() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("absolute(x)"),
+            AndroidFormulaCandidatePolicy.parse("abs(x)")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("ceiling(x)"),
+            AndroidFormulaCandidatePolicy.parse("ceil(x)")
+        )
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))

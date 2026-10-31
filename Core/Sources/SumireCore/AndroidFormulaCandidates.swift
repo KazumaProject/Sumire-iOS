@@ -101,7 +101,7 @@ public enum AndroidFormulaCandidatePolicy {
         if source == "e" { return true }
         if source.contains(where: { "^_=/+*%!<>≤≥≠≈≃≡≢≅≍≰≱∼∝→⇒↔⇔←↦⟶⟹⟷⟺⟵⟼√|‖∥∣×÷±∓⋅⊄⊅⊈⊉∈∉∋⊂⊆⊃⊇∪∩∧∨¬⌊⌋⌈⌉⟨⟩".contains($0) }) { return true }
         if source.contains(where: { "πΠ∞∑∏∫∬∭∮∂∇∀∃ℕℤℚℝℂℵαβγδεζηθικλμνξοπρστυφχψωϵεϑϕφςϖϱΓΔΘΛΞΣΥΦΨΩ".contains($0) }) { return true }
-        if source.range(of: #"(?i)(?:^|[^a-z])(?:sqrt|root|nroot|sum|sigma|prod|product|int|integral|lim|abs|norm|floor|ceil|vec|hat|bar|dot|ddot|tilde|underline|bold)\s*[({]"#, options: .regularExpression) != nil { return true }
+        if source.range(of: #"(?i)(?:^|[^a-z])(?:sqrt|root|nroot|sum|sigma|prod|product|int|integral|lim|abs|absolute|norm|floor|ceil|ceiling|vec|hat|bar|dot|ddot|tilde|underline|bold)\s*[({]"#, options: .regularExpression) != nil { return true }
         return node.containsMathStructure || node.containsMathSymbol
     }
 }
@@ -330,7 +330,7 @@ private struct FormulaExpressionParser {
             let word = identifier()
             tokens += 1
             let lowercasedWord = word.lowercased()
-            let canonical = Greek.unicode[word] ?? word
+            let canonical = Greek.unicode[word] ?? Greek.unicode[lowercasedWord] ?? word
             spaces()
             if let operatorName = largeOperatorNames[lowercasedWord], !["min", "max"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen() else { return nil }
@@ -829,15 +829,39 @@ private let commandSymbols: [String: FormulaSymbol] = [
 })) { _, relation in relation }
 private let namedSymbols: [String: FormulaSymbol] = [
     "infty": .init(unicode:"∞", tex:"\\infty"), "infinity": .init(unicode:"∞", tex:"\\infty"), "aleph": .init(unicode:"ℵ", tex:"\\aleph"),
-    "empty": .init(unicode:"∅", tex:"\\varnothing"), "emptyset": .init(unicode:"∅", tex:"\\emptyset"), "varnothing": .init(unicode:"∅", tex:"\\varnothing"),
-    "union": .init(unicode:"∪", tex:"\\cup"), "intersect": .init(unicode:"∩", tex:"\\cap"), "intersection": .init(unicode:"∩", tex:"\\cap"),
-    "and": .init(unicode:"∧", tex:"\\land"), "wedge": .init(unicode:"∧", tex:"\\land"), "or": .init(unicode:"∨", tex:"\\lor"), "vee": .init(unicode:"∨", tex:"\\lor"),
-    "not": .init(unicode:"¬", tex:"\\neg"), "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"),
-    "owns": .init(unicode:"∋", tex:"\\ni"), "subseteq": .init(unicode:"⊆", tex:"\\subseteq"), "supseteq": .init(unicode:"⊇", tex:"\\supseteq"),
+    "empty": .init(unicode:"∅", tex:"\\varnothing"), "emptyset": .init(unicode:"∅", tex:"\\varnothing"),
+    "union": .init(unicode:"∪", tex:"\\cup"), "cup": .init(unicode:"∪", tex:"\\cup"),
+    "intersect": .init(unicode:"∩", tex:"\\cap"), "intersection": .init(unicode:"∩", tex:"\\cap"), "cap": .init(unicode:"∩", tex:"\\cap"),
+    "and": .init(unicode:"∧", tex:"\\land"), "land": .init(unicode:"∧", tex:"\\land"), "wedge": .init(unicode:"∧", tex:"\\land"),
+    "or": .init(unicode:"∨", tex:"\\lor"), "lor": .init(unicode:"∨", tex:"\\lor"), "vee": .init(unicode:"∨", tex:"\\lor"),
+    "not": .init(unicode:"¬", tex:"\\neg"), "neg": .init(unicode:"¬", tex:"\\neg"), "lnot": .init(unicode:"¬", tex:"\\neg"),
+    "ni": .init(unicode:"∋", tex:"\\ni"), "owns": .init(unicode:"∋", tex:"\\ni"),
+    "subset": .init(unicode:"⊂", tex:"\\subset"), "subseteq": .init(unicode:"⊆", tex:"\\subseteq"),
+    "nsubset": .init(unicode:"⊄", tex:"\\nsubset"), "nsubseteq": .init(unicode:"⊈", tex:"\\nsubseteq"),
+    "supset": .init(unicode:"⊃", tex:"\\supset"), "supseteq": .init(unicode:"⊇", tex:"\\supseteq"),
+    "nsupset": .init(unicode:"⊅", tex:"\\nsupset"), "nsupseteq": .init(unicode:"⊉", tex:"\\nsupseteq"),
     "notin": .init(unicode:"∉", tex:"\\notin"), "equiv": .init(unicode:"≡", tex:"\\equiv"), "nequiv": .init(unicode:"≢", tex:"\\not\\equiv"),
-    "approx": .init(unicode:"≈", tex:"\\approx"), "simeq": .init(unicode:"≃", tex:"\\simeq"), "propto": .init(unicode:"∝", tex:"\\propto"),
-    "to": .init(unicode:"→", tex:"\\to"), "rightarrow": .init(unicode:"→", tex:"\\rightarrow"), "leftarrow": .init(unicode:"←", tex:"\\leftarrow"),
-    "mapsto": .init(unicode:"↦", tex:"\\mapsto"), "iff": .init(unicode:"⇔", tex:"\\Leftrightarrow"), "implies": .init(unicode:"⇒", tex:"\\Rightarrow")
+    "cong": .init(unicode:"≅", tex:"\\cong"), "approx": .init(unicode:"≈", tex:"\\approx"),
+    "simeq": .init(unicode:"≃", tex:"\\simeq"), "sim": .init(unicode:"∼", tex:"\\sim"), "propto": .init(unicode:"∝", tex:"\\propto"),
+    "to": .init(unicode:"→", tex:"\\to"), "rightarrow": .init(unicode:"→", tex:"\\to"),
+    "leftarrow": .init(unicode:"←", tex:"\\leftarrow"), "mapsto": .init(unicode:"↦", tex:"\\mapsto"),
+    "iff": .init(unicode:"⇔", tex:"\\Leftrightarrow"), "implies": .init(unicode:"⇒", tex:"\\Rightarrow"),
+    "natural": .init(unicode:"ℕ", tex:"\\mathbb{N}"), "naturals": .init(unicode:"ℕ", tex:"\\mathbb{N}"),
+    "integer": .init(unicode:"ℤ", tex:"\\mathbb{Z}"), "integers": .init(unicode:"ℤ", tex:"\\mathbb{Z}"),
+    "rational": .init(unicode:"ℚ", tex:"\\mathbb{Q}"), "rationals": .init(unicode:"ℚ", tex:"\\mathbb{Q}"),
+    "real": .init(unicode:"ℝ", tex:"\\mathbb{R}"), "reals": .init(unicode:"ℝ", tex:"\\mathbb{R}"),
+    "complex": .init(unicode:"ℂ", tex:"\\mathbb{C}"), "complexes": .init(unicode:"ℂ", tex:"\\mathbb{C}"),
+    "sin": .init(unicode:"sin", tex:"\\sin"), "cos": .init(unicode:"cos", tex:"\\cos"), "tan": .init(unicode:"tan", tex:"\\tan"),
+    "arcsin": .init(unicode:"arcsin", tex:"\\arcsin"), "asin": .init(unicode:"arcsin", tex:"\\arcsin"),
+    "arccos": .init(unicode:"arccos", tex:"\\arccos"), "acos": .init(unicode:"arccos", tex:"\\arccos"),
+    "arctan": .init(unicode:"arctan", tex:"\\arctan"), "atan": .init(unicode:"arctan", tex:"\\arctan"),
+    "sinh": .init(unicode:"sinh", tex:"\\sinh"), "cosh": .init(unicode:"cosh", tex:"\\cosh"), "tanh": .init(unicode:"tanh", tex:"\\tanh"),
+    "sec": .init(unicode:"sec", tex:"\\sec"), "csc": .init(unicode:"csc", tex:"\\csc"), "cot": .init(unicode:"cot", tex:"\\cot"),
+    "arcsinh": .init(unicode:"arcsinh", tex:"\\operatorname{arcsinh}"), "asinh": .init(unicode:"arcsinh", tex:"\\operatorname{arcsinh}"),
+    "arccosh": .init(unicode:"arccosh", tex:"\\operatorname{arccosh}"), "acosh": .init(unicode:"arccosh", tex:"\\operatorname{arccosh}"),
+    "arctanh": .init(unicode:"arctanh", tex:"\\operatorname{arctanh}"), "atanh": .init(unicode:"arctanh", tex:"\\operatorname{arctanh}"),
+    "ln": .init(unicode:"ln", tex:"\\ln"), "log": .init(unicode:"log", tex:"\\log"), "exp": .init(unicode:"exp", tex:"\\exp"),
+    "mod": .init(unicode:"mod", tex:"\\bmod")
 ]
 private let mathFunctions: [String: String] = [
     "sqrt":"sqrt", "sin":"sin", "cos":"cos", "tan":"tan", "asin":"arcsin", "acos":"arccos", "atan":"arctan",
