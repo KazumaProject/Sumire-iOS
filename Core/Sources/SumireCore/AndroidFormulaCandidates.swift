@@ -280,7 +280,26 @@ private struct FormulaExpressionParser {
 
     private mutating func primary(stoppingAt stop: Set<Character>) -> FormulaNode? {
         spaces()
-        guard let c = peek, !atStop(stop), !["+", "-", "−", "–", "—", "*", "/", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
+        guard let c = peek, !atStop(stop) else { return nil }
+        if c.isNumber || (c == "." && characters.indices.contains(index + 1) && characters[index + 1].isNumber) {
+            let start = index
+            var digitCount = 0
+            while let digit = peek, digit.isNumber {
+                index += 1
+                digitCount += 1
+            }
+            if peek == "." {
+                index += 1
+                while let digit = peek, digit.isNumber {
+                    index += 1
+                    digitCount += 1
+                }
+            }
+            guard digitCount > 0 else { return nil }
+            tokens += 1
+            return .number(String(characters[start..<index]))
+        }
+        guard !["+", "-", "−", "–", "—", "*", "/", ".", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
         if consume("(") {
             guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
             leaveDepth(); return .delimited("(", value, ")", latexSized: false)
@@ -300,12 +319,6 @@ private struct FormulaExpressionParser {
         if c == "⌊" { return literalDelimited("⌊", "⌋", left: "⌊", right: "⌋") }
         if c == "⌈" { return literalDelimited("⌈", "⌉", left: "⌈", right: "⌉") }
         if c == "⟨" { return literalDelimited("⟨", "⟩", left: "⟨", right: "⟩") }
-        if c.isNumber {
-            let start = index
-            while let digit = peek, digit.isNumber || digit == "." { index += 1 }
-            tokens += 1
-            return .number(String(characters[start..<index]))
-        }
         if c.isLetter {
             let word = identifier()
             tokens += 1
@@ -588,7 +601,9 @@ private struct FormulaExpressionParser {
     private mutating func spaces() { while peek?.isWhitespace == true { index += 1 } }
     private func atStop(_ stop: Set<Character>) -> Bool { peek.map(stop.contains) ?? false }
     private func startsPrimary(_ c: Character) -> Bool {
-        c.isNumber || c.isLetter || c == "(" || c == "{" || c == "\\" || "π∞∑∏∫√αβγΔ".contains(c)
+        c.isNumber || (c == "." && characters.indices.contains(index + 1) && characters[index + 1].isNumber) ||
+            c.isLetter || "([{|‖√⌊⌈⟨\\".contains(c) ||
+            "πΠ∞∑∏∫∬∭∮∂∇∀∃∅ℕℤℚℝℂ".contains(c)
     }
     private mutating func enterDepth() -> Bool { depth += 1; return depth <= 32 && tokens <= 128 }
     private mutating func leaveDepth() { depth = max(0, depth - 1) }

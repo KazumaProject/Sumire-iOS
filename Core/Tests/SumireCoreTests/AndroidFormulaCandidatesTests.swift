@@ -120,6 +120,17 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x module y"), "Do not treat a mod identifier prefix as an operator")
     }
 
+    func testLeadingDecimalAndBracketAdjacencyMatchAndroid() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse(".5^2"),
+            .init(unicodeText: ".5²", normalizedTex: ".5^{2}")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x^2[1]"),
+            .init(unicodeText: "x²[1]", normalizedTex: "x^{2}[1]")
+        )
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))
