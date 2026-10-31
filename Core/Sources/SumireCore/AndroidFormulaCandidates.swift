@@ -48,7 +48,7 @@ public enum AndroidFormulaCandidatePolicy {
     public static func layout(
         for input: String,
         config: AndroidFormulaLayoutConfig = AndroidFormulaLayoutConfig(),
-        measureText: (String, Double) -> Double = { value, size in Double(value.count) * size * 0.58 }
+        measureText: (String, Double) -> Double = { value, size in Double(value.utf16.count) * size * 0.58 }
     ) -> AndroidFormulaLayout? {
         guard let node = parseNode(input) else { return nil }
         return AndroidFormulaLayoutEngine.layout(node, config: config, measureText: measureText)

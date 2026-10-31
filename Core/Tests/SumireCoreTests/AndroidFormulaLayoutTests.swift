@@ -48,6 +48,22 @@ final class AndroidFormulaLayoutTests: XCTestCase {
         })
     }
 
+    func testDefaultTextMeasurementUsesAndroidUTF16Length() throws {
+        let formula = "𝑥+1"
+        let defaultLayout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(for: formula))
+        let utf16Layout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(
+            for: formula,
+            measureText: { value, size in Double(value.utf16.count) * size * 0.58 }
+        ))
+        let characterCountLayout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(
+            for: formula,
+            measureText: { value, size in Double(value.count) * size * 0.58 }
+        ))
+
+        XCTAssertEqual(defaultLayout.width, utf16Layout.width, accuracy: 0.000_001)
+        XCTAssertGreaterThan(defaultLayout.width, characterCountLayout.width)
+    }
+
     func testAllDrawingOperationsFitReportedVerticalBounds() throws {
         let config = AndroidFormulaLayoutConfig(fontSize: 18)
         let layout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(
