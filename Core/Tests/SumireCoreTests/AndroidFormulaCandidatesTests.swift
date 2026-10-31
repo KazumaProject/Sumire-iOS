@@ -129,6 +129,8 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
             AndroidFormulaCandidatePolicy.parse("x^2[1]"),
             .init(unicodeText: "x²[1]", normalizedTex: "x^{2}[1]")
         )
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("½^2"), "Android does not treat a Unicode fraction as a decimal digit")
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x⌊1⌋"), "Android does not allow a floor delimiter as implicit multiplication")
     }
 
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {

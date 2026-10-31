@@ -158,6 +158,12 @@ private func shouldParenthesizeScriptForUnicode(_ node: FormulaNode) -> Bool {
     }
 }
 
+private func isAndroidDigit(_ character: Character) -> Bool {
+    let scalars = Array(character.unicodeScalars)
+    guard scalars.count == 1, let scalar = scalars.first else { return false }
+    return scalar.value <= 0xFFFF && scalar.properties.generalCategory == .decimalNumber
+}
+
 private struct FormulaExpressionParser {
     private let characters: [Character]
     private var index = 0
@@ -281,16 +287,16 @@ private struct FormulaExpressionParser {
     private mutating func primary(stoppingAt stop: Set<Character>) -> FormulaNode? {
         spaces()
         guard let c = peek, !atStop(stop) else { return nil }
-        if c.isNumber || (c == "." && characters.indices.contains(index + 1) && characters[index + 1].isNumber) {
+        if isAndroidDigit(c) || (c == "." && characters.indices.contains(index + 1) && isAndroidDigit(characters[index + 1])) {
             let start = index
             var digitCount = 0
-            while let digit = peek, digit.isNumber {
+            while let digit = peek, isAndroidDigit(digit) {
                 index += 1
                 digitCount += 1
             }
             if peek == "." {
                 index += 1
-                while let digit = peek, digit.isNumber {
+                while let digit = peek, isAndroidDigit(digit) {
                     index += 1
                     digitCount += 1
                 }
@@ -299,6 +305,7 @@ private struct FormulaExpressionParser {
             tokens += 1
             return .number(String(characters[start..<index]))
         }
+        guard !c.isNumber else { return nil }
         guard !["+", "-", "−", "–", "—", "*", "/", ".", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
         if consume("(") {
             guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
@@ -596,13 +603,13 @@ private struct FormulaExpressionParser {
               String(characters[index..<end]).lowercased() == value.lowercased() else { return false }
         guard characters.indices.contains(end) else { return true }
         let next = characters[end]
-        return !next.isLetter && !next.isNumber && next != "∞"
+        return !next.isLetter && !isAndroidDigit(next) && next != "∞"
     }
     private mutating func spaces() { while peek?.isWhitespace == true { index += 1 } }
     private func atStop(_ stop: Set<Character>) -> Bool { peek.map(stop.contains) ?? false }
     private func startsPrimary(_ c: Character) -> Bool {
-        c.isNumber || (c == "." && characters.indices.contains(index + 1) && characters[index + 1].isNumber) ||
-            c.isLetter || "([{|‖√⌊⌈⟨\\".contains(c) ||
+        isAndroidDigit(c) || (c == "." && characters.indices.contains(index + 1) && isAndroidDigit(characters[index + 1])) ||
+            c.isLetter || "([{|‖√\\".contains(c) ||
             "πΠ∞∑∏∫∬∭∮∂∇∀∃∅ℕℤℚℝℂ".contains(c)
     }
     private mutating func enterDepth() -> Bool { depth += 1; return depth <= 32 && tokens <= 128 }
