@@ -69,6 +69,26 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         }
     }
 
+    func testMinusAndSquareBracketScriptMatchAndroidRendering() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x−y^2"),
+            .init(unicodeText: "x−y²", normalizedTex: "x−y^{2}")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("−x^2"),
+            .init(unicodeText: "−x²", normalizedTex: "−x^{2}")
+        )
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x–y^2"), "Android does not normalize en dash to minus")
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x—y^2"), "Android does not normalize em dash to minus")
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("–x^2"), "En dash is not a formula prefix operator")
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("—x^2"), "Em dash is not a formula prefix operator")
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x^[n+1]"),
+            .init(unicodeText: "x[ⁿ⁺¹]", normalizedTex: "x^{[n+1]}")
+        )
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x^[n+1"), "Reject an unfinished square-bracket group")
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))

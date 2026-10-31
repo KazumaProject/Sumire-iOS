@@ -91,7 +91,6 @@ public enum AndroidFormulaCandidatePolicy {
             switch value {
             case 0x00D7: return UnicodeScalar(0x2A)!
             case 0x00F7: return UnicodeScalar(0x2F)!
-            case 0x2212, 0x2013, 0x2014: return UnicodeScalar(0x2D)!
             default: return scalar
             }
         }))
@@ -172,7 +171,8 @@ private struct FormulaExpressionParser {
         guard var left = multiplicative(stoppingAt: stop) else { return nil }
         while true {
             spaces()
-            guard !atStop(stop), let c = peek, c == "+" || (c == "-" && !matches("->")) else { break }
+            guard !atStop(stop), let c = peek,
+                  c == "+" || c == "−" || (c == "-" && !matches("->")) else { break }
             index += 1; tokens += 1
             guard let right = multiplicative(stoppingAt: stop) else { return nil }
             left = row([left, .symbol(String(c)), right])
@@ -204,7 +204,7 @@ private struct FormulaExpressionParser {
 
     private mutating func unary(stoppingAt stop: Set<Character>) -> FormulaNode? {
         spaces()
-        if let c = peek, c == "+" || c == "-" {
+        if let c = peek, c == "+" || c == "-" || c == "−" {
             index += 1; tokens += 1
             guard let value = unary(stoppingAt: stop) else { return nil }
             return row([.symbol(String(c)), value])
@@ -251,10 +251,14 @@ private struct FormulaExpressionParser {
 
     private mutating func primary(stoppingAt stop: Set<Character>) -> FormulaNode? {
         spaces()
-        guard let c = peek, !atStop(stop), !["+", "-", "*", "/", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
+        guard let c = peek, !atStop(stop), !["+", "-", "−", "–", "—", "*", "/", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
         if consume("(") {
             guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
             leaveDepth(); return .delimited("(", value, ")", latexSized: false)
+        }
+        if consume("[") {
+            guard enterDepth(), let value = relation(stoppingAt: ["]"]), consume("]") else { return nil }
+            leaveDepth(); return .delimited("[", value, "]", latexSized: false)
         }
         if consume("{") {
             guard enterDepth(), let value = relation(stoppingAt: ["}"]), consume("}") else { return nil }
