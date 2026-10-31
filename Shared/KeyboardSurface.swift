@@ -2599,7 +2599,13 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 self.converted = result.candidates
                 self.presentedCandidates = candidates
                 self.resultGeneration = generation
-                self.candidateBar.setCandidates(candidates.map { CandidateBar.Presentation(text: $0.text, annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ") })
+                self.candidateBar.setCandidates(candidates.map {
+                    CandidateBar.Presentation(
+                        text: $0.text,
+                        annotation: $0.textMacroID == nil ? $0.displayAnnotation : "定型マクロ",
+                        formulaSource: $0.dictionaries.contains("formula_candidate") ? query : nil
+                    )
+                })
                 self.candidateBar.isUpdating = false
                 let shouldApplyLivePreview = self.liveConversion && !self.englishComposition
                     && self.physicalFunctionKeyPreviewSuppressionGeneration != generation

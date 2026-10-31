@@ -33,6 +33,28 @@ public enum AndroidFormulaCandidatePolicy {
 
     /// Parses the documented shorthand and a deliberately bounded TeX subset.
     public static func parse(_ input: String) -> AndroidFormulaRendering? {
+        guard let node = parseNode(input) else { return nil }
+        let rendered = AndroidFormulaRendering(
+            unicodeText: FormulaTextRenderer.unicode(node),
+            normalizedTex: FormulaTextRenderer.tex(node)
+        )
+        guard !rendered.unicodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
+              !rendered.normalizedTex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
+        return rendered
+    }
+
+    /// Produces the same font-independent drawing plan used by Android's FormulaView.
+    /// The caller supplies platform text metrics; this method neither evaluates nor commits text.
+    public static func layout(
+        for input: String,
+        config: AndroidFormulaLayoutConfig = AndroidFormulaLayoutConfig(),
+        measureText: (String, Double) -> Double = { value, size in Double(value.count) * size * 0.58 }
+    ) -> AndroidFormulaLayout? {
+        guard let node = parseNode(input) else { return nil }
+        return AndroidFormulaLayoutEngine.layout(node, config: config, measureText: measureText)
+    }
+
+    private static func parseNode(_ input: String) -> FormulaNode? {
         guard input.unicodeScalars.count <= 200, input.utf16.count <= 255 else { return nil }
         let trimmed = input.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty,
@@ -56,13 +78,7 @@ public enum AndroidFormulaCandidatePolicy {
 
         var parser = FormulaExpressionParser(source)
         guard let node = parser.parse(), isMathLike(source, node: node) else { return nil }
-        let rendered = AndroidFormulaRendering(
-            unicodeText: FormulaTextRenderer.unicode(node),
-            normalizedTex: FormulaTextRenderer.tex(node)
-        )
-        guard !rendered.unicodeText.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty,
-              !rendered.normalizedTex.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else { return nil }
-        return rendered
+        return node
     }
 
     private static func normalize(_ value: String) -> String {
@@ -91,7 +107,7 @@ public enum AndroidFormulaCandidatePolicy {
     }
 }
 
-private indirect enum FormulaNode {
+indirect enum FormulaNode {
     case number(String)
     case symbol(String, tex: String? = nil)
     case row([FormulaNode])

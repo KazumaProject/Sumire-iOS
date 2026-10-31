@@ -119,6 +119,40 @@ final class CandidateBarTests: XCTestCase {
         }
     }
 
+    func testFormulaCandidateUsesCanvasPreviewWithoutChangingSelectionTextOrCellHeight() {
+        withBar { bar, list in
+            let candidateText = "12⁄34"
+            bar.setCandidates([.init(text: candidateText, formulaSource: "\\frac{12}{34}")])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+
+            let path = IndexPath(item: 0, section: 0)
+            let cell = try! XCTUnwrap(list.cellForItem(at: path))
+            cell.layoutIfNeeded()
+            func descendants(of root: UIView) -> [UIView] {
+                [root] + root.subviews.flatMap { descendants(of: $0) }
+            }
+            let formulaPreview = descendants(of: cell.contentView).first { $0.accessibilityIdentifier == "candidate-formula-preview" }
+            let textLabel = descendants(of: cell.contentView).first { $0.accessibilityIdentifier == "candidate-text" }
+
+            XCTAssertFalse(formulaPreview?.isHidden ?? true)
+            XCTAssertTrue(textLabel?.isHidden ?? false)
+            XCTAssertEqual(cell.accessibilityLabel, candidateText)
+            XCTAssertEqual(cell.bounds.height, 44)
+            XCTAssertGreaterThan(formulaPreview?.bounds.width ?? 0, 0)
+
+            var selected: Int?
+            bar.onSelect = { selected = $0 }
+            bar.collectionView(list, didSelectItemAt: path)
+            XCTAssertEqual(selected, 0)
+
+            bar.setCandidates([.init(text: "plain")])
+            bar.layoutIfNeeded(); list.layoutIfNeeded()
+            let reusedCell = try! XCTUnwrap(list.cellForItem(at: path))
+            XCTAssertTrue(descendants(of: reusedCell.contentView).first { $0.accessibilityIdentifier == "candidate-formula-preview" }?.isHidden ?? false)
+            XCTAssertFalse(descendants(of: reusedCell.contentView).first { $0.accessibilityIdentifier == "candidate-text" }?.isHidden ?? true)
+        }
+    }
+
     func testDisplayMergePreservesFirstBehaviorAndUnionsDictionaryLabels() {
         let first = ConversionCandidate(id: 11, text: "橋", score: 90,
             range: NSRange(location: 0, length: 1), dictionaries: ["system"], isReadingPrefix: true,
