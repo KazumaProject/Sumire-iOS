@@ -187,7 +187,6 @@ private struct FormulaExpressionParser {
                 guard let right = additive(stoppingAt: stop) else { return nil }
                 left = row([left, .symbol(op, tex: relationTex[op]), right])
             } else if consume(",") {
-                tokens += 1
                 guard let right = additive(stoppingAt: stop) else { return nil }
                 left = row([left, .symbol(","), right])
             } else { break }
@@ -332,22 +331,27 @@ private struct FormulaExpressionParser {
             let lowercasedWord = word.lowercased()
             let canonical = Greek.unicode[word] ?? Greek.unicode[lowercasedWord] ?? word
             spaces()
-            if let operatorName = largeOperatorNames[lowercasedWord], !["min", "max"].contains(lowercasedWord), consume("(") {
+            if let operatorName = largeOperatorNames[lowercasedWord], !["min", "max", "sup", "inf"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen() else { return nil }
-                if operatorName == "lim", arguments.count == 2 {
-                    return .largeOperator(operatorName, lower: arguments[0], upper: nil, operand: arguments[1])
+                if operatorName == "lim" {
+                    guard arguments.count >= 2 else { return nil }
+                    return .largeOperator(operatorName, lower: arguments[0], upper: nil, operand: row(Array(arguments.dropFirst())))
                 }
-                guard arguments.count == 3 else { return nil }
-                return .largeOperator(operatorName, lower: arguments[0], upper: arguments[1], operand: arguments[2])
+                guard arguments.count >= 3 else { return nil }
+                return .largeOperator(operatorName, lower: arguments[0], upper: arguments[1], operand: row(Array(arguments.dropFirst(2))))
+            }
+            if ["sum", "sigma", "prod", "product", "int", "integral", "iint", "iiint", "oint", "lim", "limit"].contains(lowercasedWord) {
+                return .symbol(word)
             }
             if ["root", "nroot"].contains(lowercasedWord), consume("(") {
-                guard let arguments = argumentListAfterOpeningParen(), arguments.count == 2 else { return nil }
+                guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
                 return .radical(arguments[1], index: arguments[0], grouped: false)
             }
             if ["min", "max"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
                 return row([.symbol(lowercasedWord, tex: "\\" + lowercasedWord), .delimited("(", row(arguments), ")", latexSized: false)])
             }
+            if ["min", "max"].contains(lowercasedWord) { return nil }
             if let function = mathFunctions[lowercasedWord], consume("(") {
                 guard enterDepth(), let argument = relation(stoppingAt: [")"]), consume(")") else { return nil }
                 leaveDepth()
@@ -365,9 +369,6 @@ private struct FormulaExpressionParser {
             }
             if let symbol = namedSymbols[word] ?? namedSymbols[word.lowercased()] {
                 return .symbol(symbol.unicode, tex: symbol.tex)
-            }
-            if let operatorName = largeOperatorNames[lowercasedWord] {
-                return .largeOperator(operatorName, lower: nil, upper: nil, operand: nil)
             }
             return .symbol(canonical, tex: Greek.tex[canonical])
         }
@@ -387,10 +388,9 @@ private struct FormulaExpressionParser {
         let command = identifier()
         if command.isEmpty {
             guard let spacing = peek, latexSpacingCharacters.contains(spacing) else { return nil }
-            index += 1; tokens += 1
+            index += 1
             return .symbol("")
         }
-        tokens += 1
         if command == "left" { return sizedDelimited() }
         if let pair = pairedLatexDelimiters[command] {
             return pairedCommandDelimited(
@@ -473,6 +473,7 @@ private struct FormulaExpressionParser {
         tokens += innerParser.tokens
         guard tokens <= 128 else { return nil }
         index = match.commandEnd
+        tokens += 1 // Android counts the closing \\right command as one token.
         guard let right = readDelimiter() else { return nil }
         leaveDepth()
         return .delimited(left, content, right, latexSized: true)
@@ -485,13 +486,13 @@ private struct FormulaExpressionParser {
                 let command = identifier()
                 return latexDelimiterCommands[command]
             }
-            if consume("|") { return "‖" }
+            if peek == "|" { index += 1; return "‖" }
             guard let escaped = peek, "{}|".contains(escaped) else { return nil }
             index += 1
             return String(escaped)
         }
         guard let delimiter = peek, "()[]{}|.‖".contains(delimiter) else { return nil }
-        index += 1
+        index += 1; tokens += 1
         return String(delimiter)
     }
 
@@ -551,6 +552,7 @@ private struct FormulaExpressionParser {
         tokens += innerParser.tokens
         guard tokens <= 128 else { return nil }
         index = match.commandEnd
+        tokens += 1 // Android counts the paired closing command as one token.
         leaveDepth()
         return .delimited(left, content, right, latexSized: false)
     }
@@ -562,10 +564,9 @@ private struct FormulaExpressionParser {
         var arguments: [FormulaNode] = []
         while let argument = relation(stoppingAt: [",", ")"]) {
             arguments.append(argument)
-            guard arguments.count <= 16 else { return nil }
+            guard arguments.count <= 128 else { return nil }
             if consume(")") { return arguments }
             guard consume(",") else { return nil }
-            tokens += 1
         }
         return nil
     }
@@ -587,10 +588,10 @@ private struct FormulaExpressionParser {
 
     private var peek: Character? { characters.indices.contains(index) ? characters[index] : nil }
     private mutating func consume(_ value: Character) -> Bool {
-        guard peek == value else { return false }; index += 1; return true
+        guard peek == value else { return false }; index += 1; tokens += 1; return true
     }
     private mutating func consume(_ value: String) -> Bool {
-        guard matches(value) else { return false }; index += value.count; return true
+        guard matches(value) else { return false }; index += value.count; tokens += value.count; return true
     }
     private func matches(_ value: String) -> Bool {
         let values = Array(value)
@@ -836,6 +837,7 @@ private let namedSymbols: [String: FormulaSymbol] = [
     "or": .init(unicode:"∨", tex:"\\lor"), "lor": .init(unicode:"∨", tex:"\\lor"), "vee": .init(unicode:"∨", tex:"\\lor"),
     "not": .init(unicode:"¬", tex:"\\neg"), "neg": .init(unicode:"¬", tex:"\\neg"), "lnot": .init(unicode:"¬", tex:"\\neg"),
     "ni": .init(unicode:"∋", tex:"\\ni"), "owns": .init(unicode:"∋", tex:"\\ni"),
+    "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"),
     "subset": .init(unicode:"⊂", tex:"\\subset"), "subseteq": .init(unicode:"⊆", tex:"\\subseteq"),
     "nsubset": .init(unicode:"⊄", tex:"\\nsubset"), "nsubseteq": .init(unicode:"⊈", tex:"\\nsubseteq"),
     "supset": .init(unicode:"⊃", tex:"\\supset"), "supseteq": .init(unicode:"⊇", tex:"\\supseteq"),
