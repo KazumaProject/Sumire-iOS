@@ -9,6 +9,13 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
             "1/2": .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"),
             "12/34": .init(unicodeText: "¹²⁄₃₄", normalizedTex: "\\frac{12}{34}"),
             "sqrt(x^2+y^2)": .init(unicodeText: "√(x²+y²)", normalizedTex: "\\sqrt{x^{2}+y^{2}}"),
+            "sqrt(x)": .init(unicodeText: "√x", normalizedTex: "\\sqrt{x}"),
+            "sqrt x": .init(unicodeText: "√x", normalizedTex: "\\sqrt{x}"),
+            "√x": .init(unicodeText: "√x", normalizedTex: "\\sqrt{x}"),
+            "√(x+1)": .init(unicodeText: "√(x+1)", normalizedTex: "\\sqrt{x+1}"),
+            "\\sqrt{x+y}": .init(unicodeText: "√(x+y)", normalizedTex: "\\sqrt{x+y}"),
+            "\\mathbb{A}": .init(unicodeText: "A", normalizedTex: "\\mathbf{A}"),
+            "\\Bbb{A}": .init(unicodeText: "A", normalizedTex: "\\mathbf{A}"),
             "sum(i=1,n,i^2)": .init(unicodeText: "∑ᵢ₌₁ⁿ i²", normalizedTex: "\\sum_{i=1}^{n}i^{2}"),
             "prod(i=1,n,i)": .init(unicodeText: "∏ᵢ₌₁ⁿ i", normalizedTex: "\\prod_{i=1}^{n}i"),
             "int(a,b,f)": .init(unicodeText: "∫ₐᵇ f", normalizedTex: "\\int_{a}^{b}f"),
@@ -142,6 +149,39 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
             AndroidFormulaCandidatePolicy.parse("ceiling(x)"),
             AndroidFormulaCandidatePolicy.parse("ceil(x)")
         )
+    }
+
+    func testLatexAliasesAndEscapedSymbolsMatchPinnedAndroidParser() {
+        let cases: [(String, String, String)] = [
+            ("\\owns", "∋", "\\owns"),
+            ("\\wedge", "∧", "\\wedge"),
+            ("\\vee", "∨", "\\vee"),
+            ("\\lnot", "¬", "\\lnot"),
+            ("\\bmod", "mod", "\\bmod"),
+            ("\\colon", ":", "\\colon"),
+            ("\\vert", "|", "|"),
+            ("\\|", "‖", "\\Vert"),
+            ("\\%", "%", "\\%"),
+            ("\\#", "#", "\\#"),
+            ("\\{", "{", "\\{"),
+            ("\\}", "}", "\\}")
+        ]
+
+        for (input, unicodeText, normalizedTex) in cases {
+            XCTAssertEqual(
+                AndroidFormulaCandidatePolicy.parse(input),
+                .init(unicodeText: unicodeText, normalizedTex: normalizedTex),
+                input
+            )
+        }
+    }
+
+    func testEscapedSymbolsUseAndroidCommandTokenLimit() throws {
+        let input = String(repeating: "\\%", count: 65)
+        let rendering = try XCTUnwrap(AndroidFormulaCandidatePolicy.parse(input))
+
+        XCTAssertEqual(rendering.unicodeText, String(repeating: "%", count: 65))
+        XCTAssertEqual(rendering.normalizedTex, String(repeating: "\\%", count: 65))
     }
 
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {

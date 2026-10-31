@@ -29,6 +29,23 @@ final class AndroidFormulaLayoutTests: XCTestCase {
         XCTAssertGreaterThan(rule.2, rule.0)
     }
 
+    func testSquareRootShorthandUsesRadicalBarLayout() throws {
+        let layout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(for: "√x"))
+
+        XCTAssertTrue(layout.operations.contains { operation in
+            if case .line = operation { return true }
+            return false
+        })
+        XCTAssertTrue(layout.operations.contains { operation in
+            if case .text("√", _, _, _, _) = operation { return true }
+            return false
+        })
+        XCTAssertTrue(layout.operations.contains { operation in
+            if case .text("x", _, _, _, _) = operation { return true }
+            return false
+        })
+    }
+
     func testNestedScriptsAndLargeOperatorProduceFiniteBounds() throws {
         let layout = try XCTUnwrap(AndroidFormulaCandidatePolicy.layout(
             for: "sum(i=1,n,i^2)",

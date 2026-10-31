@@ -320,6 +320,12 @@ private struct FormulaExpressionParser {
             guard enterDepth(), let value = relation(stoppingAt: ["}"]), consume("}") else { return nil }
             leaveDepth(); return value
         }
+        if c == "√" {
+            index += 1
+            tokens += 1
+            guard let radicand = functionArgument(stoppingAt: stop) else { return nil }
+            return .radical(radicand, index: nil, grouped: shouldParenthesizeScriptForUnicode(radicand))
+        }
         if c == "\\" { return latexCommand() }
         if matches("||") { return literalDelimited("||", "||", left: "‖", right: "‖") }
         if c == "|" { return literalDelimited("|", "|", left: "|", right: "|") }
@@ -349,6 +355,10 @@ private struct FormulaExpressionParser {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
                 return .radical(arguments[1], index: arguments[0], grouped: false)
             }
+            if lowercasedWord == "sqrt" {
+                guard let argument = functionArgument(stoppingAt: stop) else { return nil }
+                return .radical(argument, index: nil, grouped: shouldParenthesizeScriptForUnicode(argument))
+            }
             if ["min", "max"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
                 return row([.symbol(lowercasedWord, tex: "\\" + lowercasedWord), .delimited("(", row(arguments), ")", latexSized: false)])
@@ -357,7 +367,9 @@ private struct FormulaExpressionParser {
             if let function = mathFunctions[lowercasedWord], consume("(") {
                 guard enterDepth(), let argument = relation(stoppingAt: [")"]), consume(")") else { return nil }
                 leaveDepth()
-                if function == "sqrt" { return .radical(argument, index: nil, grouped: true) }
+                if function == "sqrt" {
+                    return .radical(argument, index: nil, grouped: shouldParenthesizeScriptForUnicode(argument))
+                }
                 if let accent = accentFunctions[function] {
                     return .accent(accent.command, argument, unicodeMark: accent.unicodeMark)
                 }
@@ -389,9 +401,14 @@ private struct FormulaExpressionParser {
         guard consume("\\") else { return nil }
         let command = identifier()
         if command.isEmpty {
-            guard let spacing = peek, latexSpacingCharacters.contains(spacing) else { return nil }
+            guard let escaped = peek else { return nil }
+            if latexSpacingCharacters.contains(escaped) {
+                index += 1
+                return .symbol("")
+            }
+            guard let symbol = escapedLatexSymbols[String(escaped)] else { return nil }
             index += 1
-            return .symbol("")
+            return .symbol(symbol.unicode, tex: symbol.tex)
         }
         if command == "left" { return sizedDelimited() }
         if let pair = pairedLatexDelimiters[command] {
@@ -415,7 +432,7 @@ private struct FormulaExpressionParser {
                 index = parsedIndex
             }
             guard let radicand = requiredGroup() else { return nil }
-            return .radical(radicand, index: index, grouped: false)
+            return .radical(radicand, index: index, grouped: shouldParenthesizeScriptForUnicode(radicand))
         }
         if let accent = accentFunctions[command] {
             guard let base = requiredGroup() else { return nil }
@@ -426,14 +443,18 @@ private struct FormulaExpressionParser {
             return .accent("mathbf", base, unicodeMark: nil)
         }
         if command == "mathbb" {
-            guard let group = requiredGroup(), case .symbol(let value, _) = group,
-                  let tex = Greek.blackboard[value] else { return nil }
-            return .symbol(tex.glyph, tex: tex.command)
+            guard let group = requiredGroup() else { return nil }
+            if case .symbol(let value, _) = group, let tex = Greek.blackboard[value] {
+                return .symbol(tex.glyph, tex: tex.command)
+            }
+            return .accent("mathbf", group, unicodeMark: nil)
         }
         if command == "Bbb" {
-            guard let group = requiredGroup(), case .symbol(let value, _) = group,
-                  let tex = Greek.blackboard[value] else { return nil }
-            return .symbol(tex.glyph, tex: tex.command)
+            guard let group = requiredGroup() else { return nil }
+            if case .symbol(let value, _) = group, let tex = Greek.blackboard[value] {
+                return .symbol(tex.glyph, tex: tex.command)
+            }
+            return .accent("mathbf", group, unicodeMark: nil)
         }
         if command == "operatorname" || command == "text" || command == "mathrm" {
             guard let base = requiredGroup() else { return nil }
@@ -571,6 +592,23 @@ private struct FormulaExpressionParser {
             guard consume(",") else { return nil }
         }
         return nil
+    }
+
+    private mutating func functionArgument(stoppingAt stop: Set<Character>) -> FormulaNode? {
+        spaces()
+        if consume("(") {
+            guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
+            leaveDepth()
+            return value
+        }
+        if consume("{") {
+            guard enterDepth(), let value = relation(stoppingAt: ["}"]), consume("}") else { return nil }
+            leaveDepth()
+            return value
+        }
+        guard enterDepth(), let value = primary(stoppingAt: stop) else { return nil }
+        leaveDepth()
+        return value
     }
 
     private mutating func relationOperator() -> String? {
@@ -826,10 +864,19 @@ private let commandSymbols: [String: FormulaSymbol] = [
     "Rightarrow": .init(unicode:"⇒", tex:"\\Rightarrow"), "Longrightarrow": .init(unicode:"⟹", tex:"\\Longrightarrow"), "leftrightarrow": .init(unicode:"↔", tex:"\\leftrightarrow"),
     "Leftrightarrow": .init(unicode:"⇔", tex:"\\Leftrightarrow"), "leftarrow": .init(unicode:"←", tex:"\\leftarrow"), "mapsto": .init(unicode:"↦", tex:"\\mapsto"),
     "partial": .init(unicode:"∂", tex:"\\partial"), "nabla": .init(unicode:"∇", tex:"\\nabla"), "emptyset": .init(unicode:"∅", tex:"\\emptyset"), "varnothing": .init(unicode:"∅", tex:"\\varnothing"),
-    "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"), "Vert": .init(unicode:"‖", tex:"\\Vert")
+    "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"), "Vert": .init(unicode:"‖", tex:"\\Vert"),
+    "owns": .init(unicode:"∋", tex:"\\owns"), "wedge": .init(unicode:"∧", tex:"\\wedge"),
+    "vee": .init(unicode:"∨", tex:"\\vee"), "lnot": .init(unicode:"¬", tex:"\\lnot"),
+    "bmod": .init(unicode:"mod", tex:"\\bmod"), "colon": .init(unicode:":", tex:"\\colon"),
+    "vert": .init(unicode:"|", tex:"|")
 ].merging(Dictionary(uniqueKeysWithValues: relationTex.map { key, value in
     (key, FormulaSymbol(unicode: key, tex: value))
 })) { _, relation in relation }
+private let escapedLatexSymbols: [String: FormulaSymbol] = [
+    "#": .init(unicode: "#", tex: "\\#"), "%": .init(unicode: "%", tex: "\\%"),
+    "|": .init(unicode: "‖", tex: "\\Vert"), "{": .init(unicode: "{", tex: "\\{"),
+    "}": .init(unicode: "}", tex: "\\}")
+]
 private let namedSymbols: [String: FormulaSymbol] = [
     "infty": .init(unicode:"∞", tex:"\\infty"), "infinity": .init(unicode:"∞", tex:"\\infty"), "aleph": .init(unicode:"ℵ", tex:"\\aleph"),
     "empty": .init(unicode:"∅", tex:"\\varnothing"), "emptyset": .init(unicode:"∅", tex:"\\varnothing"),
