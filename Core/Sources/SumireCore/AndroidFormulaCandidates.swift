@@ -76,7 +76,6 @@ public enum AndroidFormulaCandidatePolicy {
             case 0x00D7: return UnicodeScalar(0x2A)!
             case 0x00F7: return UnicodeScalar(0x2F)!
             case 0x2212, 0x2013, 0x2014: return UnicodeScalar(0x2D)!
-            case 0x2192, 0x21D2: return UnicodeScalar(0x3E)!
             default: return scalar
             }
         }))
@@ -99,14 +98,15 @@ private indirect enum FormulaNode {
     case fraction(FormulaNode, FormulaNode)
     case script(FormulaNode, sub: FormulaNode?, super: FormulaNode?, subGrouped: Bool, superGrouped: Bool)
     case radical(FormulaNode, index: FormulaNode?, grouped: Bool)
-    case largeOperator(String, lower: FormulaNode?, upper: FormulaNode?, operand: FormulaNode)
-    case delimited(String, FormulaNode, String)
+    case largeOperator(String, lower: FormulaNode?, upper: FormulaNode?, operand: FormulaNode?)
+    case accent(String, FormulaNode, unicodeMark: String?)
+    case delimited(String, FormulaNode, String, latexSized: Bool)
 
     var containsMathStructure: Bool {
         switch self {
-        case .fraction, .script, .radical, .largeOperator: true
+        case .fraction, .script, .radical, .largeOperator, .accent: true
         case .row(let nodes): nodes.contains(where: \.containsMathStructure)
-        case .delimited(_, let node, _): node.containsMathStructure
+        case .delimited(_, let node, _, _): node.containsMathStructure
         case .number, .symbol: false
         }
     }
@@ -115,7 +115,7 @@ private indirect enum FormulaNode {
         switch self {
         case .symbol(let value, let tex): tex != nil || Greek.tex[value] != nil
         case .row(let nodes): nodes.contains(where: \.containsMathSymbol)
-        case .delimited(_, let node, _): node.containsMathSymbol
+        case .delimited(_, let node, _, _): node.containsMathSymbol
         default: false
         }
     }
@@ -139,9 +139,15 @@ private struct FormulaExpressionParser {
         guard var left = additive(stoppingAt: stop) else { return nil }
         while true {
             spaces()
-            guard !atStop(stop), let op = relationOperator() else { break }
-            guard let right = additive(stoppingAt: stop) else { return nil }
-            left = row([left, .symbol(op, tex: relationTex[op]), right])
+            guard !atStop(stop) else { break }
+            if let op = relationOperator() {
+                guard let right = additive(stoppingAt: stop) else { return nil }
+                left = row([left, .symbol(op, tex: relationTex[op]), right])
+            } else if consume(",") {
+                tokens += 1
+                guard let right = additive(stoppingAt: stop) else { return nil }
+                left = row([left, .symbol(","), right])
+            } else { break }
         }
         return left
     }
@@ -170,7 +176,11 @@ private struct FormulaExpressionParser {
                 else { left = row([left, .symbol(c == "*" ? "×" : String(c), tex: c == "*" || c == "×" ? "\\times" : "\\cdot"), right]) }
             } else if startsPrimary(c), !stop.contains(c) {
                 guard let right = unary(stoppingAt: stop) else { return nil }
-                left = row([left, right])
+                if case .largeOperator(let name, let lower, let upper, nil) = left {
+                    left = .largeOperator(name, lower: lower, upper: upper, operand: right)
+                } else {
+                    left = row([left, right])
+                }
             } else { break }
         }
         return left
@@ -199,7 +209,14 @@ private struct FormulaExpressionParser {
             else { guard sup == nil else { return nil }; sup = operand.node; supGrouped = operand.grouped }
         }
         if let c = peek, c == "!" || c == "%" { index += 1; base = row([base, .symbol(String(c))]); tokens += 1 }
-        if sub != nil || sup != nil { base = .script(base, sub: sub, super: sup, subGrouped: subGrouped, superGrouped: supGrouped) }
+        if sub != nil || sup != nil {
+            if case .largeOperator(let name, let currentSub, let currentSuper, let operand) = base {
+                guard sub == nil || currentSub == nil, sup == nil || currentSuper == nil else { return nil }
+                base = .largeOperator(name, lower: sub ?? currentSub, upper: sup ?? currentSuper, operand: operand)
+            } else {
+                base = .script(base, sub: sub, super: sup, subGrouped: subGrouped, superGrouped: supGrouped)
+            }
+        }
         return base
     }
 
@@ -221,13 +238,19 @@ private struct FormulaExpressionParser {
         guard let c = peek, !atStop(stop), !["+", "-", "*", "/", "^", "_", "=", ")", "}", "]"].contains(c) else { return nil }
         if consume("(") {
             guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
-            leaveDepth(); return .delimited("(", value, ")")
+            leaveDepth(); return .delimited("(", value, ")", latexSized: false)
         }
         if consume("{") {
             guard enterDepth(), let value = relation(stoppingAt: ["}"]), consume("}") else { return nil }
             leaveDepth(); return value
         }
         if c == "\\" { return latexCommand() }
+        if matches("||") { return literalDelimited("||", "||", left: "‖", right: "‖") }
+        if c == "|" { return literalDelimited("|", "|", left: "|", right: "|") }
+        if c == "‖" { return literalDelimited("‖", "‖", left: "‖", right: "‖") }
+        if c == "⌊" { return literalDelimited("⌊", "⌋", left: "⌊", right: "⌋") }
+        if c == "⌈" { return literalDelimited("⌈", "⌉", left: "⌈", right: "⌉") }
+        if c == "⟨" { return literalDelimited("⟨", "⟩", left: "⟨", right: "⟩") }
         if c.isNumber {
             let start = index
             while let digit = peek, digit.isNumber || digit == "." { index += 1 }
@@ -251,26 +274,63 @@ private struct FormulaExpressionParser {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count == 2 else { return nil }
                 return .radical(arguments[1], index: arguments[0], grouped: false)
             }
+            if ["min", "max"].contains(word), consume("(") {
+                guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
+                return row([.symbol(word, tex: "\\" + word), .delimited("(", row(arguments), ")", latexSized: false)])
+            }
             if let function = mathFunctions[word], consume("(") {
                 guard enterDepth(), let argument = relation(stoppingAt: [")"]), consume(")") else { return nil }
                 leaveDepth()
                 if function == "sqrt" { return .radical(argument, index: nil, grouped: true) }
-                return row([.symbol(function, tex: Greek.tex[function]), .delimited("(", argument, ")")])
+                if let accent = accentFunctions[function] {
+                    return .accent(accent.command, argument, unicodeMark: accent.unicodeMark)
+                }
+                switch function {
+                case "abs": return .delimited("|", argument, "|", latexSized: false)
+                case "norm": return .delimited("‖", argument, "‖", latexSized: false)
+                case "floor": return .delimited("⌊", argument, "⌋", latexSized: false)
+                case "ceil": return .delimited("⌈", argument, "⌉", latexSized: false)
+                default: return row([.symbol(function, tex: "\\" + function), .delimited("(", argument, ")", latexSized: false)])
+                }
+            }
+            if let symbol = namedSymbols[word] ?? namedSymbols[word.lowercased()] {
+                return .symbol(symbol.unicode, tex: symbol.tex)
+            }
+            if let operatorName = largeOperatorNames[word] {
+                return .largeOperator(operatorName, lower: nil, upper: nil, operand: nil)
             }
             return .symbol(canonical, tex: Greek.tex[canonical])
         }
         if c == "\\" { return nil }
         index += 1; tokens += 1
-        if let symbol = symbolMap[String(c)] { return .symbol(symbol.unicode, tex: symbol.tex) }
+        if let symbol = symbolMap[String(c)] {
+            if let name = largeOperatorNameBySymbol[symbol.unicode] {
+                return .largeOperator(name, lower: nil, upper: nil, operand: nil)
+            }
+            return .symbol(symbol.unicode, tex: symbol.tex)
+        }
         return .symbol(String(c))
     }
 
     private mutating func latexCommand() -> FormulaNode? {
         guard consume("\\") else { return nil }
         let command = identifier()
-        guard !command.isEmpty else { return nil }
+        if command.isEmpty {
+            guard let spacing = peek, latexSpacingCharacters.contains(spacing) else { return nil }
+            index += 1; tokens += 1
+            return .symbol("")
+        }
         tokens += 1
-        if command == "frac" {
+        if command == "left" { return sizedDelimited() }
+        if let pair = pairedLatexDelimiters[command] {
+            return pairedCommandDelimited(
+                left: pair.left,
+                openingCommand: command,
+                rightCommand: pair.rightCommand,
+                right: pair.right
+            )
+        }
+        if command == "frac" || command == "dfrac" || command == "tfrac" {
             guard let numerator = requiredGroup(), let denominator = requiredGroup() else { return nil }
             return .fraction(numerator, denominator)
         }
@@ -285,14 +345,107 @@ private struct FormulaExpressionParser {
             guard let radicand = requiredGroup() else { return nil }
             return .radical(radicand, index: index, grouped: false)
         }
+        if let accent = accentFunctions[command] {
+            guard let base = requiredGroup() else { return nil }
+            return .accent(accent.command, base, unicodeMark: accent.unicodeMark)
+        }
+        if command == "boldsymbol" {
+            guard let base = requiredGroup() else { return nil }
+            return .accent("mathbf", base, unicodeMark: nil)
+        }
         if command == "mathbb" {
             guard let group = requiredGroup(), case .symbol(let value, _) = group,
                   let tex = Greek.blackboard[value] else { return nil }
             return .symbol(tex.glyph, tex: tex.command)
         }
+        if command == "Bbb" {
+            guard let group = requiredGroup(), case .symbol(let value, _) = group,
+                  let tex = Greek.blackboard[value] else { return nil }
+            return .symbol(tex.glyph, tex: tex.command)
+        }
+        if command == "operatorname" || command == "text" || command == "mathrm" {
+            guard let base = requiredGroup() else { return nil }
+            let text = FormulaTextRenderer.unicode(base)
+            if command == "operatorname" {
+                return .symbol(text, tex: "\\operatorname{" + text + "}")
+            }
+            return .symbol(text, tex: "\\" + command + "{" + text + "}")
+        }
+        if command == "not" {
+            guard let next = latexCommand() else { return nil }
+            let unicode = FormulaTextRenderer.unicode(next)
+            let negated: [String: String] = ["=":"≠", "∈":"∉", "≡":"≢", "⊂":"⊄", "⊃":"⊅", "⊆":"⊈", "⊇":"⊉"]
+            if let result = negated[unicode] {
+                return .symbol(result, tex: "\\not" + FormulaTextRenderer.tex(next))
+            }
+            return row([.symbol("¬", tex: "\\neg"), next])
+        }
+        if command == "mathcal" || command == "mathsf" || command == "mathtt" || command == "mathit" || command == "mathnormal" {
+            guard let base = requiredGroup() else { return nil }
+            return .symbol(FormulaTextRenderer.unicode(base), tex: "\\" + command + "{" + FormulaTextRenderer.tex(base) + "}")
+        }
+        if let operatorName = largeOperatorNames[command] {
+            return .largeOperator(operatorName, lower: nil, upper: nil, operand: nil)
+        }
         if let glyph = Greek.commandToUnicode[command] { return .symbol(glyph, tex: "\\" + command) }
         if let glyph = commandSymbols[command] { return .symbol(glyph.unicode, tex: glyph.tex) }
         if mathFunctions[command] != nil { return .symbol(command, tex: "\\" + command) }
+        if latexSpacingCommands.contains(command) { return .symbol("") }
+        return nil
+    }
+
+    private mutating func sizedDelimited() -> FormulaNode? {
+        guard let left = readDelimiter(), enterDepth(),
+              let match = matchingCommand(from: index, opening: "left", closing: "right") else { return nil }
+        let innerSource = String(characters[index..<match.commandStart])
+        var innerParser = FormulaExpressionParser(innerSource)
+        guard let content = innerParser.parse() else { return nil }
+        tokens += innerParser.tokens
+        guard tokens <= 128 else { return nil }
+        index = match.commandEnd
+        guard let right = readDelimiter() else { return nil }
+        leaveDepth()
+        return .delimited(left, content, right, latexSized: true)
+    }
+
+    private mutating func readDelimiter() -> String? {
+        spaces()
+        if consume("\\") {
+            if peek?.isLetter == true {
+                let command = identifier()
+                return latexDelimiterCommands[command]
+            }
+            if consume("|") { return "‖" }
+            guard let escaped = peek, "{}|".contains(escaped) else { return nil }
+            index += 1
+            return String(escaped)
+        }
+        guard let delimiter = peek, "()[]{}|.‖".contains(delimiter) else { return nil }
+        index += 1
+        return String(delimiter)
+    }
+
+    private func matchingCommand(
+        from start: Int,
+        opening: String?,
+        closing: String
+    ) -> (commandStart: Int, commandEnd: Int)? {
+        var cursor = start
+        var nested = 0
+        while cursor < characters.count {
+            guard characters[cursor] == "\\" else { cursor += 1; continue }
+            let commandStart = cursor
+            cursor += 1
+            let nameStart = cursor
+            while cursor < characters.count, characters[cursor].isLetter { cursor += 1 }
+            guard cursor > nameStart else { continue }
+            let command = String(characters[nameStart..<cursor])
+            if let opening, command == opening { nested += 1 }
+            else if command == closing {
+                if nested == 0 { return (commandStart, cursor) }
+                nested -= 1
+            }
+        }
         return nil
     }
 
@@ -300,6 +453,36 @@ private struct FormulaExpressionParser {
         spaces()
         guard consume("{"), enterDepth(), let node = relation(stoppingAt: ["}"]), consume("}") else { return nil }
         leaveDepth(); return node
+    }
+
+    private mutating func literalDelimited(
+        _ opening: String,
+        _ closing: String,
+        left: String,
+        right: String
+    ) -> FormulaNode? {
+        guard consume(opening), enterDepth() else { return nil }
+        defer { leaveDepth() }
+        let closingCharacters = Set(closing)
+        guard let content = relation(stoppingAt: closingCharacters), consume(closing) else { return nil }
+        return .delimited(left, content, right, latexSized: false)
+    }
+
+    private mutating func pairedCommandDelimited(
+        left: String,
+        openingCommand: String,
+        rightCommand: String,
+        right: String
+    ) -> FormulaNode? {
+        guard enterDepth(), let match = matchingCommand(from: index, opening: openingCommand, closing: rightCommand) else { return nil }
+        let innerSource = String(characters[index..<match.commandStart])
+        var innerParser = FormulaExpressionParser(innerSource)
+        guard let content = innerParser.parse() else { return nil }
+        tokens += innerParser.tokens
+        guard tokens <= 128 else { return nil }
+        index = match.commandEnd
+        leaveDepth()
+        return .delimited(left, content, right, latexSized: false)
     }
 
     private mutating func argumentListAfterOpeningParen() -> [FormulaNode]? {
@@ -318,10 +501,10 @@ private struct FormulaExpressionParser {
     }
 
     private mutating func relationOperator() -> String? {
-        for (source, output) in [("<=", "≤"), (">=", "≥"), ("!=", "≠"), ("->", "→"), ("<->", "↔"), ("==", "=")] {
+        for (source, output) in [("<->", "↔"), ("=>", "⇒"), ("->", "→"), ("<=", "≤"), (">=", "≥"), ("!=", "≠"), ("==", "=")] {
             if matches(source) { index += source.count; tokens += 1; return output }
         }
-        guard let c = peek, "=<>≤≥≠≈≃≡∈".contains(c) else { return nil }
+        guard let c = peek, "=<>≤≥≠≈≃≡≢≅≍≰≱∼∝→⇒↔⇔←↦⟶⟹⟷⟺⟵⟼∈∉∋⊂⊆⊃⊇⊄⊅⊈⊉∪∩∧∨∥∣±∓".contains(c) else { return nil }
         index += 1; tokens += 1
         return String(c)
     }
@@ -355,7 +538,15 @@ private struct FormulaExpressionParser {
         return flattened.count == 1 ? flattened[0] : .row(flattened)
     }
 
-    private static let relationTex: [String: String] = ["≤": "\\leq", "≥": "\\geq", "≠": "\\neq", "≈": "\\approx", "≃": "\\simeq", "≡": "\\equiv", "∈": "\\in", "→": "\\to", "↔": "\\leftrightarrow"]
+    private static let relationTex: [String: String] = [
+        "≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv",
+        "≢":"\\not\\equiv", "≅":"\\cong", "≍":"\\asymp", "≰":"\\nleq", "≱":"\\ngeq", "∼":"\\sim", "∝":"\\propto",
+        "→":"\\to", "⇒":"\\Rightarrow", "↔":"\\leftrightarrow", "⇔":"\\Leftrightarrow", "←":"\\leftarrow", "↦":"\\mapsto",
+        "⟶":"\\longrightarrow", "⟹":"\\Longrightarrow", "⟷":"\\longleftrightarrow", "⟺":"\\Longleftrightarrow", "⟵":"\\longleftarrow", "⟼":"\\longmapsto",
+        "∈":"\\in", "∉":"\\notin", "∋":"\\ni", "⊂":"\\subset", "⊆":"\\subseteq", "⊃":"\\supset", "⊇":"\\supseteq",
+        "⊄":"\\nsubset", "⊅":"\\nsupset", "⊈":"\\nsubseteq", "⊉":"\\nsupseteq", "∪":"\\cup", "∩":"\\cap",
+        "∧":"\\land", "∨":"\\lor", "∥":"\\parallel", "∣":"\\mid", "±":"\\pm", "∓":"\\mp"
+    ]
     private var relationTex: [String: String] { Self.relationTex }
 }
 
@@ -385,10 +576,14 @@ private enum FormulaTextRenderer {
             }
             return "√" + (grouped ? "(" + value + ")" : value)
         case .largeOperator(let name, let lower, let upper, let operand):
-            return largeOperatorUnicode[name, default: name] +
+            var result = largeOperatorUnicode[name, default: name] +
                 (lower.map { scriptText(unicode($0), using: subscriptMap, grouped: false) } ?? "") +
-                (upper.map { scriptText(unicode($0), using: superscript, grouped: false) } ?? "") + " " + unicode(operand)
-        case .delimited(let left, let content, let right): return left + unicode(content) + right
+                (upper.map { scriptText(unicode($0), using: superscript, grouped: false) } ?? "")
+            if let operand { result += " " + unicode(operand) }
+            return result
+        case .accent(_, let base, let mark): return unicode(base) + (mark ?? "")
+        case .delimited(let left, let content, let right, _):
+            return (left == "." ? "" : left) + unicode(content) + (right == "." ? "" : right)
         }
     }
 
@@ -420,8 +615,17 @@ private enum FormulaTextRenderer {
             var result = "\\" + name
             if let lower { result += "_{" + tex(lower) + "}" }
             if let upper { result += "^{" + tex(upper) + "}" }
-            return result + tex(operand)
-        case .delimited(let left, let content, let right): return left + tex(content) + right
+            if let operand {
+                if lower == nil && upper == nil { result += " " }
+                result += tex(operand)
+            }
+            return result
+        case .accent(let command, let base, _): return "\\" + command + "{" + tex(base) + "}"
+        case .delimited(let left, let content, let right, let latexSized):
+            if latexSized {
+                return "\\left" + delimiterTex(left, opening: true) + tex(content) + "\\right" + delimiterTex(right, opening: false)
+            }
+            return delimiterTex(left, opening: true) + tex(content) + delimiterTex(right, opening: false)
         }
     }
 
@@ -434,12 +638,37 @@ private enum FormulaTextRenderer {
         let body = Self.map(source, using: map)
         return grouped ? String(map["("] ?? "(") + body + String(map[")"] ?? ")") : body
     }
+    private static func delimiterTex(_ value: String, opening: Bool) -> String {
+        if value == "." { return "" }
+        let commands = ["⟨":"\\langle", "⟩":"\\rangle", "⌊":"\\lfloor", "⌋":"\\rfloor", "⌈":"\\lceil", "⌉":"\\rceil", "‖":"\\Vert", "∥":"\\parallel", "∣":"\\mid", "{":"\\{", "}":"\\}"]
+        let rendered = commands[value] ?? value
+        return opening && rendered.last?.isLetter == true ? rendered + " " : rendered
+    }
     private static func map(_ source: String, using mapping: [Character: Character]) -> String { String(source.map { mapping[$0] ?? $0 }) }
 }
 
 private enum Greek {
-    static let unicode: [String: String] = ["alpha":"α", "beta":"β", "gamma":"γ", "delta":"δ", "epsilon":"ε", "theta":"θ", "lambda":"λ", "mu":"μ", "pi":"π", "rho":"ρ", "sigma":"σ", "tau":"τ", "phi":"φ", "chi":"χ", "psi":"ψ", "omega":"ω", "Gamma":"Γ", "Delta":"Δ", "Theta":"Θ", "Lambda":"Λ", "Pi":"Π", "Sigma":"Σ", "Phi":"Φ", "Psi":"Ψ", "Omega":"Ω"]
-    static let tex: [String: String] = ["α":"\\alpha", "β":"\\beta", "γ":"\\gamma", "δ":"\\delta", "ε":"\\epsilon", "θ":"\\theta", "λ":"\\lambda", "μ":"\\mu", "π":"\\pi", "ρ":"\\rho", "σ":"\\sigma", "τ":"\\tau", "φ":"\\phi", "χ":"\\chi", "ψ":"\\psi", "ω":"\\omega", "Γ":"\\Gamma", "Δ":"\\Delta", "Θ":"\\Theta", "Λ":"\\Lambda", "Π":"\\Pi", "Σ":"\\Sigma", "Φ":"\\Phi", "Ψ":"\\Psi", "Ω":"\\Omega", "ℕ":"\\mathbb{N}", "ℤ":"\\mathbb{Z}", "ℚ":"\\mathbb{Q}", "ℝ":"\\mathbb{R}", "ℂ":"\\mathbb{C}"]
+    static let unicode: [String: String] = [
+        "alpha":"α", "beta":"β", "gamma":"γ", "delta":"δ", "epsilon":"ϵ", "varepsilon":"ε",
+        "zeta":"ζ", "eta":"η", "theta":"θ", "vartheta":"ϑ", "iota":"ι", "kappa":"κ",
+        "lambda":"λ", "mu":"μ", "nu":"ν", "xi":"ξ", "omicron":"ο", "pi":"π", "varpi":"ϖ",
+        "rho":"ρ", "varrho":"ϱ", "sigma":"σ", "varsigma":"ς", "tau":"τ", "upsilon":"υ",
+        "phi":"ϕ", "varphi":"φ", "chi":"χ", "psi":"ψ", "omega":"ω",
+        "Gamma":"Γ", "Delta":"Δ", "Theta":"Θ", "Lambda":"Λ", "Xi":"Ξ", "Pi":"Π",
+        "Sigma":"Σ", "Upsilon":"Υ", "Phi":"Φ", "Psi":"Ψ", "Omega":"Ω",
+        "forall":"∀", "exists":"∃", "in":"∈"
+    ]
+    static let tex: [String: String] = [
+        "α":"\\alpha", "β":"\\beta", "γ":"\\gamma", "δ":"\\delta", "ϵ":"\\epsilon", "ε":"\\varepsilon",
+        "ζ":"\\zeta", "η":"\\eta", "θ":"\\theta", "ϑ":"\\vartheta", "ι":"\\iota", "κ":"\\kappa",
+        "λ":"\\lambda", "μ":"\\mu", "ν":"\\nu", "ξ":"\\xi", "ο":"\\omicron", "π":"\\pi", "ϖ":"\\varpi",
+        "ρ":"\\rho", "ϱ":"\\varrho", "σ":"\\sigma", "ς":"\\varsigma", "τ":"\\tau", "υ":"\\upsilon",
+        "ϕ":"\\phi", "φ":"\\varphi", "χ":"\\chi", "ψ":"\\psi", "ω":"\\omega",
+        "Γ":"\\Gamma", "Δ":"\\Delta", "Θ":"\\Theta", "Λ":"\\Lambda", "Ξ":"\\Xi", "Π":"\\Pi",
+        "Σ":"\\Sigma", "Υ":"\\Upsilon", "Φ":"\\Phi", "Ψ":"\\Psi", "Ω":"\\Omega",
+        "∀":"\\forall", "∃":"\\exists", "∈":"\\in",
+        "ℕ":"\\mathbb{N}", "ℤ":"\\mathbb{Z}", "ℚ":"\\mathbb{Q}", "ℝ":"\\mathbb{R}", "ℂ":"\\mathbb{C}"
+    ]
     static let blackboard: [String: (glyph: String, command: String)] = [
         "N": ("ℕ", "\\mathbb{N}"), "Z": ("ℤ", "\\mathbb{Z}"),
         "Q": ("ℚ", "\\mathbb{Q}"), "R": ("ℝ", "\\mathbb{R}"),
@@ -449,9 +678,86 @@ private enum Greek {
 }
 
 private struct FormulaSymbol { let unicode: String; let tex: String? }
-private let relationTex: [String: String] = ["≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv", "∈":"\\in", "→":"\\to", "↔":"\\leftrightarrow"]
-private let symbolMap: [String: FormulaSymbol] = ["≤": .init(unicode:"≤", tex:"\\leq"), "≥": .init(unicode:"≥", tex:"\\geq"), "≠": .init(unicode:"≠", tex:"\\neq"), "×": .init(unicode:"×", tex:"\\times"), "÷": .init(unicode:"÷", tex:"\\div"), "∞": .init(unicode:"∞", tex:"\\infty"), "√": .init(unicode:"√", tex:"\\sqrt"), "∑": .init(unicode:"∑", tex:"\\sum"), "∏": .init(unicode:"∏", tex:"\\prod"), "∫": .init(unicode:"∫", tex:"\\int")]
-private let commandSymbols: [String: FormulaSymbol] = ["times": .init(unicode:"×", tex:"\\times"), "cdot": .init(unicode:"⋅", tex:"\\cdot"), "div": .init(unicode:"÷", tex:"\\div"), "leq": .init(unicode:"≤", tex:"\\leq"), "geq": .init(unicode:"≥", tex:"\\geq"), "neq": .init(unicode:"≠", tex:"\\neq"), "approx": .init(unicode:"≈", tex:"\\approx"), "in": .init(unicode:"∈", tex:"\\in"), "to": .init(unicode:"→", tex:"\\to"), "infty": .init(unicode:"∞", tex:"\\infty"), "sum": .init(unicode:"∑", tex:"\\sum"), "prod": .init(unicode:"∏", tex:"\\prod"), "int": .init(unicode:"∫", tex:"\\int"), "lim": .init(unicode:"lim", tex:"\\lim")]
-private let mathFunctions: [String: String] = ["sqrt":"sqrt", "sin":"sin", "cos":"cos", "tan":"tan", "log":"log", "ln":"ln", "exp":"exp", "abs":"abs", "norm":"norm", "floor":"floor", "ceil":"ceil"]
-private let largeOperatorNames: [String: String] = ["sum":"sum", "sigma":"sum", "prod":"prod", "product":"prod", "int":"int", "integral":"int", "lim":"lim", "limit":"lim"]
-private let largeOperatorUnicode: [String: String] = ["sum":"∑", "prod":"∏", "int":"∫", "lim":"lim"]
+private let latexSpacingCharacters: Set<Character> = [" ", "!", ",", ":", ";"]
+private let latexSpacingCommands: Set<String> = ["quad", "qquad", "enspace", "thinspace", "medspace", "thickspace"]
+private let latexDelimiterCommands: [String: String] = [
+    "langle":"⟨", "rangle":"⟩", "lfloor":"⌊", "rfloor":"⌋", "lceil":"⌈", "rceil":"⌉",
+    "lVert":"‖", "rVert":"‖", "Vert":"‖", "vert":"|", "lvert":"|", "rvert":"|",
+    "lbrace":"{", "rbrace":"}", "lbrack":"[", "rbrack":"]", "lparen":"(", "rparen":")"
+]
+private let pairedLatexDelimiters: [String: (left: String, rightCommand: String, right: String)] = [
+    "langle": ("⟨", "rangle", "⟩"), "lfloor": ("⌊", "rfloor", "⌋"), "lceil": ("⌈", "rceil", "⌉"),
+    "lvert": ("|", "rvert", "|"), "lVert": ("‖", "rVert", "‖"), "lbrace": ("{", "rbrace", "}"),
+    "lbrack": ("[", "rbrack", "]"), "lparen": ("(", "rparen", ")")
+]
+private let relationTex: [String: String] = [
+    "≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv",
+    "≢":"\\not\\equiv", "≅":"\\cong", "≍":"\\asymp", "≰":"\\nleq", "≱":"\\ngeq", "∼":"\\sim", "∝":"\\propto",
+    "→":"\\to", "⇒":"\\Rightarrow", "↔":"\\leftrightarrow", "⇔":"\\Leftrightarrow", "←":"\\leftarrow", "↦":"\\mapsto",
+    "⟶":"\\longrightarrow", "⟹":"\\Longrightarrow", "⟷":"\\longleftrightarrow", "⟺":"\\Longleftrightarrow", "⟵":"\\longleftarrow", "⟼":"\\longmapsto",
+    "∈":"\\in", "∉":"\\notin", "∋":"\\ni", "⊂":"\\subset", "⊆":"\\subseteq", "⊃":"\\supset", "⊇":"\\supseteq",
+    "⊄":"\\nsubset", "⊅":"\\nsupset", "⊈":"\\nsubseteq", "⊉":"\\nsupseteq", "∪":"\\cup", "∩":"\\cap",
+    "∧":"\\land", "∨":"\\lor", "¬":"\\neg", "∥":"\\parallel", "∣":"\\mid", "±":"\\pm", "∓":"\\mp"
+]
+private let symbolMap: [String: FormulaSymbol] = [
+    "×": .init(unicode:"×", tex:"\\times"), "⋅": .init(unicode:"⋅", tex:"\\cdot"), "÷": .init(unicode:"÷", tex:"\\div"),
+    "∞": .init(unicode:"∞", tex:"\\infty"), "ℵ": .init(unicode:"ℵ", tex:"\\aleph"), "√": .init(unicode:"√", tex:"\\sqrt"),
+    "∑": .init(unicode:"∑", tex:"\\sum"), "∏": .init(unicode:"∏", tex:"\\prod"), "∫": .init(unicode:"∫", tex:"\\int"),
+    "∬": .init(unicode:"∬", tex:"\\iint"), "∭": .init(unicode:"∭", tex:"\\iiint"), "∮": .init(unicode:"∮", tex:"\\oint"),
+    "∂": .init(unicode:"∂", tex:"\\partial"), "∇": .init(unicode:"∇", tex:"\\nabla"), "∀": .init(unicode:"∀", tex:"\\forall"),
+    "∃": .init(unicode:"∃", tex:"\\exists"), "ℕ": .init(unicode:"ℕ", tex:"\\mathbb{N}"), "ℤ": .init(unicode:"ℤ", tex:"\\mathbb{Z}"),
+    "ℚ": .init(unicode:"ℚ", tex:"\\mathbb{Q}"), "ℝ": .init(unicode:"ℝ", tex:"\\mathbb{R}"), "ℂ": .init(unicode:"ℂ", tex:"\\mathbb{C}")
+].merging(Dictionary(uniqueKeysWithValues: relationTex.map { key, value in
+    (key, FormulaSymbol(unicode: key, tex: value))
+})) { _, relation in relation }
+private let commandSymbols: [String: FormulaSymbol] = [
+    "times": .init(unicode:"×", tex:"\\times"), "cdot": .init(unicode:"⋅", tex:"\\cdot"), "div": .init(unicode:"÷", tex:"\\div"),
+    "le": .init(unicode:"≤", tex:"\\leq"), "leq": .init(unicode:"≤", tex:"\\leq"), "ge": .init(unicode:"≥", tex:"\\geq"), "geq": .init(unicode:"≥", tex:"\\geq"),
+    "ne": .init(unicode:"≠", tex:"\\neq"), "neq": .init(unicode:"≠", tex:"\\neq"), "notin": .init(unicode:"∉", tex:"\\notin"), "ni": .init(unicode:"∋", tex:"\\ni"),
+    "subset": .init(unicode:"⊂", tex:"\\subset"), "subseteq": .init(unicode:"⊆", tex:"\\subseteq"), "nsubset": .init(unicode:"⊄", tex:"\\nsubset"),
+    "nsubseteq": .init(unicode:"⊈", tex:"\\nsubseteq"), "supset": .init(unicode:"⊃", tex:"\\supset"), "supseteq": .init(unicode:"⊇", tex:"\\supseteq"),
+    "nsupset": .init(unicode:"⊅", tex:"\\nsupset"), "nsupseteq": .init(unicode:"⊉", tex:"\\nsupseteq"), "cup": .init(unicode:"∪", tex:"\\cup"),
+    "cap": .init(unicode:"∩", tex:"\\cap"), "land": .init(unicode:"∧", tex:"\\land"), "lor": .init(unicode:"∨", tex:"\\lor"), "neg": .init(unicode:"¬", tex:"\\neg"),
+    "pm": .init(unicode:"±", tex:"\\pm"), "mp": .init(unicode:"∓", tex:"\\mp"), "propto": .init(unicode:"∝", tex:"\\propto"),
+    "approx": .init(unicode:"≈", tex:"\\approx"), "simeq": .init(unicode:"≃", tex:"\\simeq"), "sim": .init(unicode:"∼", tex:"\\sim"),
+    "equiv": .init(unicode:"≡", tex:"\\equiv"), "nequiv": .init(unicode:"≢", tex:"\\not\\equiv"), "cong": .init(unicode:"≅", tex:"\\cong"), "asymp": .init(unicode:"≍", tex:"\\asymp"),
+    "infty": .init(unicode:"∞", tex:"\\infty"), "aleph": .init(unicode:"ℵ", tex:"\\aleph"),
+    "to": .init(unicode:"→", tex:"\\to"), "rightarrow": .init(unicode:"→", tex:"\\rightarrow"), "longrightarrow": .init(unicode:"⟶", tex:"\\longrightarrow"),
+    "Rightarrow": .init(unicode:"⇒", tex:"\\Rightarrow"), "Longrightarrow": .init(unicode:"⟹", tex:"\\Longrightarrow"), "leftrightarrow": .init(unicode:"↔", tex:"\\leftrightarrow"),
+    "Leftrightarrow": .init(unicode:"⇔", tex:"\\Leftrightarrow"), "leftarrow": .init(unicode:"←", tex:"\\leftarrow"), "mapsto": .init(unicode:"↦", tex:"\\mapsto"),
+    "partial": .init(unicode:"∂", tex:"\\partial"), "nabla": .init(unicode:"∇", tex:"\\nabla"), "emptyset": .init(unicode:"∅", tex:"\\emptyset"), "varnothing": .init(unicode:"∅", tex:"\\varnothing"),
+    "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"), "Vert": .init(unicode:"‖", tex:"\\Vert")
+].merging(Dictionary(uniqueKeysWithValues: relationTex.map { key, value in
+    (key, FormulaSymbol(unicode: key, tex: value))
+})) { _, relation in relation }
+private let namedSymbols: [String: FormulaSymbol] = [
+    "infty": .init(unicode:"∞", tex:"\\infty"), "infinity": .init(unicode:"∞", tex:"\\infty"), "aleph": .init(unicode:"ℵ", tex:"\\aleph"),
+    "empty": .init(unicode:"∅", tex:"\\varnothing"), "emptyset": .init(unicode:"∅", tex:"\\emptyset"), "varnothing": .init(unicode:"∅", tex:"\\varnothing"),
+    "union": .init(unicode:"∪", tex:"\\cup"), "intersect": .init(unicode:"∩", tex:"\\cap"), "intersection": .init(unicode:"∩", tex:"\\cap"),
+    "and": .init(unicode:"∧", tex:"\\land"), "wedge": .init(unicode:"∧", tex:"\\land"), "or": .init(unicode:"∨", tex:"\\lor"), "vee": .init(unicode:"∨", tex:"\\lor"),
+    "not": .init(unicode:"¬", tex:"\\neg"), "parallel": .init(unicode:"∥", tex:"\\parallel"), "mid": .init(unicode:"∣", tex:"\\mid"),
+    "owns": .init(unicode:"∋", tex:"\\ni"), "subseteq": .init(unicode:"⊆", tex:"\\subseteq"), "supseteq": .init(unicode:"⊇", tex:"\\supseteq"),
+    "notin": .init(unicode:"∉", tex:"\\notin"), "equiv": .init(unicode:"≡", tex:"\\equiv"), "nequiv": .init(unicode:"≢", tex:"\\not\\equiv"),
+    "approx": .init(unicode:"≈", tex:"\\approx"), "simeq": .init(unicode:"≃", tex:"\\simeq"), "propto": .init(unicode:"∝", tex:"\\propto"),
+    "to": .init(unicode:"→", tex:"\\to"), "rightarrow": .init(unicode:"→", tex:"\\rightarrow"), "leftarrow": .init(unicode:"←", tex:"\\leftarrow"),
+    "mapsto": .init(unicode:"↦", tex:"\\mapsto"), "iff": .init(unicode:"⇔", tex:"\\Leftrightarrow"), "implies": .init(unicode:"⇒", tex:"\\Rightarrow")
+]
+private let mathFunctions: [String: String] = [
+    "sqrt":"sqrt", "sin":"sin", "cos":"cos", "tan":"tan", "asin":"arcsin", "acos":"arccos", "atan":"arctan",
+    "sinh":"sinh", "cosh":"cosh", "tanh":"tanh", "sec":"sec", "csc":"csc", "cot":"cot",
+    "asinh":"arcsinh", "acosh":"arccosh", "atanh":"arctanh", "log":"log", "ln":"ln", "exp":"exp",
+    "abs":"abs", "absolute":"abs", "norm":"norm", "floor":"floor", "ceil":"ceil", "ceiling":"ceil",
+    "vec":"vec", "vector":"vec", "hat":"hat", "widehat":"hat", "bar":"bar", "overline":"overline", "dot":"dot",
+    "ddot":"ddot", "tilde":"tilde", "widetilde":"tilde", "underline":"underline", "bold":"mathbf"
+]
+private let largeOperatorNames: [String: String] = [
+    "sum":"sum", "sigma":"sum", "prod":"prod", "product":"prod", "int":"int", "integral":"int",
+    "iint":"iint", "iiint":"iiint", "oint":"oint", "lim":"lim", "limit":"lim", "min":"min", "max":"max", "sup":"sup", "inf":"inf"
+]
+private let largeOperatorUnicode: [String: String] = ["sum":"∑", "prod":"∏", "int":"∫", "iint":"∬", "iiint":"∭", "oint":"∮", "lim":"lim"]
+private let largeOperatorNameBySymbol: [String: String] = ["∑":"sum", "∏":"prod", "∫":"int", "∬":"iint", "∭":"iiint", "∮":"oint"]
+private let accentFunctions: [String: (command: String, unicodeMark: String?)] = [
+    "vec": ("vec", "⃗"), "hat": ("hat", "̂"), "widehat": ("hat", "̂"), "bar": ("bar", "̄"), "overline": ("overline", "̄"),
+    "dot": ("dot", "̇"), "ddot": ("ddot", "̈"), "tilde": ("tilde", "̃"), "widetilde": ("tilde", "̃"), "underline": ("underline", "̲"),
+    "mathbf": ("mathbf", nil)
+]
