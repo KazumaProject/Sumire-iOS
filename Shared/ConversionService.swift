@@ -109,6 +109,7 @@ struct ConversionCandidate {
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
+                formulaCandidateCommitText: first.formulaCandidateCommitText,
                 formulaCandidateKind: first.formulaCandidateKind,
                 presentationKind: first.presentationKind, classifiedCategories: categories,
                 leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading, userDictionaryReading: first.userDictionaryReading, legacyTemplateReading: first.legacyTemplateReading)
