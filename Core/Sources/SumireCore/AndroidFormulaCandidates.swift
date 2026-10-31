@@ -134,6 +134,20 @@ indirect enum FormulaNode {
         default: false
         }
     }
+
+    var needsUnicodeOperandGap: Bool {
+        switch self {
+        case .largeOperator: true
+        case .symbol(let value, _):
+            [
+                "sin", "cos", "tan", "arcsin", "arccos", "arctan", "sinh", "cosh", "tanh",
+                "sec", "csc", "cot", "arcsinh", "arccosh", "arctanh", "ln", "log", "exp",
+                "lim", "min", "max", "sup", "inf", "mod"
+            ].contains(value)
+        case .script(let base, _, _, _, _): base.needsUnicodeOperandGap
+        default: false
+        }
+    }
 }
 
 private func shouldParenthesizeScriptForUnicode(_ node: FormulaNode) -> Bool {
@@ -201,6 +215,10 @@ private struct FormulaExpressionParser {
                     let isCrossProduct = c == "*" || c == "×"
                     left = row([left, .symbol(isCrossProduct ? "×" : "⋅", tex: isCrossProduct ? "\\times" : "\\cdot"), right])
                 }
+            } else if matchesIdentifier("mod") {
+                index += 3; tokens += 1
+                guard let right = unary(stoppingAt: stop) else { return nil }
+                left = row([left, .symbol("mod", tex: "\\bmod"), right])
             } else if startsPrimary(c), !stop.contains(c) {
                 guard let right = unary(stoppingAt: stop) else { return nil }
                 if case .largeOperator(let name, let lower, let upper, nil) = left {
@@ -558,6 +576,15 @@ private struct FormulaExpressionParser {
         let values = Array(value)
         return index + values.count <= characters.count && Array(characters[index..<(index + values.count)]) == values
     }
+    private func matchesIdentifier(_ value: String) -> Bool {
+        let values = Array(value)
+        let end = index + values.count
+        guard end <= characters.count,
+              String(characters[index..<end]).lowercased() == value.lowercased() else { return false }
+        guard characters.indices.contains(end) else { return true }
+        let next = characters[end]
+        return !next.isLetter && !next.isNumber && next != "∞"
+    }
     private mutating func spaces() { while peek?.isWhitespace == true { index += 1 } }
     private func atStop(_ stop: Set<Character>) -> Bool { peek.map(stop.contains) ?? false }
     private func startsPrimary(_ c: Character) -> Bool {
@@ -590,7 +617,23 @@ private enum FormulaTextRenderer {
     static func unicode(_ node: FormulaNode) -> String {
         switch node {
         case .number(let value), .symbol(let value, _): return value
-        case .row(let children): return children.map(unicode).joined()
+        case .row(let children):
+            var result = ""
+            for (index, child) in children.enumerated() {
+                if index > 0 {
+                    let requiresGap: Bool
+                    switch child {
+                    case .largeOperator: requiresGap = true
+                    case .delimited: requiresGap = false
+                    default: requiresGap = children[index - 1].needsUnicodeOperandGap
+                    }
+                    if requiresGap {
+                        result += " "
+                    }
+                }
+                result += unicode(child)
+            }
+            return result
         case .fraction(let numerator, let denominator):
             let n = unicode(numerator), d = unicode(denominator)
             if let fraction = vulgar[n + "/" + d] { return fraction }

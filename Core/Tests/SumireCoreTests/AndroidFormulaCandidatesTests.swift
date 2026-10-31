@@ -113,6 +113,11 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
             AndroidFormulaCandidatePolicy.parse("SIN(x)"),
             AndroidFormulaCandidatePolicy.parse("sin(x)")
         )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x MOD y"),
+            .init(unicodeText: "xmod y", normalizedTex: "x\\bmod y")
+        )
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x module y"), "Do not treat a mod identifier prefix as an operator")
     }
 
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
