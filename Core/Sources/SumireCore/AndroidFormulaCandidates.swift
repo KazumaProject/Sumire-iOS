@@ -99,7 +99,7 @@ private indirect enum FormulaNode {
     case fraction(FormulaNode, FormulaNode)
     case script(FormulaNode, sub: FormulaNode?, super: FormulaNode?, subGrouped: Bool, superGrouped: Bool)
     case radical(FormulaNode, index: FormulaNode?, grouped: Bool)
-    case largeOperator(String, lower: FormulaNode, upper: FormulaNode, operand: FormulaNode)
+    case largeOperator(String, lower: FormulaNode?, upper: FormulaNode?, operand: FormulaNode)
     case delimited(String, FormulaNode, String)
 
     var containsMathStructure: Bool {
@@ -240,14 +240,18 @@ private struct FormulaExpressionParser {
             let canonical = Greek.unicode[word] ?? word
             spaces()
             if let operatorName = largeOperatorNames[word], consume("(") {
-                guard let arguments = argumentListAfterOpeningParen(), arguments.count == 3 else { return nil }
+                guard let arguments = argumentListAfterOpeningParen() else { return nil }
+                if operatorName == "lim", arguments.count == 2 {
+                    return .largeOperator(operatorName, lower: arguments[0], upper: nil, operand: arguments[1])
+                }
+                guard arguments.count == 3 else { return nil }
                 return .largeOperator(operatorName, lower: arguments[0], upper: arguments[1], operand: arguments[2])
             }
             if ["root", "nroot"].contains(word), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count == 2 else { return nil }
                 return .radical(arguments[1], index: arguments[0], grouped: false)
             }
-            if consume("("), let function = mathFunctions[word] {
+            if let function = mathFunctions[word], consume("(") {
                 guard enterDepth(), let argument = relation(stoppingAt: [")"]), consume(")") else { return nil }
                 leaveDepth()
                 if function == "sqrt" { return .radical(argument, index: nil, grouped: true) }
@@ -381,9 +385,9 @@ private enum FormulaTextRenderer {
             }
             return "√" + (grouped ? "(" + value + ")" : value)
         case .largeOperator(let name, let lower, let upper, let operand):
-            return largeOperatorUnicode[name, default: "∑"] +
-                scriptText(unicode(lower), using: subscriptMap, grouped: false) +
-                scriptText(unicode(upper), using: superscript, grouped: false) + " " + unicode(operand)
+            return largeOperatorUnicode[name, default: name] +
+                (lower.map { scriptText(unicode($0), using: subscriptMap, grouped: false) } ?? "") +
+                (upper.map { scriptText(unicode($0), using: superscript, grouped: false) } ?? "") + " " + unicode(operand)
         case .delimited(let left, let content, let right): return left + unicode(content) + right
         }
     }
@@ -413,7 +417,10 @@ private enum FormulaTextRenderer {
             if let index { return "\\sqrt[" + tex(index) + "]{" + tex(radicand) + "}" }
             return "\\sqrt{" + tex(radicand) + "}"
         case .largeOperator(let name, let lower, let upper, let operand):
-            return "\\" + name + "_{" + tex(lower) + "}^{" + tex(upper) + "}" + tex(operand)
+            var result = "\\" + name
+            if let lower { result += "_{" + tex(lower) + "}" }
+            if let upper { result += "^{" + tex(upper) + "}" }
+            return result + tex(operand)
         case .delimited(let left, let content, let right): return left + tex(content) + right
         }
     }
@@ -444,7 +451,7 @@ private enum Greek {
 private struct FormulaSymbol { let unicode: String; let tex: String? }
 private let relationTex: [String: String] = ["≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv", "∈":"\\in", "→":"\\to", "↔":"\\leftrightarrow"]
 private let symbolMap: [String: FormulaSymbol] = ["≤": .init(unicode:"≤", tex:"\\leq"), "≥": .init(unicode:"≥", tex:"\\geq"), "≠": .init(unicode:"≠", tex:"\\neq"), "×": .init(unicode:"×", tex:"\\times"), "÷": .init(unicode:"÷", tex:"\\div"), "∞": .init(unicode:"∞", tex:"\\infty"), "√": .init(unicode:"√", tex:"\\sqrt"), "∑": .init(unicode:"∑", tex:"\\sum"), "∏": .init(unicode:"∏", tex:"\\prod"), "∫": .init(unicode:"∫", tex:"\\int")]
-private let commandSymbols: [String: FormulaSymbol] = ["times": .init(unicode:"×", tex:"\\times"), "cdot": .init(unicode:"⋅", tex:"\\cdot"), "div": .init(unicode:"÷", tex:"\\div"), "leq": .init(unicode:"≤", tex:"\\leq"), "geq": .init(unicode:"≥", tex:"\\geq"), "neq": .init(unicode:"≠", tex:"\\neq"), "approx": .init(unicode:"≈", tex:"\\approx"), "in": .init(unicode:"∈", tex:"\\in"), "to": .init(unicode:"→", tex:"\\to"), "infty": .init(unicode:"∞", tex:"\\infty"), "sum": .init(unicode:"∑", tex:"\\sum"), "prod": .init(unicode:"∏", tex:"\\prod"), "int": .init(unicode:"∫", tex:"\\int")]
+private let commandSymbols: [String: FormulaSymbol] = ["times": .init(unicode:"×", tex:"\\times"), "cdot": .init(unicode:"⋅", tex:"\\cdot"), "div": .init(unicode:"÷", tex:"\\div"), "leq": .init(unicode:"≤", tex:"\\leq"), "geq": .init(unicode:"≥", tex:"\\geq"), "neq": .init(unicode:"≠", tex:"\\neq"), "approx": .init(unicode:"≈", tex:"\\approx"), "in": .init(unicode:"∈", tex:"\\in"), "to": .init(unicode:"→", tex:"\\to"), "infty": .init(unicode:"∞", tex:"\\infty"), "sum": .init(unicode:"∑", tex:"\\sum"), "prod": .init(unicode:"∏", tex:"\\prod"), "int": .init(unicode:"∫", tex:"\\int"), "lim": .init(unicode:"lim", tex:"\\lim")]
 private let mathFunctions: [String: String] = ["sqrt":"sqrt", "sin":"sin", "cos":"cos", "tan":"tan", "log":"log", "ln":"ln", "exp":"exp", "abs":"abs", "norm":"norm", "floor":"floor", "ceil":"ceil"]
-private let largeOperatorNames: [String: String] = ["sum":"sum", "sigma":"sum", "prod":"prod", "product":"prod", "int":"int", "integral":"int"]
-private let largeOperatorUnicode: [String: String] = ["sum":"∑", "prod":"∏", "int":"∫"]
+private let largeOperatorNames: [String: String] = ["sum":"sum", "sigma":"sum", "prod":"prod", "product":"prod", "int":"int", "integral":"int", "lim":"lim", "limit":"lim"]
+private let largeOperatorUnicode: [String: String] = ["sum":"∑", "prod":"∏", "int":"∫", "lim":"lim"]
