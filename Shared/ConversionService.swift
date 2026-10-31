@@ -5,8 +5,12 @@ import SumireCore
 
 struct ConversionCandidate {
     enum PresentationKind: UInt32 { case none = 0, halfWidth = 1, fullWidth = 2, numericSymbol = 3 }
+    enum FormulaCandidateKind: Hashable { case unicode, tex }
     let id: UInt64
     let text: String
+    /// A Swift-owned display candidate whose commit text is not in the native result snapshot.
+    let formulaCandidateCommitText: String?
+    let formulaCandidateKind: FormulaCandidateKind?
     let score: Int64
     let range: NSRange
     let dictionaries: [String]
@@ -24,7 +28,10 @@ struct ConversionCandidate {
     let rightID: Int16?
     var displayAnnotation: String? {
         let badge: String
-        if let correctedReading, !correctedReading.isEmpty { badge = "[読] " + correctedReading }
+        if let formulaCandidateKind {
+            badge = formulaCandidateKind == .unicode ? "[文字]" : "[TeX]"
+        }
+        else if let correctedReading, !correctedReading.isEmpty { badge = "[読] " + correctedReading }
         else if isReadingPrefix { badge = "[部]" }
         else {
             switch presentationKind {
@@ -102,6 +109,8 @@ struct ConversionCandidate {
                 bunsetsu: first.bunsetsu, rawText: first.rawText,
                 correctedReading: first.correctedReading, isReadingPrefix: first.isReadingPrefix,
                 textMacroID: first.textMacroID,
+                formulaCandidateCommitText: first.formulaCandidateCommitText,
+                formulaCandidateKind: first.formulaCandidateKind,
                 presentationKind: first.presentationKind, classifiedCategories: categories,
                 leftID: first.leftID, rightID: first.rightID, learnedPredictionReading: first.learnedPredictionReading, userDictionaryReading: first.userDictionaryReading, legacyTemplateReading: first.legacyTemplateReading)
         }
@@ -115,10 +124,14 @@ struct ConversionCandidate {
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
+         formulaCandidateCommitText: String? = nil,
+         formulaCandidateKind: FormulaCandidateKind? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
          leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil, userDictionaryReading: String? = nil, legacyTemplateReading: String? = nil) {
         self.id = id
         self.text = text
+        self.formulaCandidateCommitText = formulaCandidateCommitText
+        self.formulaCandidateKind = formulaCandidateKind
         self.score = score
         self.range = range
         self.dictionaries = dictionaries

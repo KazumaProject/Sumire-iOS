@@ -267,6 +267,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     struct Presentation: Equatable {
         let text: String
         var annotation: String? = nil
+        var formulaSource: String? = nil
     }
     private var presentations: [Presentation] = []
     private var candidateTexts: [String] = []
@@ -334,6 +335,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         return cell
     }
     private var annotations: [Item: String] = [:]
+    private var formulaSources: [Item: String] = [:]
     private var height: NSLayoutConstraint!
     override init(frame: CGRect) {
         let layout = CandidateRowsLayout()
@@ -548,11 +550,13 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
     private func updateCandidateSnapshot() {
         var occurrences: [String: Int] = [:]
         annotations.removeAll(keepingCapacity: true)
+        formulaSources.removeAll(keepingCapacity: true)
         let items = presentations.map { presentation -> Item in
             let occurrence = occurrences[presentation.text, default: 0]
             occurrences[presentation.text] = occurrence + 1
             let item = Item(text: presentation.text, occurrence: occurrence)
             if let annotation = presentation.annotation, !annotation.isEmpty { annotations[item] = annotation }
+            if let formulaSource = presentation.formulaSource { formulaSources[item] = formulaSource }
             return item
         }
         let offset = collection.contentOffset
@@ -589,6 +593,10 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         let selected = selectedIndex.map { dataSource.indexPath(for: item)?.item == $0 } ?? false
         cell.backgroundColor = selected ? palette.accent : .clear
         cell.layer.cornerRadius = 8
+        let formulaSource = formulaSources[item]
+        cell.formulaPreview.setFormula(source: formulaSource, fallbackText: item.text, color: selected ? palette.accentForeground : palette.foreground)
+        cell.formulaPreview.isHidden = formulaSource == nil
+        cell.label.isHidden = formulaSource != nil
         cell.label.attributedText = HistoricKanaFont.attributed(item.text)
         cell.label.textColor = selected ? palette.accentForeground : palette.foreground
         let annotation = annotations[item]
@@ -606,7 +614,11 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         let item = dataSource.itemIdentifier(for: indexPath)
         let text = item?.text ?? ""
         let detail = item.flatMap { annotations[$0] }
-        let width = HistoricKanaFont.attributed(text).size().width +
+        let textWidth = HistoricKanaFont.attributed(text).size().width
+        let formulaWidth: CGFloat = item.flatMap { formulaSources[$0] }.flatMap { source in
+            formulaLayout(for: source, fontSize: FormulaCandidateMetrics.fontSize).map { CGFloat($0.width) }
+        } ?? 0
+        let width = max(textWidth, formulaWidth) +
             (detail.map { HistoricKanaFont.attributed($0, size: 11).size().width + 4 } ?? 0)
         return CGSize(width: min(max(44, width + 32), max(44, collection.bounds.width)), height: 44)
     }
@@ -620,6 +632,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
 private final class CandidateCell: UICollectionViewCell {
     let label = UILabel()
     let annotation = UILabel()
+    let formulaPreview = FormulaCandidatePreviewView()
     var annotationWidth: NSLayoutConstraint!
     var annotationGap: NSLayoutConstraint!
 
@@ -630,14 +643,19 @@ private final class CandidateCell: UICollectionViewCell {
         label.textAlignment = .center
         label.lineBreakMode = .byTruncatingTail
         label.numberOfLines = 1
+        label.accessibilityIdentifier = "candidate-text"
         annotation.translatesAutoresizingMaskIntoConstraints = false
         annotation.font = .systemFont(ofSize: 11)
         annotation.lineBreakMode = .byTruncatingTail
         annotation.accessibilityIdentifier = "candidate-annotation"
+        formulaPreview.translatesAutoresizingMaskIntoConstraints = false
+        formulaPreview.isUserInteractionEnabled = false
+        formulaPreview.isAccessibilityElement = false
         label.setContentCompressionResistancePriority(UILayoutPriority(751), for: .horizontal)
         annotation.setContentCompressionResistancePriority(UILayoutPriority(749), for: .horizontal)
         contentView.addSubview(label)
         contentView.addSubview(annotation)
+        contentView.addSubview(formulaPreview)
         annotationWidth = annotation.widthAnchor.constraint(equalToConstant: 0)
         annotationGap = annotation.leadingAnchor.constraint(equalTo: label.trailingAnchor)
         NSLayoutConstraint.activate([
@@ -645,6 +663,10 @@ private final class CandidateCell: UICollectionViewCell {
             label.centerYAnchor.constraint(equalTo: contentView.centerYAnchor),
             label.widthAnchor.constraint(greaterThanOrEqualToConstant: 0),
             label.heightAnchor.constraint(lessThanOrEqualTo: contentView.heightAnchor),
+            formulaPreview.leadingAnchor.constraint(equalTo: contentView.leadingAnchor, constant: 8),
+            formulaPreview.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -8),
+            formulaPreview.topAnchor.constraint(equalTo: contentView.topAnchor, constant: 2),
+            formulaPreview.bottomAnchor.constraint(equalTo: contentView.bottomAnchor, constant: -2),
             annotationGap,
             annotation.trailingAnchor.constraint(equalTo: contentView.trailingAnchor, constant: -16),
             annotation.lastBaselineAnchor.constraint(equalTo: label.lastBaselineAnchor),
@@ -654,6 +676,97 @@ private final class CandidateCell: UICollectionViewCell {
     }
 
     required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+}
+
+/// Draws a parsed formula inside the existing candidate-cell frame. It never owns
+/// selection or commit behavior; the collection cell continues to report the
+/// candidate's literal commit text to accessibility and selection handlers.
+private final class FormulaCandidatePreviewView: UIView {
+    private(set) var source: String?
+    private var fallbackText = ""
+    private var cachedLayout: AndroidFormulaLayout?
+    private var textColor: UIColor = .label
+    private let formulaFontSize = FormulaCandidateMetrics.fontSize
+
+    override init(frame: CGRect) {
+        super.init(frame: frame)
+        accessibilityIdentifier = "candidate-formula-preview"
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) has not been implemented") }
+
+    func setFormula(source: String?, fallbackText: String, color: UIColor) {
+        let colorChanged = !textColor.isEqual(color)
+        guard source != self.source || fallbackText != self.fallbackText || colorChanged else { return }
+        self.source = source
+        self.fallbackText = fallbackText
+        textColor = color
+        cachedLayout = source.flatMap { value in
+            formulaLayout(for: value, fontSize: formulaFontSize)
+        }
+        setNeedsDisplay()
+    }
+
+    override func draw(_ rect: CGRect) {
+        guard let context = UIGraphicsGetCurrentContext() else { return }
+        let bounds = self.bounds
+        let layout = cachedLayout
+        let fitsLayout = layout.map {
+            $0.width <= Double(max(0, bounds.width - 4)) &&
+                $0.height <= Double(max(0, bounds.height)) &&
+                $0.height <= Double(formulaFontSize * 4.8)
+        } ?? false
+
+        if fitsLayout, let layout {
+            let xOrigin = (bounds.width - CGFloat(layout.width)) / 2
+            let baseline = (bounds.height - CGFloat(layout.height)) / 2 + CGFloat(layout.ascent)
+            for operation in layout.operations {
+                switch operation {
+                case .text(let value, let x, let y, let size, let bold):
+                    let font = UIFont.systemFont(ofSize: CGFloat(size), weight: bold ? .bold : .regular)
+                    let point = CGPoint(
+                        x: xOrigin + CGFloat(x),
+                        y: baseline + CGFloat(y) - font.ascender
+                    )
+                    (value as NSString).draw(at: point, withAttributes: [.font: font, .foregroundColor: textColor])
+                case .line(let startX, let startY, let endX, let endY, let strokeWidth):
+                    context.saveGState()
+                    context.setStrokeColor(textColor.cgColor)
+                    context.setLineWidth(CGFloat(strokeWidth))
+                    context.move(to: CGPoint(x: xOrigin + CGFloat(startX), y: baseline + CGFloat(startY)))
+                    context.addLine(to: CGPoint(x: xOrigin + CGFloat(endX), y: baseline + CGFloat(endY)))
+                    context.strokePath()
+                    context.restoreGState()
+                }
+            }
+            return
+        }
+
+        let font = UIFont.systemFont(ofSize: formulaFontSize)
+        let attributes: [NSAttributedString.Key: Any] = [.font: font, .foregroundColor: textColor]
+        let textSize = (fallbackText as NSString).size(withAttributes: attributes)
+        let point = CGPoint(x: max(0, (bounds.width - textSize.width) / 2), y: max(0, (bounds.height - textSize.height) / 2))
+        (fallbackText as NSString).draw(at: point, withAttributes: attributes)
+    }
+}
+
+private enum FormulaCandidateMetrics {
+    static let fontSize: CGFloat = 14
+}
+
+private func formulaLayout(for source: String, fontSize: CGFloat) -> AndroidFormulaLayout? {
+    let font = UIFont.systemFont(ofSize: fontSize)
+    return AndroidFormulaCandidatePolicy.layout(
+        for: source,
+        config: AndroidFormulaLayoutConfig(
+            fontSize: Double(fontSize),
+            ascentRatio: max(0.6, Double(font.ascender / fontSize)),
+            descentRatio: max(0.16, Double(-font.descender / fontSize))
+        ),
+        measureText: { text, size in
+            Double((text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: CGFloat(size))]).width)
+        }
+    )
 }
 
 /// Horizontal flow layout aligns each column to its widest candidate, leaving

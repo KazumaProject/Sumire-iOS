@@ -31,6 +31,7 @@ struct HomeView: View {
     @AppStorage("liveConversion", store: KeyboardSettings.appDefaults) private var liveConversion = false
     @AppStorage("omissionSearch", store: KeyboardSettings.appDefaults) private var omissionSearch = false
     @AppStorage("bunsetsuSeparation", store: KeyboardSettings.appDefaults) private var bunsetsuSeparation = false
+    @AppStorage(AndroidFormulaCandidatePolicy.enabledKey, store: KeyboardSettings.appDefaults) private var formulaCandidatesEnabled = true
     @AppStorage(JapanesePredictionSettings.lookaheadStorageKey, store: KeyboardSettings.appDefaults)
     private var predictionLookaheadCharacterCount = JapanesePredictionSettings.defaultLookaheadCharacterCount
     @AppStorage(JapanesePredictionSettings.aggressivenessStorageKey, store: KeyboardSettings.appDefaults)
@@ -120,8 +121,9 @@ struct HomeView: View {
                     Toggle("ライブ変換", isOn: $liveConversion)
                     Toggle("修飾キー省略", isOn: $omissionSearch)
                     Toggle("文節ごとに変換", isOn: $bunsetsuSeparation)
+                    Toggle("数式候補を表示", isOn: $formulaCandidatesEnabled)
                 } header: { Text("変換") } footer: {
-                    Text("ONにすると、変換キーを押したときに文節を切り分けて先頭から候補を選べます。選んだ後も残りの読みは未確定のまま続きます。")
+                    Text("数式候補は端末内で解析し、Unicode表示とTeX形式を提示します。ネットワークは使用しません。文節ごとの変換をONにすると、選んだ後も残りの読みは未確定のまま続きます。")
                 }
                 Section {
                     Picker("先読み文字数", selection: $predictionLookaheadCharacterCount) {
