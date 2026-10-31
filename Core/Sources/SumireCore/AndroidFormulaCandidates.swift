@@ -465,13 +465,21 @@ private struct FormulaExpressionParser {
             return .symbol(text, tex: "\\" + command + "{" + text + "}")
         }
         if command == "not" {
-            guard let next = latexCommand() else { return nil }
+            let next: FormulaNode?
+            if peek == "\\" {
+                next = latexCommand()
+            } else if let symbol = latexLiteralSymbol() {
+                next = symbol
+            } else {
+                next = primary(stoppingAt: [])
+            }
+            guard let next else { return nil }
             let unicode = FormulaTextRenderer.unicode(next)
             let negated: [String: String] = ["=":"≠", "∈":"∉", "≡":"≢", "⊂":"⊄", "⊃":"⊅", "⊆":"⊈", "⊇":"⊉"]
             if let result = negated[unicode] {
                 return .symbol(result, tex: "\\not" + FormulaTextRenderer.tex(next))
             }
-            return row([.symbol("¬", tex: "\\neg"), next])
+            return .symbol("¬" + unicode, tex: "\\not" + FormulaTextRenderer.tex(next))
         }
         if command == "mathcal" || command == "mathsf" || command == "mathtt" || command == "mathit" || command == "mathnormal" {
             guard let base = requiredGroup() else { return nil }
@@ -485,6 +493,15 @@ private struct FormulaExpressionParser {
         if mathFunctions[command] != nil { return .symbol(command, tex: "\\" + command) }
         if latexSpacingCommands.contains(command) { return .symbol("") }
         return nil
+    }
+
+    private mutating func latexLiteralSymbol() -> FormulaNode? {
+        guard let character = peek, latexLiteralSymbolCharacters.contains(character) else { return nil }
+        index += 1
+        tokens += 1
+        let key = String(character)
+        let symbol = symbolMap[key]
+        return .symbol(symbol?.unicode ?? key, tex: symbol?.tex ?? relationTex[key])
     }
 
     private mutating func sizedDelimited() -> FormulaNode? {
@@ -768,9 +785,14 @@ private enum FormulaTextRenderer {
     }
 
     private static func groupedForFraction(_ node: FormulaNode, rendered: String) -> String {
-        if case .row(let children) = node, children.count > 1 { return "(" + rendered + ")" }
-        if case .delimited = node { return rendered }
-        return rendered
+        switch node {
+        case .row(let children):
+            return children.count > 1 ? "(" + rendered + ")" : rendered
+        case .delimited:
+            return rendered
+        default:
+            return "(" + rendered + ")"
+        }
     }
     private static func scriptText(_ source: String, using map: [Character: Character], grouped: Bool) -> String {
         let body = Self.map(source, using: map)
@@ -828,6 +850,9 @@ private let pairedLatexDelimiters: [String: (left: String, rightCommand: String,
     "lvert": ("|", "rvert", "|"), "lVert": ("‖", "rVert", "‖"), "lbrace": ("{", "rbrace", "}"),
     "lbrack": ("[", "rbrack", "]"), "lparen": ("(", "rparen", ")")
 ]
+private let latexLiteralSymbolCharacters = Set<Character>(
+    "+-*/=<>.,:;!()[]|%&#~×÷≤≥≠≈∞πΠ∂∇√∑∏∫∬∭∮∼∝→⇒↔←↦±∓⋅∈∉⊂⊆⊃⊇∪∩∀∃∧∨¬∅ℕℤℚℝℂℵ‖∥∣"
+)
 private let relationTex: [String: String] = [
     "≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv",
     "≢":"\\not\\equiv", "≅":"\\cong", "≍":"\\asymp", "≰":"\\nleq", "≱":"\\ngeq", "∼":"\\sim", "∝":"\\propto",

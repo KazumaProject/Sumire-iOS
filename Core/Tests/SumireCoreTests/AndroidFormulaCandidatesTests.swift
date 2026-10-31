@@ -8,6 +8,7 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
             "x_1^(n+1)": .init(unicodeText: "x₁⁽ⁿ⁺¹⁾", normalizedTex: "x_{1}^{n+1}"),
             "1/2": .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"),
             "12/34": .init(unicodeText: "¹²⁄₃₄", normalizedTex: "\\frac{12}{34}"),
+            "a/b": .init(unicodeText: "(a)⁄(b)", normalizedTex: "\\frac{a}{b}"),
             "sqrt(x^2+y^2)": .init(unicodeText: "√(x²+y²)", normalizedTex: "\\sqrt{x^{2}+y^{2}}"),
             "sqrt(x)": .init(unicodeText: "√x", normalizedTex: "\\sqrt{x}"),
             "sqrt x": .init(unicodeText: "√x", normalizedTex: "\\sqrt{x}"),
@@ -182,6 +183,17 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
 
         XCTAssertEqual(rendering.unicodeText, String(repeating: "%", count: 65))
         XCTAssertEqual(rendering.normalizedTex, String(repeating: "\\%", count: 65))
+    }
+
+    func testNegationCommandAcceptsLiteralAndroidFormulaAtoms() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("\\not="),
+            .init(unicodeText: "≠", normalizedTex: "\\not=")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("\\not+"),
+            .init(unicodeText: "¬+", normalizedTex: "\\not+")
+        )
     }
 
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
