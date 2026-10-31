@@ -89,6 +89,32 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         XCTAssertNil(AndroidFormulaCandidatePolicy.parse("x^[n+1"), "Reject an unfinished square-bracket group")
     }
 
+    func testGroupedScriptParenthesesMatchAndroidUnicodeOutput() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x^(n)"),
+            .init(unicodeText: "xⁿ", normalizedTex: "x^{n}")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x^(n+1)"),
+            .init(unicodeText: "x⁽ⁿ⁺¹⁾", normalizedTex: "x^{n+1}")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x^{n+1}"),
+            .init(unicodeText: "x⁽ⁿ⁺¹⁾", normalizedTex: "x^{n+1}")
+        )
+    }
+
+    func testMiddleDotAndCaseInsensitiveFunctionNamesMatchAndroid() {
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("x·y"),
+            .init(unicodeText: "x⋅y", normalizedTex: "x\\cdot y")
+        )
+        XCTAssertEqual(
+            AndroidFormulaCandidatePolicy.parse("SIN(x)"),
+            AndroidFormulaCandidatePolicy.parse("sin(x)")
+        )
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))

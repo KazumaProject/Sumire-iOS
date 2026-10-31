@@ -136,6 +136,14 @@ indirect enum FormulaNode {
     }
 }
 
+private func shouldParenthesizeScriptForUnicode(_ node: FormulaNode) -> Bool {
+    switch node {
+    case .row(let children): children.count > 1
+    case .fraction, .script, .radical, .largeOperator, .accent: true
+    case .delimited, .number, .symbol: false
+    }
+}
+
 private struct FormulaExpressionParser {
     private let characters: [Character]
     private var index = 0
@@ -185,11 +193,14 @@ private struct FormulaExpressionParser {
         while true {
             spaces()
             guard !atStop(stop), let c = peek else { break }
-            if ["*", "×", "⋅", "/", "÷"].contains(c) {
+            if ["*", "×", "·", "⋅", "/", "÷"].contains(c) {
                 index += 1; tokens += 1
                 guard let right = unary(stoppingAt: stop) else { return nil }
                 if c == "/" || c == "÷" { left = .fraction(left, right) }
-                else { left = row([left, .symbol(c == "*" ? "×" : String(c), tex: c == "*" || c == "×" ? "\\times" : "\\cdot"), right]) }
+                else {
+                    let isCrossProduct = c == "*" || c == "×"
+                    left = row([left, .symbol(isCrossProduct ? "×" : "⋅", tex: isCrossProduct ? "\\times" : "\\cdot"), right])
+                }
             } else if startsPrimary(c), !stop.contains(c) {
                 guard let right = unary(stoppingAt: stop) else { return nil }
                 if case .largeOperator(let name, let lower, let upper, nil) = left {
@@ -240,11 +251,11 @@ private struct FormulaExpressionParser {
         spaces()
         if consume("(") {
             guard enterDepth(), let value = relation(stoppingAt: [")"]), consume(")") else { return nil }
-            leaveDepth(); return (value, true)
+            leaveDepth(); return (value, shouldParenthesizeScriptForUnicode(value))
         }
         if consume("{") {
             guard enterDepth(), let value = relation(stoppingAt: ["}"]), consume("}") else { return nil }
-            leaveDepth(); return (value, false)
+            leaveDepth(); return (value, shouldParenthesizeScriptForUnicode(value))
         }
         return primary(stoppingAt: stop).map { ($0, false) }
     }
@@ -280,9 +291,10 @@ private struct FormulaExpressionParser {
         if c.isLetter {
             let word = identifier()
             tokens += 1
+            let lowercasedWord = word.lowercased()
             let canonical = Greek.unicode[word] ?? word
             spaces()
-            if let operatorName = largeOperatorNames[word], !["min", "max"].contains(word), consume("(") {
+            if let operatorName = largeOperatorNames[lowercasedWord], !["min", "max"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen() else { return nil }
                 if operatorName == "lim", arguments.count == 2 {
                     return .largeOperator(operatorName, lower: arguments[0], upper: nil, operand: arguments[1])
@@ -290,15 +302,15 @@ private struct FormulaExpressionParser {
                 guard arguments.count == 3 else { return nil }
                 return .largeOperator(operatorName, lower: arguments[0], upper: arguments[1], operand: arguments[2])
             }
-            if ["root", "nroot"].contains(word), consume("(") {
+            if ["root", "nroot"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count == 2 else { return nil }
                 return .radical(arguments[1], index: arguments[0], grouped: false)
             }
-            if ["min", "max"].contains(word), consume("(") {
+            if ["min", "max"].contains(lowercasedWord), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen(), arguments.count >= 2 else { return nil }
-                return row([.symbol(word, tex: "\\" + word), .delimited("(", row(arguments), ")", latexSized: false)])
+                return row([.symbol(lowercasedWord, tex: "\\" + lowercasedWord), .delimited("(", row(arguments), ")", latexSized: false)])
             }
-            if let function = mathFunctions[word], consume("(") {
+            if let function = mathFunctions[lowercasedWord], consume("(") {
                 guard enterDepth(), let argument = relation(stoppingAt: [")"]), consume(")") else { return nil }
                 leaveDepth()
                 if function == "sqrt" { return .radical(argument, index: nil, grouped: true) }
@@ -316,7 +328,7 @@ private struct FormulaExpressionParser {
             if let symbol = namedSymbols[word] ?? namedSymbols[word.lowercased()] {
                 return .symbol(symbol.unicode, tex: symbol.tex)
             }
-            if let operatorName = largeOperatorNames[word] {
+            if let operatorName = largeOperatorNames[lowercasedWord] {
                 return .largeOperator(operatorName, lower: nil, upper: nil, operand: nil)
             }
             return .symbol(canonical, tex: Greek.tex[canonical])
