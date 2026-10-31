@@ -2678,22 +2678,47 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             reservedIDs.insert(candidateID)
             return candidateID
         }
-        func syntheticCandidate(_ text: String, dictionary: String) -> ConversionCandidate {
+        func syntheticCandidate(
+            _ text: String,
+            dictionary: String,
+            formulaKind: ConversionCandidate.FormulaCandidateKind? = nil
+        ) -> ConversionCandidate {
             ConversionCandidate(
                 id: nextSyntheticID(), text: text, score: Int64.min,
                 range: NSRange(location: 0, length: query.utf16.count),
-                dictionaries: [dictionary], formulaCandidateCommitText: text
+                dictionaries: [dictionary], formulaCandidateCommitText: text,
+                formulaCandidateKind: formulaKind
             )
         }
 
         let sourceCandidate = sourceIsCanonicalTex ? nil : (source ?? syntheticCandidate(query, dictionary: "utility_literal"))
-        let formulaCandidates = [rendering.unicodeText, rendering.normalizedTex].map {
-            syntheticCandidate($0, dictionary: "formula_candidate")
+        let formulaVariants: [(String, ConversionCandidate.FormulaCandidateKind)] = [
+            (rendering.unicodeText, .unicode),
+            (rendering.normalizedTex, .tex)
+        ]
+        let formulaCandidates = formulaVariants.map { variant in
+            syntheticCandidate(variant.0, dictionary: "formula_candidate", formulaKind: variant.1)
         }
-        var seen = Set<[UInt16]>()
-        return (ordinary + [sourceCandidate].compactMap { $0 } + formulaCandidates + fullWidth).filter {
-            seen.insert(Array($0.text.utf16)).inserted
+        var seenTexts = Set<[UInt16]>()
+        var seenUnicodeFormulaTexts = Set<[UInt16]>()
+        var seenTexFormulaTexts = Set<[UInt16]>()
+        func shouldKeep(_ candidate: ConversionCandidate) -> Bool {
+            let textUnits = Array(candidate.text.utf16)
+            switch candidate.formulaCandidateKind {
+            case .unicode:
+                guard seenUnicodeFormulaTexts.insert(textUnits).inserted else { return false }
+                seenTexts.insert(textUnits)
+                return true
+            case .tex:
+                guard seenTexFormulaTexts.insert(textUnits).inserted else { return false }
+                seenTexts.insert(textUnits)
+                return true
+            case nil:
+                return seenTexts.insert(textUnits).inserted
+            }
         }
+        let composed = ordinary + [sourceCandidate].compactMap { $0 } + formulaCandidates + fullWidth
+        return composed.filter(shouldKeep)
     }
 
     private func previewText(_ candidate: ConversionCandidate) -> String {
