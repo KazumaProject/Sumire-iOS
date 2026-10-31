@@ -263,6 +263,8 @@ private struct FormulaExpressionParser {
             if case .largeOperator(let name, let currentSub, let currentSuper, let operand) = base {
                 guard sub == nil || currentSub == nil, sup == nil || currentSuper == nil else { return nil }
                 base = .largeOperator(name, lower: sub ?? currentSub, upper: sup ?? currentSuper, operand: operand)
+            } else if case .symbol(let value, _) = base, let name = largeOperatorNames[value.lowercased()] {
+                base = .largeOperator(name, lower: sub, upper: sup, operand: nil)
             } else {
                 base = .script(base, sub: sub, super: sup, subGrouped: subGrouped, superGrouped: supGrouped)
             }
