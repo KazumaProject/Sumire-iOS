@@ -24,6 +24,51 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         }
     }
 
+    func testAndroidReferenceSupportedFormulaFamiliesAreAccepted() {
+        let samples = [
+            "a*b", "a<=b", "a≈b", "a∝b", "x->y", "5!", "10%",
+            "sin(x)", "asin(x)", "sinh(x)", "log(x)", "exp(x)", "min(x,y)",
+            "floor(x)", "ceil(x)", "⌊x⌋", "root(3,x)", "abs(x)", "norm(v)", "||v||",
+            "alpha", "Gamma", "π", "∞", "prod(i=1,n,i)", "int(a,b,f)",
+            "lim(x->0,f(x))", "forall x in A", "vec(v)", "dot(x)", "underline(x)",
+            "\\frac{a}{\\frac{b}{c}}", "\\sqrt[3]{x}", "\\left|x+y\\right|",
+            "\\lfloor x\\rfloor", "\\left\\lfloor x\\right\\rfloor",
+            "\\langle x,y\\rangle", "\\sum_{i=1}^{n}i^2",
+            "\\prod_{i=1}^{n}i", "\\int_0^1x\\,dx", "\\iint_D f", "\\iiint_V f",
+            "\\oint_C f", "\\lim_{x\\to0}f(x)", "\\partial_x f", "\\nabla f",
+            "\\mathbb{R}", "\\forall x\\in A", "\\vec{v}", "\\hat{x}",
+            "\\bar{y}", "\\dot{z}", "\\ddot{z}", "\\tilde{x}", "\\mathcal{F}"
+        ]
+
+        for source in samples {
+            XCTAssertNotNil(AndroidFormulaCandidatePolicy.parse(source), source)
+        }
+    }
+
+    func testAndroidFormulaFamilyUnicodeAndTexOutputs() {
+        let expected: [String: AndroidFormulaRendering] = [
+            "a→b": .init(unicodeText: "a→b", normalizedTex: "a\\to b"),
+            "a⇒b": .init(unicodeText: "a⇒b", normalizedTex: "a\\Rightarrow b"),
+            "a∝b": .init(unicodeText: "a∝b", normalizedTex: "a\\propto b"),
+            "abs(x)": .init(unicodeText: "|x|", normalizedTex: "|x|"),
+            "norm(v)": .init(unicodeText: "‖v‖", normalizedTex: "\\Vert v\\Vert"),
+            "floor(x)": .init(unicodeText: "⌊x⌋", normalizedTex: "\\lfloor x\\rfloor"),
+            "ceil(x)": .init(unicodeText: "⌈x⌉", normalizedTex: "\\lceil x\\rceil"),
+            // The Android FormulaNode model consumes commas as argument separators and omits them from its rendered row.
+            "min(x,y)": .init(unicodeText: "min(xy)", normalizedTex: "\\min(xy)"),
+            "vec(v)": .init(unicodeText: "v⃗", normalizedTex: "\\vec{v}"),
+            "dot(z)": .init(unicodeText: "ż", normalizedTex: "\\dot{z}"),
+            "\\left|x+y\\right|": .init(unicodeText: "|x+y|", normalizedTex: "\\left|x+y\\right|"),
+            "\\left\\lfloor x\\right\\rfloor": .init(unicodeText: "⌊x⌋", normalizedTex: "\\left\\lfloor x\\right\\rfloor"),
+            "\\langle x,y\\rangle": .init(unicodeText: "⟨x,y⟩", normalizedTex: "\\langle x,y\\rangle"),
+            "\\sum_{i=1}^{n}i^2": .init(unicodeText: "∑ᵢ₌₁ⁿ i²", normalizedTex: "\\sum_{i=1}^{n}i^{2}")
+        ]
+
+        for (source, rendering) in expected {
+            XCTAssertEqual(AndroidFormulaCandidatePolicy.parse(source), rendering, source)
+        }
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))

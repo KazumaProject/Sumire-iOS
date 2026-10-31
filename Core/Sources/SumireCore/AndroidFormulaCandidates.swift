@@ -262,7 +262,7 @@ private struct FormulaExpressionParser {
             tokens += 1
             let canonical = Greek.unicode[word] ?? word
             spaces()
-            if let operatorName = largeOperatorNames[word], consume("(") {
+            if let operatorName = largeOperatorNames[word], !["min", "max"].contains(word), consume("(") {
                 guard let arguments = argumentListAfterOpeningParen() else { return nil }
                 if operatorName == "lim", arguments.count == 2 {
                     return .largeOperator(operatorName, lower: arguments[0], upper: nil, operand: arguments[1])
