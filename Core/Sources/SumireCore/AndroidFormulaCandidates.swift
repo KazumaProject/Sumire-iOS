@@ -75,6 +75,9 @@ public enum AndroidFormulaCandidatePolicy {
             return nil
         }
         guard !source.isEmpty, !source.hasPrefix("^") && !source.hasPrefix("_") else { return nil }
+        if source.contains("\\"), !source.allSatisfy({
+            $0.isLetter || isAndroidDigit($0) || $0.isWhitespace || latexSourceLiteralCharacters.contains($0)
+        }) { return nil }
 
         var parser = FormulaExpressionParser(source)
         guard let node = parser.parse(), isMathLike(source, node: node) else { return nil }
@@ -465,6 +468,7 @@ private struct FormulaExpressionParser {
             return .symbol(text, tex: "\\" + command + "{" + text + "}")
         }
         if command == "not" {
+            guard peek?.isWhitespace != true else { return nil }
             let next: FormulaNode?
             if peek == "\\" {
                 next = latexCommand()
@@ -853,6 +857,7 @@ private let pairedLatexDelimiters: [String: (left: String, rightCommand: String,
 private let latexLiteralSymbolCharacters = Set<Character>(
     "+-*/=<>.,:;!()[]|%&#~×÷≤≥≠≈∞πΠ∂∇√∑∏∫∬∭∮∼∝→⇒↔←↦±∓⋅∈∉⊂⊆⊃⊇∪∩∀∃∧∨¬∅ℕℤℚℝℂℵ‖∥∣"
 )
+private let latexSourceLiteralCharacters = latexLiteralSymbolCharacters.union(Set<Character>("{}^_\\"))
 private let relationTex: [String: String] = [
     "≤":"\\leq", "≥":"\\geq", "≠":"\\neq", "≈":"\\approx", "≃":"\\simeq", "≡":"\\equiv",
     "≢":"\\not\\equiv", "≅":"\\cong", "≍":"\\asymp", "≰":"\\nleq", "≱":"\\ngeq", "∼":"\\sim", "∝":"\\propto",

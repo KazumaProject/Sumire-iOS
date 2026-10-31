@@ -196,6 +196,12 @@ final class AndroidFormulaCandidatesTests: XCTestCase {
         )
     }
 
+    func testLatexRejectsWhitespaceAfterNegationAndUnsupportedRawSymbols() {
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("\\not x"))
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("\\alpha≡\\beta"))
+        XCTAssertNil(AndroidFormulaCandidatePolicy.parse("\\alpha?\\beta"))
+    }
+
     func testCanonicalTexStillOffersBothUnicodeAndTexFormsWithoutAddingSourceLiteral() throws {
         let fraction = try XCTUnwrap(AndroidFormulaCandidatePolicy.candidates(for: "\\frac{1}{2}").first)
         XCTAssertEqual(fraction, .init(unicodeText: "½", normalizedTex: "\\frac{1}{2}"))
