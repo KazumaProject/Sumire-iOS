@@ -98,4 +98,42 @@ import UIKit
         XCTAssertEqual(candidates.map(\.text), ["½", source])
         XCTAssertTrue(candidates.allSatisfy { $0.formulaCandidateCommitText != nil })
     }
+
+    func testFormulaVariantsWithTheSameTextRemainSeparatelyLabeled() {
+        let surface = Sumire.KeyboardSurface()
+        defer { surface.invalidateComposition() }
+
+        let candidates = surface.composeFormulaCandidates(
+            query: "1 + 1", nativeCandidates: [], enabled: true
+        )
+        let sameText = candidates.filter { $0.text == "1+1" }
+        let formulas = sameText.filter { $0.formulaCandidateKind != nil }
+
+        XCTAssertEqual(candidates.map(\.text), ["1 + 1", "1+1", "1+1"])
+        XCTAssertEqual(sameText.count, 2, "Keep same-text Unicode and TeX rows")
+        XCTAssertEqual(formulas.map(\.formulaCandidateKind), [.unicode, .tex])
+        XCTAssertEqual(formulas.map(\.displayAnnotation), ["[文字]", "[TeX]"])
+        XCTAssertTrue(formulas.allSatisfy { $0.formulaCandidateCommitText == "1+1" })
+    }
+
+    func testFormulaKindAndCommitTextSurviveDisplayMergeReconstruction() {
+        let formula = Sumire.ConversionCandidate(
+            id: 51, text: "25²", score: 2,
+            range: NSRange(location: 0, length: 4), dictionaries: ["formula_candidate"],
+            formulaCandidateCommitText: "25²", formulaCandidateKind: .unicode,
+            classifiedCategories: ["term"]
+        )
+        let duplicate = Sumire.ConversionCandidate(
+            id: 52, text: "25²", score: 1,
+            range: NSRange(location: 0, length: 4), dictionaries: ["native"],
+            classifiedCategories: ["person"]
+        )
+
+        let merged = Sumire.ConversionCandidate.mergedForDisplay([formula, duplicate])
+
+        XCTAssertEqual(merged.count, 1)
+        XCTAssertEqual(merged[0].formulaCandidateKind, .unicode)
+        XCTAssertEqual(merged[0].formulaCandidateCommitText, "25²")
+        XCTAssertEqual(merged[0].displayAnnotation, "[文字] [人名・用語]")
+    }
 }
