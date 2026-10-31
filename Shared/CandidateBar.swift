@@ -616,14 +616,7 @@ final class CandidateBar: UIView, UICollectionViewDelegateFlowLayout {
         let detail = item.flatMap { annotations[$0] }
         let textWidth = HistoricKanaFont.attributed(text).size().width
         let formulaWidth: CGFloat = item.flatMap { formulaSources[$0] }.flatMap { source in
-            let fontSize = 14.0
-            return AndroidFormulaCandidatePolicy.layout(
-                for: source,
-                config: AndroidFormulaLayoutConfig(fontSize: fontSize),
-                measureText: { value, size in
-                    Double((value as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: CGFloat(size))]).width)
-                }
-            ).map { CGFloat($0.width) }
+            formulaLayout(for: source, fontSize: FormulaCandidateMetrics.fontSize).map { CGFloat($0.width) }
         } ?? 0
         let width = max(textWidth, formulaWidth) +
             (detail.map { HistoricKanaFont.attributed($0, size: 11).size().width + 4 } ?? 0)
@@ -693,7 +686,7 @@ private final class FormulaCandidatePreviewView: UIView {
     private var fallbackText = ""
     private var cachedLayout: AndroidFormulaLayout?
     private var textColor: UIColor = .label
-    private let formulaFontSize: CGFloat = 14
+    private let formulaFontSize = FormulaCandidateMetrics.fontSize
 
     override init(frame: CGRect) {
         super.init(frame: frame)
@@ -709,18 +702,7 @@ private final class FormulaCandidatePreviewView: UIView {
         self.fallbackText = fallbackText
         textColor = color
         cachedLayout = source.flatMap { value in
-            let font = UIFont.systemFont(ofSize: formulaFontSize)
-            return AndroidFormulaCandidatePolicy.layout(
-                for: value,
-                config: AndroidFormulaLayoutConfig(
-                    fontSize: Double(formulaFontSize),
-                    ascentRatio: max(0.6, Double(font.ascender / formulaFontSize)),
-                    descentRatio: max(0.16, Double(-font.descender / formulaFontSize))
-                ),
-                measureText: { text, size in
-                    Double((text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: CGFloat(size))]).width)
-                }
-            )
+            formulaLayout(for: value, fontSize: formulaFontSize)
         }
         setNeedsDisplay()
     }
@@ -766,6 +748,25 @@ private final class FormulaCandidatePreviewView: UIView {
         let point = CGPoint(x: max(0, (bounds.width - textSize.width) / 2), y: max(0, (bounds.height - textSize.height) / 2))
         (fallbackText as NSString).draw(at: point, withAttributes: attributes)
     }
+}
+
+private enum FormulaCandidateMetrics {
+    static let fontSize: CGFloat = 14
+}
+
+private func formulaLayout(for source: String, fontSize: CGFloat) -> AndroidFormulaLayout? {
+    let font = UIFont.systemFont(ofSize: fontSize)
+    return AndroidFormulaCandidatePolicy.layout(
+        for: source,
+        config: AndroidFormulaLayoutConfig(
+            fontSize: Double(fontSize),
+            ascentRatio: max(0.6, Double(font.ascender / fontSize)),
+            descentRatio: max(0.16, Double(-font.descender / fontSize))
+        ),
+        measureText: { text, size in
+            Double((text as NSString).size(withAttributes: [.font: UIFont.systemFont(ofSize: CGFloat(size))]).width)
+        }
+    )
 }
 
 /// Horizontal flow layout aligns each column to its widest candidate, leaving
