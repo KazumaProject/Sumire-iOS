@@ -7,6 +7,8 @@ struct ConversionCandidate {
     enum PresentationKind: UInt32 { case none = 0, halfWidth = 1, fullWidth = 2, numericSymbol = 3 }
     let id: UInt64
     let text: String
+    /// A Swift-owned display candidate whose commit text is not in the native result snapshot.
+    let formulaCandidateCommitText: String?
     let score: Int64
     let range: NSRange
     let dictionaries: [String]
@@ -115,10 +117,12 @@ struct ConversionCandidate {
          dictionaries: [String], bunsetsu: [BunsetsuSegment] = [],
          rawText: String? = nil, correctedReading: String? = nil, isReadingPrefix: Bool = false,
          textMacroID: String? = nil,
+         formulaCandidateCommitText: String? = nil,
          presentationKind: PresentationKind = .none, classifiedCategories: [String] = [],
          leftID: Int16? = nil, rightID: Int16? = nil, learnedPredictionReading: String? = nil, userDictionaryReading: String? = nil, legacyTemplateReading: String? = nil) {
         self.id = id
         self.text = text
+        self.formulaCandidateCommitText = formulaCandidateCommitText
         self.score = score
         self.range = range
         self.dictionaries = dictionaries

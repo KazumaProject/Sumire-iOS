@@ -2569,6 +2569,11 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             switch response {
             case .success(let result):
                 guard result.generation == generation else { return }
+                let nativeCandidates = self.composeFormulaCandidates(
+                    query: query,
+                    nativeCandidates: result.candidates,
+                    enabled: AndroidFormulaCandidatePolicy.isEnabled(defaults: self.settingsDefaults)
+                )
                 let macroDefinitions = self.textMacroCandidatesEnabled ? AndroidTextMacroCandidatePolicy.candidates(
                     in: self.personalLexicon.textMacros,
                     reading: query,
@@ -2584,12 +2589,12 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
                 let candidates: [ConversionCandidate]
                 if self.englishComposition {
                     // Preserve the existing English strip route and placement.
-                    candidates = result.candidates + macros
+                    candidates = nativeCandidates + macros
                 } else {
-                    let insertion = result.candidates.firstIndex {
+                    let insertion = nativeCandidates.firstIndex {
                         $0.learnedPredictionReading == nil && $0.legacyTemplateReading == nil
-                    } ?? result.candidates.count
-                    candidates = Array(result.candidates[..<insertion]) + macros + Array(result.candidates[insertion...])
+                    } ?? nativeCandidates.count
+                    candidates = Array(nativeCandidates[..<insertion]) + macros + Array(nativeCandidates[insertion...])
                 }
                 self.converted = result.candidates
                 self.presentedCandidates = candidates
@@ -2624,6 +2629,67 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             }
         }
     }
+
+    func composeFormulaCandidates(
+        query: String,
+        nativeCandidates: [ConversionCandidate],
+        enabled: Bool
+    ) -> [ConversionCandidate] {
+        guard enabled, bunsetsuSession == nil,
+              composition.phase != .selecting,
+              composition.cursorUTF16 == composition.reading.utf16.count,
+              let rendering = AndroidFormulaCandidatePolicy.candidates(for: query).first else {
+            return nativeCandidates
+        }
+
+        func isFullWidthCandidate(_ candidate: ConversionCandidate) -> Bool {
+            if candidate.presentationKind == .fullWidth { return true }
+            guard candidate.presentationKind == .numericSymbol else { return false }
+            let units = Array(candidate.text.utf16)
+            return (1...2).contains(units.count) && units.allSatisfy {
+                $0 == 0x3000 || (0xFF01...0xFF20).contains($0) ||
+                    (0xFF3B...0xFF40).contains($0) || (0xFF5B...0xFF5E).contains($0)
+            }
+        }
+
+        let fullWidth = nativeCandidates.filter(isFullWidthCandidate)
+        var ordinary = nativeCandidates.filter { !isFullWidthCandidate($0) }
+        let trimmedQuery = query.trimmingCharacters(in: .whitespacesAndNewlines)
+        let rawQuery = Array(query.utf16)
+        let trimmedQueryUTF16 = Array(trimmedQuery.utf16)
+        let matchesSource: (ConversionCandidate) -> Bool = {
+            let text = Array($0.text.utf16)
+            return text == rawQuery || text == trimmedQueryUTF16
+        }
+        let sourceIsCanonicalTex = AndroidFormulaCandidatePolicy.isCanonicalTexSource(query, rendering: rendering)
+        let source = ordinary.first(where: matchesSource)
+        ordinary.removeAll(where: matchesSource)
+
+        var reservedIDs = Set(nativeCandidates.map(\.id))
+        func nextSyntheticID() -> UInt64 {
+            var candidateID = UInt64.max
+            while reservedIDs.contains(candidateID) { candidateID -= 1 }
+            reservedIDs.insert(candidateID)
+            return candidateID
+        }
+        func syntheticCandidate(_ text: String, dictionary: String) -> ConversionCandidate {
+            ConversionCandidate(
+                id: nextSyntheticID(), text: text, score: Int64.min,
+                range: NSRange(location: 0, length: query.utf16.count),
+                dictionaries: [dictionary], formulaCandidateCommitText: text
+            )
+        }
+
+        let sourceCandidate = sourceIsCanonicalTex ? nil : (source ?? syntheticCandidate(query, dictionary: "utility_literal"))
+        let formulaCandidates = [rendering.unicodeText, rendering.normalizedTex].map {
+            syntheticCandidate($0, dictionary: "formula_candidate")
+        }
+        var seen = Set<[UInt16]>()
+        return (ordinary + [sourceCandidate].compactMap { $0 } + formulaCandidates + fullWidth).filter {
+            seen.insert(Array($0.text.utf16)).inserted
+        }
+    }
+
     private func previewText(_ candidate: ConversionCandidate) -> String {
         var preview = composition
         guard candidate.range.location == 0,
@@ -2650,9 +2716,34 @@ final class KeyboardSurface: UIInputView, UIInputViewAudioFeedback {
             executeTextMacro?(macroID, nil)
             return
         }
+        if let formulaText = presentedCandidates[index].formulaCandidateCommitText {
+            commitFormulaCandidate(formulaText)
+            return
+        }
         guard let convertedIndex = convertedIndex(forPresentedIndex: index) else { return }
         selectedCandidate = convertedIndex
         commitComposition()
+    }
+
+    private func commitFormulaCandidate(_ text: String) {
+        guard composition.cursorUTF16 == composition.reading.utf16.count,
+              let committed = composition.commitPrefix(
+                text,
+                readingUTF16Length: composition.reading.utf16.count
+              ) else { return }
+        cancelLearning()
+        containsRomaji = false
+        englishComposition = false
+        if let commitMarkedText { commitMarkedText(committed) } else { insert?(committed) }
+        converted = []
+        presentedCandidates = []
+        resultGeneration = nil
+        selectedCandidate = nil
+        candidateBar.isUpdating = false
+        candidateBar.candidates = []
+        status.text = "Sumire · C++変換"
+        updateSumireKeys()
+        converter.reset()
     }
     private func commitRawAtCursorAndSpace() {
         cancelLearning()
